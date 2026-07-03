@@ -1,0 +1,35 @@
+# AOS project policy — gates, tiers, and verification contracts.
+# Patterns are JavaScript regexes matched (case-insensitive) against Bash commands.
+version: 1
+
+# auto: agent proceeds after writing plan.md | ask: agent must get human approval of the plan
+plan_gate: auto
+
+tiers:
+  forbidden:
+    - pattern: 'push\s+[^|;&]*(--force|-f)\b'
+      reason: Force-push is forbidden by policy
+    - pattern: 'rm\s+-rf\s+(/|~)(\s|$)'
+      reason: Recursive delete of root/home is forbidden by policy
+  gated:
+    - pattern: '\bgit\s+push\b'
+      action: git-push
+    - pattern: '\bgh\s+pr\s+merge\b'
+      action: merge
+    - pattern: '\bdeploy\b'
+      action: deploy
+  # Everything not matched above is auto-approved (normal Claude Code permissions still apply).
+
+verification:
+  # When true, /aos-verify and /aos-ticket must spawn a skeptic subagent to refute the work.
+  adversarial_review: true
+  contracts:
+    # Deterministic checks that must pass before a run can reach awaiting-review.
+    # Examples:
+    # - name: tests
+    #   command: npm test
+    #   required: true
+    # - name: lint
+    #   command: npm run lint
+    #   required: false
+    []
