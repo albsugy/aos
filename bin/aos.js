@@ -1,5 +1,8 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { ensureHome, projectDir } from '../src/paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from '../src/registry.js';
 import { runHook } from '../src/hooks.js';
@@ -13,6 +16,16 @@ import { loadPolicy } from '../src/policy.js';
 import { serveConsole } from '../src/console/server.js';
 
 const [, , cmd, ...rest] = process.argv;
+
+const APP_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+function appVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version;
+  } catch {
+    return 'unknown';
+  }
+}
 
 function parseFlags(args) {
   const flags = {};
@@ -57,6 +70,8 @@ Usage:
   aos find <query>                  Search project memory (runs, decisions, learnings)
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
   aos hook <name>                   (internal) Claude Code hook entry points
+  aos version                       Print version
+  aos update                        Update aos in place (git pull + install deps)
   aos help                          This help
 `;
 
@@ -143,6 +158,21 @@ async function main() {
     case 'hook':
       await runHook(positional[0]);
       break;
+    case 'version':
+    case '--version':
+    case '-v':
+      console.log(`aos ${appVersion()}`);
+      break;
+    case 'update': {
+      if (!fs.existsSync(path.join(APP_ROOT, '.git'))) {
+        console.error('This aos install is not a git checkout — reinstall with the install script.');
+        process.exit(1);
+      }
+      execSync('git pull --ff-only', { cwd: APP_ROOT, stdio: 'inherit' });
+      execSync('npm install --omit=dev --no-fund --no-audit', { cwd: APP_ROOT, stdio: 'inherit' });
+      console.log(`✔ aos updated to ${appVersion()}`);
+      break;
+    }
     case 'projects': {
       for (const p of loadRegistry().projects) {
         console.log(`${p.id}  ${p.repos.join(', ')}  → ${projectDir(p.id)}`);
