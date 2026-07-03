@@ -56,7 +56,10 @@ export function readJson(p, fallback = null) {
 
 export function writeJson(p, obj) {
   ensureDir(path.dirname(p));
-  fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n');
+  // Atomic write: a crash mid-write must never leave truncated JSON behind.
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n');
+  fs.renameSync(tmp, p);
 }
 
 export function tailLines(text, n) {

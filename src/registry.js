@@ -12,10 +12,23 @@ function canonical(p) {
   }
 }
 
-export function loadRegistry() {
+// strict: throw on a corrupt registry instead of treating it as empty.
+// Writers must use strict so a parse failure can never clobber user data.
+export function loadRegistry({ strict = false } = {}) {
   const raw = readIfExists(registryPath());
   if (!raw) return { projects: [] };
-  const data = YAML.parse(raw);
+  let data;
+  try {
+    data = YAML.parse(raw);
+  } catch (e) {
+    if (strict) {
+      throw new Error(
+        `registry.yaml is corrupt (${e.message}). Fix or remove ${registryPath()} — refusing to overwrite it.`
+      );
+    }
+    console.error(`[aos] warning: registry.yaml is corrupt — treating as empty (${registryPath()})`);
+    return { projects: [] };
+  }
   if (!data || !Array.isArray(data.projects)) return { projects: [] };
   return data;
 }
@@ -26,7 +39,7 @@ export function saveRegistry(reg) {
 }
 
 export function addProject({ id, name, repo }) {
-  const reg = loadRegistry();
+  const reg = loadRegistry({ strict: true });
   let project = reg.projects.find((p) => p.id === id);
   if (!project) {
     project = { id, name: name || id, repos: [], created: nowIso() };

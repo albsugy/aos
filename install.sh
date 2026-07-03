@@ -12,6 +12,7 @@ set -euo pipefail
 REPO_URL="${AOS_REPO_URL:-https://github.com/albsugy/aos.git}"
 INSTALL_DIR="${AOS_INSTALL_DIR:-$HOME/.local/share/aos}"
 BIN_DIR="${AOS_BIN_DIR:-$HOME/.local/bin}"
+REF="${AOS_REF:-main}"   # branch or tag to install, e.g. AOS_REF=v0.2.0
 
 info()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 ok()    { printf '\033[1;32m✔\033[0m %s\n' "$*"; }
@@ -30,13 +31,18 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   info "Existing install found — updating"
   git -C "$INSTALL_DIR" pull --ff-only -q
 else
-  info "Installing AOS to $INSTALL_DIR"
+  info "Installing AOS to $INSTALL_DIR (ref: $REF)"
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone -q --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  git clone -q --depth 1 --branch "$REF" "$REPO_URL" "$INSTALL_DIR"
 fi
 
 info "Installing dependencies"
-npm install --omit=dev --no-fund --no-audit --silent --prefix "$INSTALL_DIR" >/dev/null
+if [ -f "$INSTALL_DIR/package-lock.json" ]; then
+  # Reproducible: install exactly the locked dependency tree.
+  npm ci --omit=dev --no-fund --no-audit --loglevel=error --prefix "$INSTALL_DIR" >/dev/null
+else
+  npm install --omit=dev --no-fund --no-audit --loglevel=error --prefix "$INSTALL_DIR" >/dev/null
+fi
 chmod +x "$INSTALL_DIR/bin/aos.js"
 
 # --- link the binary ---------------------------------------------------------
@@ -65,6 +71,7 @@ ensure_path() {
     fi
   else
     if ! grep -qs "aos installer" "$rc"; then
+      # shellcheck disable=SC2016  # literal $PATH is intentional — it must expand when the rc runs, not now
       printf '\n# added by aos installer\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$rc"
     fi
   fi

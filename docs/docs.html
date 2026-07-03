@@ -145,14 +145,17 @@
   <h3>ONE-LINE INSTALL</h3>
   <pre><code><span class="c">$</span> curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash</code></pre>
   <p>The installer: checks prerequisites → clones the app to <code>~/.local/share/aos</code> → installs
-  dependencies → links <code>~/.local/bin/aos</code> → adds that directory to your PATH (zsh, bash, or fish)
-  if it isn't already → verifies with <code>aos version</code>. Re-running it updates in place.</p>
+  the locked dependency tree (<code>npm ci</code> — reproducible) → links <code>~/.local/bin/aos</code> →
+  adds that directory to your PATH (zsh, bash, or fish) if it isn't already → verifies with
+  <code>aos version</code>. Re-running it updates in place. If anything seems off afterwards:
+  <code>aos doctor</code>.</p>
   <h3>OVERRIDES</h3>
   <div class="table-scroll"><table>
     <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
     <tr><td><code>AOS_INSTALL_DIR</code></td><td><code>~/.local/share/aos</code></td><td>Where the app lives</td></tr>
     <tr><td><code>AOS_BIN_DIR</code></td><td><code>~/.local/bin</code></td><td>Where the <code>aos</code> symlink goes</td></tr>
     <tr><td><code>AOS_REPO_URL</code></td><td>the GitHub repo</td><td>Install from a fork or mirror</td></tr>
+    <tr><td><code>AOS_REF</code></td><td><code>main</code></td><td>Branch or tag to install, e.g. <code>AOS_REF=v0.2.0</code> for pinned installs</td></tr>
     <tr><td><code>AOS_HOME</code></td><td><code>~/.aos</code></td><td>Where all <em>data</em> lives (runtime, not install-time)</td></tr>
   </table></div>
   <h3>MANUAL INSTALL</h3>
@@ -352,6 +355,7 @@ verification:
     <tr><td><code>aos find &lt;query&gt;</code></td><td>Search all project memory (runs, decisions, learnings, audit) — prints <code>file:line</code> matches.</td></tr>
     <tr><td><code>aos console [--port &lt;p&gt;]</code></td><td>Serve the local console (default <code>127.0.0.1:4560</code>).</td></tr>
     <tr><td><code>aos projects</code></td><td>List registered projects and their memory homes.</td></tr>
+    <tr><td><code>aos doctor</code></td><td>Diagnose everything: node version, app install, dependencies, <code>AOS_HOME</code>, registry integrity, dangling repo paths, and this repo's hook wiring (flags old-format hooks). Exit 0 = all clear.</td></tr>
     <tr><td><code>aos version</code></td><td>Print the installed version.</td></tr>
     <tr><td><code>aos update</code></td><td>Update in place: <code>git pull --ff-only</code> + reinstall dependencies.</td></tr>
     <tr><td><code>aos hook &lt;name&gt;</code></td><td class="dim">Internal — the entry points Claude Code hooks call (<code>pre-tool</code>, <code>post-tool</code>, <code>session-start</code>, <code>session-end</code>).</td></tr>
@@ -373,9 +377,9 @@ verification:
     <li><b>Leverage ratio</b> — per project, the % of finished runs that verified clean on the first attempt.</li>
   </ul>
   <div class="callout"><b>LOCAL ONLY</b>
-  The server binds to <code>127.0.0.1</code> — it is not reachable from your network. There is no
-  authentication because there is no exposure. Remote/mobile access arrives with the v0.2 Telegram
-  approvals and the v0.5 sync server.</div>
+  The server binds to <code>127.0.0.1</code> — it is not reachable from your network — and additionally
+  refuses requests whose <code>Host</code> header isn't localhost, which blocks DNS-rebinding attacks from
+  malicious websites. Remote/mobile access arrives with the v0.2 Telegram approvals and the v0.5 sync server.</div>
 </section>
 
 <section id="privacy">
@@ -407,6 +411,8 @@ verification:
 <section id="troubleshooting">
   <span class="secnum">§12 · TROUBLESHOOTING</span>
   <h2>Troubleshooting</h2>
+  <p>Start with <code>aos doctor</code> — it checks the install, registry, and the current repo's hook
+  wiring, and names the fix for each failure.</p>
   <h3>`aos: command not found`</h3>
   <p>Your shell hasn't picked up the PATH change. Restart the shell, or run
   <code>export PATH="$HOME/.local/bin:$PATH"</code>. Verify with <code>which aos</code>.</p>

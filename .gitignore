@@ -4,4 +4,3 @@ node_modules/
 
 # generated per-machine by `aos init` (absolute hook paths)
 .claude/
-package-lock.json

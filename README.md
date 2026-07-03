@@ -87,7 +87,7 @@ aos console             # http://127.0.0.1:4560
 
 ## CLI
 
-`aos init | status | context | run start/finish/state/list | verify | find | console | projects`
+`aos init | status | context | run start/finish/state/list | verify | find | console | projects | doctor | version | update`
 
 ## Principles
 
@@ -99,7 +99,7 @@ aos console             # http://127.0.0.1:4560
 
 ## Status & roadmap
 
-v0.1 — working end to end (18 smoke tests: `pnpm test`). Next, in pain-order:
+v0.2 — production-hardened (26 smoke tests + shellcheck in CI: `npm test`). Next, in pain-order:
 mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
 polish · multi-operator sync · client-facing trust console.
 

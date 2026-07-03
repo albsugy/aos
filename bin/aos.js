@@ -14,6 +14,7 @@ import { printFind } from '../src/search.js';
 import { buildContext } from '../src/context.js';
 import { loadPolicy } from '../src/policy.js';
 import { serveConsole } from '../src/console/server.js';
+import { runDoctor } from '../src/doctor.js';
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -69,6 +70,7 @@ Usage:
   aos verify                        Run verification contracts from policy.yaml
   aos find <query>                  Search project memory (runs, decisions, learnings)
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
+  aos doctor                        Diagnose the install, registry, and current repo's wiring
   aos hook <name>                   (internal) Claude Code hook entry points
   aos version                       Print version
   aos update                        Update aos in place (git pull + install deps)
@@ -158,6 +160,11 @@ async function main() {
     case 'hook':
       await runHook(positional[0]);
       break;
+    case 'doctor': {
+      const ok = runDoctor({ appRoot: APP_ROOT, version: appVersion() });
+      process.exit(ok ? 0 : 1);
+      break;
+    }
     case 'version':
     case '--version':
     case '-v':
@@ -177,10 +184,10 @@ async function main() {
         console.log(`✔ aos ${appVersion()} — already up to date`);
         break;
       }
-      execSync('npm install --omit=dev --no-fund --no-audit --loglevel=error', {
-        cwd: APP_ROOT,
-        stdio: 'inherit',
-      });
+      const npmCmd = fs.existsSync(path.join(APP_ROOT, 'package-lock.json'))
+        ? 'npm ci --omit=dev --no-fund --no-audit --loglevel=error'
+        : 'npm install --omit=dev --no-fund --no-audit --loglevel=error';
+      execSync(npmCmd, { cwd: APP_ROOT, stdio: 'inherit' });
       console.log(
         changed ? `✔ aos updated to ${appVersion()}` : `✔ dependencies restored (aos ${appVersion()})`
       );
