@@ -37,12 +37,18 @@ else
 fi
 
 info "Installing dependencies"
-if [ -f "$INSTALL_DIR/package-lock.json" ]; then
-  # Reproducible: install exactly the locked dependency tree.
-  npm ci --omit=dev --no-fund --no-audit --loglevel=error --prefix "$INSTALL_DIR" >/dev/null
-else
-  npm install --omit=dev --no-fund --no-audit --loglevel=error --prefix "$INSTALL_DIR" >/dev/null
-fi
+# cd instead of --prefix: `npm ci --prefix` can silently operate on a project
+# in the caller's cwd on some npm versions, leaving the install dir empty.
+(
+  cd "$INSTALL_DIR"
+  if [ -f package-lock.json ]; then
+    # Reproducible: install exactly the locked dependency tree.
+    npm ci --omit=dev --no-fund --no-audit --loglevel=error >/dev/null
+  else
+    npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null
+  fi
+)
+[ -d "$INSTALL_DIR/node_modules/yaml" ] || fail "Dependency install failed — try: cd $INSTALL_DIR && npm ci --omit=dev"
 chmod +x "$INSTALL_DIR/bin/aos.js"
 
 # --- link the binary ---------------------------------------------------------
