@@ -168,9 +168,22 @@ async function main() {
         console.error('This aos install is not a git checkout — reinstall with the install script.');
         process.exit(1);
       }
+      const head = () => execSync('git rev-parse HEAD', { cwd: APP_ROOT, encoding: 'utf8' }).trim();
+      const before = head();
       execSync('git pull --ff-only', { cwd: APP_ROOT, stdio: 'inherit' });
-      execSync('npm install --omit=dev --no-fund --no-audit', { cwd: APP_ROOT, stdio: 'inherit' });
-      console.log(`✔ aos updated to ${appVersion()}`);
+      const changed = head() !== before;
+      const depsMissing = !fs.existsSync(path.join(APP_ROOT, 'node_modules', 'yaml'));
+      if (!changed && !depsMissing) {
+        console.log(`✔ aos ${appVersion()} — already up to date`);
+        break;
+      }
+      execSync('npm install --omit=dev --no-fund --no-audit --loglevel=error', {
+        cwd: APP_ROOT,
+        stdio: 'inherit',
+      });
+      console.log(
+        changed ? `✔ aos updated to ${appVersion()}` : `✔ dependencies restored (aos ${appVersion()})`
+      );
       break;
     }
     case 'projects': {
