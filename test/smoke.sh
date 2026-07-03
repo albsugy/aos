@@ -4,7 +4,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-AOS="node $ROOT/bin/aos.js"
+# Override to test the compiled bundle: AOS_BIN="node $ROOT/dist/aos.mjs" bash test/smoke.sh
+AOS="${AOS_BIN:-node $ROOT/bin/aos.js}"
 WORK="$(mktemp -d)"
 export AOS_HOME="$WORK/aos-home"
 REPO="$WORK/demo-repo"

@@ -20,10 +20,10 @@ fail()  { printf '\033[1;31m✖\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- prerequisites -----------------------------------------------------------
 command -v git >/dev/null 2>&1 || fail "git is required. Install git and re-run."
-command -v node >/dev/null 2>&1 || fail "Node.js >= 18 is required. Install from https://nodejs.org and re-run."
+command -v node >/dev/null 2>&1 || fail "Node.js >= 22 is required. Install from https://nodejs.org and re-run."
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 18 ] || fail "Node.js >= 18 required (found $(node -v))."
+[ "$NODE_MAJOR" -ge 22 ] || fail "Node.js >= 22 required (found $(node -v))."
 ok "Prerequisites: git, node $(node -v)"
 
 # --- fetch or update the app -------------------------------------------------
@@ -36,25 +36,15 @@ else
   git clone -q --depth 1 --branch "$REF" "$REPO_URL" "$INSTALL_DIR"
 fi
 
-info "Installing dependencies"
-# cd instead of --prefix: `npm ci --prefix` can silently operate on a project
-# in the caller's cwd on some npm versions, leaving the install dir empty.
-(
-  cd "$INSTALL_DIR"
-  if [ -f package-lock.json ]; then
-    # Reproducible: install exactly the locked dependency tree.
-    npm ci --omit=dev --no-fund --no-audit --loglevel=error >/dev/null
-  else
-    npm install --omit=dev --no-fund --no-audit --loglevel=error >/dev/null
-  fi
-)
-[ -d "$INSTALL_DIR/node_modules/yaml" ] || fail "Dependency install failed — try: cd $INSTALL_DIR && npm ci --omit=dev"
-chmod +x "$INSTALL_DIR/bin/aos.js"
+# --- link the compiled bundle ------------------------------------------------
+# No dependency install: the repo ships a compiled single-file build with all
+# dependencies inlined (dist/aos.mjs), verified against source by CI.
+[ -f "$INSTALL_DIR/dist/aos.mjs" ] || fail "Compiled bundle missing at $INSTALL_DIR/dist/aos.mjs — the ref '$REF' may predate compiled releases."
+chmod +x "$INSTALL_DIR/dist/aos.mjs"
 
-# --- link the binary ---------------------------------------------------------
 mkdir -p "$BIN_DIR"
-ln -sf "$INSTALL_DIR/bin/aos.js" "$BIN_DIR/aos"
-ok "Linked $BIN_DIR/aos"
+ln -sf "$INSTALL_DIR/dist/aos.mjs" "$BIN_DIR/aos"
+ok "Linked $BIN_DIR/aos → compiled bundle"
 
 # --- make sure BIN_DIR is on PATH -------------------------------------------
 ensure_path() {
