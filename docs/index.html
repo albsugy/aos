@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOS — Agent Operations Stack</title>
+<meta name="description" content="Operate AI coding agents like a flight operation: portable memory, enforced guardrails, automatic audit, real verification, and a local console — all in files you own.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c10'/%3E%3Crect x='6' y='6' width='20' height='20' fill='none' stroke='%23e8a33d' stroke-width='3'/%3E%3Crect x='13' y='13' width='6' height='6' fill='%23e8a33d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0c10;
+    --panel: #10141b;
+    --line: #232a35;
+    --line-soft: #1a2029;
+    --text: #cfd6df;
+    --muted: #7d8794;
+    --amber: #e8a33d;
+    --amber-dim: rgba(232, 163, 61, .12);
+    --green: #4cbf63;
+    --red: #e5534b;
+    --serif: "Instrument Serif", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+    --sans: "IBM Plex Sans", -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ink);
+    color: var(--text);
+    font: 16px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before { /* grain */
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 999; opacity: .035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--amber); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: var(--mono); }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--ink) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav { display: flex; align-items: center; gap: 24px; height: 58px; }
+  .wordmark {
+    font-family: var(--mono); font-weight: 600; font-size: 15px; letter-spacing: .12em;
+    color: var(--text); border: 1.5px solid var(--amber); padding: 3px 10px;
+  }
+  .wordmark b { color: var(--amber); }
+  .nav .links { margin-left: auto; display: flex; gap: 22px; font-family: var(--mono); font-size: 13px; }
+  .nav .links a { color: var(--muted); }
+  .nav .links a:hover { color: var(--amber); text-decoration: none; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 84px 0 72px; border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
+  .hero::after { /* radar sweep glow */
+    content: ""; position: absolute; top: -260px; right: -260px; width: 640px; height: 640px;
+    background: radial-gradient(circle, var(--amber-dim), transparent 62%);
+    pointer-events: none;
+  }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .22em; color: var(--amber);
+    text-transform: uppercase; display: flex; align-items: center; gap: 12px; margin-bottom: 26px;
+  }
+  .kicker::before { content: ""; width: 34px; height: 1px; background: var(--amber); }
+  h1 {
+    font-family: var(--serif); font-weight: 400; font-size: clamp(44px, 7vw, 84px);
+    line-height: 1.02; letter-spacing: -.01em; max-width: 13ch; margin-bottom: 28px;
+  }
+  h1 em { font-style: italic; color: var(--amber); }
+  .hero p.lede { max-width: 56ch; color: var(--muted); font-size: 18px; margin-bottom: 40px; }
+  .hero p.lede b { color: var(--text); font-weight: 500; }
+
+  .install-box {
+    display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    border: 1px solid var(--line); background: var(--panel); padding: 16px 20px;
+  }
+  .install-box .prompt { color: var(--green); }
+  .install-box code { font-size: 14px; color: var(--text); }
+  .install-box code .amber { color: var(--amber); }
+  .copy-btn {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .08em; cursor: pointer;
+    background: none; border: 1px solid var(--line); color: var(--muted); padding: 6px 12px;
+  }
+  .copy-btn:hover { border-color: var(--amber); color: var(--amber); }
+  .hero .fine { margin-top: 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .hero .fine .dot { color: var(--amber); }
+
+  /* staggered reveal */
+  .hero .kicker, .hero h1, .hero .lede, .hero .install-box, .hero .fine {
+    opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .hero h1 { animation-delay: .08s; }
+  .hero .lede { animation-delay: .16s; }
+  .hero .install-box { animation-delay: .24s; }
+  .hero .fine { animation-delay: .32s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .hero .kicker, .hero h1, .hero .lede, .hero .install-box, .hero .fine { animation: none; opacity: 1; transform: none; }
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 76px 0; border-bottom: 1px solid var(--line); }
+  .sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 40px; }
+  .sec-num { font-family: var(--mono); font-size: 13px; color: var(--amber); letter-spacing: .14em; }
+  h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 4vw, 44px); line-height: 1.1; }
+  .sec-note { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .1em; display: none; }
+  @media (min-width: 760px) { .sec-note { display: block; } }
+
+  /* problem stats */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); border: 1px solid var(--line); }
+  .stat { padding: 26px 24px; border-right: 1px solid var(--line); background: var(--panel); }
+  .stat:last-child { border-right: none; }
+  .stat .n { font-family: var(--serif); font-size: 46px; color: var(--amber); line-height: 1; }
+  .stat .l { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 10px; letter-spacing: .04em; }
+  .foot-ref { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 12px; }
+  .pains { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .pain { background: var(--ink); padding: 22px 24px; }
+  .pain h3 { font-family: var(--mono); font-size: 13.5px; letter-spacing: .06em; color: var(--text); margin-bottom: 8px; }
+  .pain h3::before { content: "⚠ "; color: var(--amber); }
+  .pain p { font-size: 14.5px; color: var(--muted); }
+
+  /* stack diagram */
+  .stack { display: grid; gap: 18px; grid-template-columns: 1fr; }
+  @media (min-width: 860px) { .stack { grid-template-columns: 1.15fr 1fr 1fr; } }
+  .layer { border: 1px solid var(--line); background: var(--panel); padding: 26px; position: relative; }
+  .layer::before {
+    content: attr(data-tag); position: absolute; top: -9px; left: 18px; background: var(--ink);
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em; color: var(--amber); padding: 0 8px;
+  }
+  .layer h3 { font-family: var(--serif); font-size: 26px; font-weight: 400; margin-bottom: 10px; }
+  .layer p { font-size: 14.5px; color: var(--muted); margin-bottom: 14px; }
+  .layer pre { font-size: 12px; line-height: 1.7; color: var(--text); background: var(--ink); border: 1px solid var(--line-soft); padding: 14px; overflow-x: auto; }
+  .layer pre .c { color: var(--muted); }
+  .layer pre .a { color: var(--amber); }
+
+  /* six layers grid */
+  .six { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  .cell { background: var(--ink); padding: 28px 26px; transition: background .2s; }
+  .cell:hover { background: var(--panel); }
+  .cell .idx { font-family: var(--mono); font-size: 12px; color: var(--amber); letter-spacing: .14em; }
+  .cell h3 { font-family: var(--serif); font-size: 24px; font-weight: 400; margin: 10px 0 8px; }
+  .cell p { font-size: 14.5px; color: var(--muted); }
+  .cell .metric { margin-top: 14px; font-family: var(--mono); font-size: 12px; color: var(--text); border-left: 2px solid var(--amber); padding-left: 10px; }
+
+  /* how it works */
+  .steps { display: grid; gap: 18px; }
+  @media (min-width: 860px) { .steps { grid-template-columns: repeat(3, 1fr); } }
+  .step { border: 1px solid var(--line); background: var(--panel); }
+  .step .bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .08em; }
+  .step .bar .n { color: var(--amber); }
+  .step pre { padding: 18px 16px; font-size: 12.5px; line-height: 1.8; overflow-x: auto; }
+  .step pre .p { color: var(--green); }
+  .step pre .c { color: var(--muted); }
+  .step pre .a { color: var(--amber); }
+  .step .cap { padding: 0 16px 18px; font-size: 13.5px; color: var(--muted); }
+
+  /* console mock */
+  .mock { margin-top: 48px; border: 1px solid var(--line); background: var(--panel); }
+  .mock .titlebar { display: flex; gap: 12px; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .1em; }
+  .mock .titlebar i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .mock .titlebar i:first-child { background: var(--amber); }
+  .mock .qh { padding: 12px 18px 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .18em; color: var(--muted); }
+  .qrow { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-top: 1px solid var(--line-soft); font-family: var(--mono); font-size: 13px; flex-wrap: wrap; }
+  .chip { font-size: 11.5px; padding: 2px 10px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .chip.amber { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 50%, transparent); background: var(--amber-dim); }
+  .chip.red { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+  .chip.green { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+  .qrow .proj { color: var(--muted); font-size: 12px; }
+  .qrow .age { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  /* comparison */
+  .compare { overflow-x: auto; border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; }
+  th, td { padding: 13px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; color: var(--muted); font-weight: 500; background: var(--panel); }
+  td:first-child { font-family: var(--mono); font-size: 13px; color: var(--text); }
+  tr:last-child td { border-bottom: none; }
+  td .yes { color: var(--green); }
+  td .no { color: var(--muted); }
+  tr.aos-row td { background: var(--amber-dim); color: var(--text); }
+  tr.aos-row td:first-child { color: var(--amber); font-weight: 600; }
+
+  /* principles */
+  .principles { display: grid; gap: 0; border-left: 1px solid var(--amber); }
+  .principle { padding: 18px 0 18px 28px; border-bottom: 1px dashed var(--line); }
+  .principle:last-child { border-bottom: none; }
+  .principle h3 { font-family: var(--serif); font-size: 23px; font-weight: 400; }
+  .principle p { color: var(--muted); font-size: 14.5px; margin-top: 4px; }
+
+  /* roadmap */
+  .roadmap { position: relative; }
+  .phase { display: grid; grid-template-columns: 120px 1fr; gap: 24px; padding: 26px 0; border-bottom: 1px dashed var(--line); }
+  .phase:last-child { border-bottom: none; }
+  .phase .v { font-family: var(--mono); font-size: 13px; color: var(--amber); letter-spacing: .1em; padding-top: 4px; }
+  .phase .v .tag { display: block; margin-top: 8px; font-size: 10.5px; letter-spacing: .14em; color: var(--muted); }
+  .phase h3 { font-family: var(--serif); font-size: 26px; font-weight: 400; margin-bottom: 8px; }
+  .phase h3 .status { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; vertical-align: middle; margin-left: 12px; padding: 3px 9px; border: 1px solid var(--green); color: var(--green); }
+  .phase h3 .status.next { border-color: var(--amber); color: var(--amber); }
+  .phase h3 .status.later { border-color: var(--line); color: var(--muted); }
+  .phase ul { list-style: none; }
+  .phase li { padding: 5px 0 5px 22px; position: relative; color: var(--muted); font-size: 14.5px; }
+  .phase li::before { content: "▸"; position: absolute; left: 0; color: var(--amber); }
+  .phase li b { color: var(--text); font-weight: 500; }
+  @media (max-width: 700px) { .phase { grid-template-columns: 1fr; gap: 8px; } }
+
+  /* final cta */
+  .cta { text-align: center; padding: 90px 0; border-bottom: 1px solid var(--line); }
+  .cta h2 { margin-bottom: 18px; }
+  .cta p { color: var(--muted); margin-bottom: 34px; }
+
+  footer { padding: 34px 0 44px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); display: flex; gap: 24px; flex-wrap: wrap; }
+  footer .right { margin-left: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <span class="wordmark"><b>A</b>OS</span>
+    <nav class="links">
+      <a href="#stack">The Stack</a>
+      <a href="#layers">Six Layers</a>
+      <a href="#compare">Why AOS</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="docs.html">Manual ↗</a>
+      <a href="https://github.com/albsugy/aos">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="kicker">Agent Operations Stack · v0.1</div>
+    <h1>Your agents got fast.<br>Your <em>operation</em> didn't.</h1>
+    <p class="lede">AI agents now write most of the code — and wake up every session with amnesia,
+      ship plausible-but-wrong work, and touch production with nothing but vibes between them and disaster.
+      AOS gives the operator what the runtime never will: <b>portable memory, enforced guardrails,
+      automatic audit, real verification, and one console over everything.</b> All of it in plain files you own.</p>
+    <div class="install-box">
+      <code><span class="prompt">$</span> curl -fsSL <span class="amber">https://raw.githubusercontent.com/albsugy/aos/main/install.sh</span> | bash</code>
+      <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash">COPY</button>
+    </div>
+    <p class="fine">macOS &amp; Linux <span class="dot">·</span> Node ≥ 18 <span class="dot">·</span> works with Claude Code today <span class="dot">·</span> any runtime via files <span class="dot">·</span> MIT</p>
+  </div>
+</section>
+
+<section id="problem">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§01</span>
+      <h2>The situation on the ground</h2>
+      <span class="sec-note">FIELD REPORT — 2026</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">+91%</div><div class="l">increase in PR review time since agents started writing the code</div></div>
+      <div class="stat"><div class="n">11.4h</div><div class="l">per week reviewing AI code vs 9.8h writing — the job inverted</div></div>
+      <div class="stat"><div class="n">96%</div><div class="l">of developers don't fully trust agent output; under half always verify it</div></div>
+    </div>
+    <p class="foot-ref">— 2026 developer surveys on AI-assisted development</p>
+    <div class="pains">
+      <div class="pain"><h3>EVERY SESSION STARTS BLANK</h3><p>You re-explain the codebase, the conventions, and what was already tried — every single time. The re-briefing tax is invisible and enormous.</p></div>
+      <div class="pain"><h3>REVIEW BECAME THE BOTTLENECK</h3><p>Agents produce faster than you can read. The failure mode isn't bad output — it's you, rubber-stamping at 11pm.</p></div>
+      <div class="pain"><h3>FAILURES ARE CONFIDENT &amp; SILENT</h3><p>Agents don't crash like servers. They succeed plausibly and wrongly, and nothing in the loop is paid to disagree with them.</p></div>
+      <div class="pain"><h3>NO BLACK BOX RECORDER</h3><p>What did the agent actually do last Tuesday? What did it cost? Which command almost went to prod? Nobody knows. Nothing was written down.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="stack">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§02</span>
+      <h2>Three parts. No platform.</h2>
+      <span class="sec-note">SYSTEM SCHEMATIC</span>
+    </div>
+    <div class="stack">
+      <div class="layer" data-tag="01 · THE SPEC">
+        <h3>Files you own</h3>
+        <p>Context packs, policies, playbooks, run records, audit logs — plain markdown, YAML, and JSONL under <code>~/.aos</code>. Readable by any agent, from any provider, forever.</p>
+        <pre>~/.aos/projects/&lt;id&gt;/
+├── context/pack.md      <span class="c"># the brief</span>
+├── context/decisions.md <span class="c"># why, forever</span>
+├── policy.yaml          <span class="c"># <span class="a">the gates</span></span>
+├── learnings.md         <span class="c"># compounds</span>
+├── playbooks/
+└── runs/&lt;date&gt;-&lt;ticket&gt;/
+    ├── ticket.md  plan.md
+    ├── verification.md  outcome.md
+    └── audit.jsonl      <span class="c"># everything</span></pre>
+      </div>
+      <div class="layer" data-tag="02 · SKILLS + HOOKS">
+        <h3>Enforced, not remembered</h3>
+        <p>Hooks load context into every session, gate risky commands against policy, and write the audit trail — automatically. The <code>/aos-ticket</code> pipeline runs work from intake to verified outcome.</p>
+        <pre><span class="c"># PreToolUse, every Bash call:</span>
+git push --force  <span class="a">→ BLOCKED</span>
+git push          <span class="a">→ NEEDS YOU</span>
+npm test          → allowed
+<span class="c"># and all of it audited</span></pre>
+      </div>
+      <div class="layer" data-tag="03 · THE CONSOLE">
+        <h3>One window, local only</h3>
+        <p>Decision queue, run states, verification verdicts, token economics, and your leverage ratio. Binds to 127.0.0.1. Nothing leaves the machine.</p>
+        <pre><span class="c">$</span> aos console
+<span class="a">AOS console → http://127.0.0.1:4560</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="layers">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§03</span>
+      <h2>The six layers every operator needs</h2>
+      <span class="sec-note">OPERATIONS DOCTRINE</span>
+    </div>
+    <div class="six">
+      <div class="cell"><span class="idx">L1</span><h3>Verification</h3><p>Deterministic contracts (tests, lint, checklists) that fail loudly, plus an adversarial reviewer whose only job is to refute the work before you see it.</p><div class="metric">metric: % of runs clean on first pass — your leverage ratio</div></div>
+      <div class="cell"><span class="idx">L2</span><h3>Memory</h3><p>Per-project context packs, decision logs, and learnings — loaded into every new session automatically. Agents stop waking up new.</p><div class="metric">the re-briefing tax → zero</div></div>
+      <div class="cell"><span class="idx">L3</span><h3>Mission control</h3><p>Every run, every state, every project in one queue. What's running, what failed, what's blocked on you — batched, not forty interruptions.</p><div class="metric">your attention, firewalled</div></div>
+      <div class="cell"><span class="idx">L4</span><h3>Guardrails</h3><p>Policy as config: forbidden actions blocked, gated actions held for approval, everything else flows. Enforced by hooks, not promises.</p><div class="metric">blast radius: bounded</div></div>
+      <div class="cell"><span class="idx">L5</span><h3>Economics</h3><p>Token spend per run, per project, per session — recorded automatically. Know which work is cheap leverage and what's quietly expensive.</p><div class="metric">cost per outcome, visible</div></div>
+      <div class="cell"><span class="idx">L6</span><h3>Learning loop</h3><p>Every run ends by distilling what was learned into project memory. Repeated procedures become playbooks. Run #30 is faster than run #3.</p><div class="metric">compounding, by default</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§04</span>
+      <h2>Flight plan</h2>
+      <span class="sec-note">STANDARD PROCEDURE</span>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="bar"><span class="n">STEP 1</span> INSTALL &amp; REGISTER</div>
+        <pre><span class="p">$</span> curl -fsSL …/install.sh | bash
+<span class="p">$</span> cd your-repo
+<span class="p">$</span> aos init
+<span class="c">✔ spec · skills · hooks wired</span></pre>
+        <div class="cap">One command per repo. Fill in <code>pack.md</code> (what agents must know) and <code>policy.yaml</code> (what they may do).</div>
+      </div>
+      <div class="step">
+        <div class="bar"><span class="n">STEP 2</span> RUN THE PIPELINE</div>
+        <pre><span class="c"># inside Claude Code:</span>
+<span class="a">/aos-ticket</span> LIN-482
+<span class="c">intake → plan → implement
+→ verify → package → learn</span></pre>
+        <div class="cap">The agent works the ticket through all six layers. Gated commands pause for your approval. Everything is audited.</div>
+      </div>
+      <div class="step">
+        <div class="bar"><span class="n">STEP 3</span> REVIEW &amp; SHIP</div>
+        <pre><span class="p">$</span> aos status
+<span class="a">⏳ awaiting review: LIN-482</span>
+<span class="c">verification: PASS · 51k tokens
+outcome.md → PR draft ready</span></pre>
+        <div class="cap">You review a verified, documented outcome — not a wall of diff. Decisions and learnings are already filed.</div>
+      </div>
+    </div>
+
+    <div class="mock" aria-label="Console preview">
+      <div class="titlebar"><i></i><i></i><i></i>&nbsp;AOS CONSOLE — 127.0.0.1:4560</div>
+      <div class="qh">DECISION QUEUE — EVERYTHING BLOCKED ON A HUMAN</div>
+      <div class="qrow"><span class="chip red">blocked</span><span>LIN-461 · Orders table migration</span><span class="proj">Acme Checkout</span><span class="age">2h</span></div>
+      <div class="qrow"><span class="chip amber">awaiting-review</span><span>LIN-482 · Auth retry storm fix</span><span class="proj">Acme Checkout</span><span class="age">now</span></div>
+      <div class="qrow"><span class="chip amber">gate</span><span>git push origin fix/auth-retry</span><span class="proj">needs approval</span><span class="age">now</span></div>
+      <div class="qrow"><span class="chip green">verified</span><span>SITE-12 · Contact form + spam protection</span><span class="proj">Portfolio Site · leverage 100%</span><span class="age">1d</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="compare">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§05</span>
+      <h2>Everyone built one instrument.<br>Nobody built the cockpit.</h2>
+      <span class="sec-note">COMPETITIVE ASSESSMENT</span>
+    </div>
+    <div class="compare">
+      <table>
+        <thead>
+          <tr><th>Category</th><th>What it covers</th><th>Locked to</th><th>Who owns your data</th><th>Non-code workflows</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Platform consoles<br><span class="no">GitHub Agent HQ, Cursor</span></td><td>Mission control only</td><td>Their platform &amp; repos</td><td>The platform</td><td><span class="no">✗</span></td></tr>
+          <tr><td>Observability SDKs<br><span class="no">LangSmith, AgentOps</span></td><td>Tracing for agent <i>builders</i></td><td>Their SDK in your code</td><td>Their cloud</td><td><span class="no">✗</span></td></tr>
+          <tr><td>Approval APIs<br><span class="no">gotoHuman</span></td><td>One layer: approvals</td><td>Their API</td><td>Their cloud</td><td>partial</td></tr>
+          <tr><td>AI code reviewers<br><span class="no">CodeRabbit, Greptile</span></td><td>One layer: PR review</td><td>Your git host</td><td>Their cloud</td><td><span class="no">✗</span></td></tr>
+          <tr class="aos-row"><td>AOS</td><td><span class="yes">All six layers</span> — memory, gates, audit, verification, economics, learning</td><td><span class="yes">Nothing — plain files + any runtime</span></td><td><span class="yes">You. It's your disk.</span></td><td><span class="yes">✓ any agent-run work</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:22px; color:var(--muted); font-size:14.5px; max-width:70ch;">
+      The point-solutions are good at their layer. The operator's problem is that the layers don't compose —
+      and the integrated versions that do exist belong to a platform, which means so does your operation.
+      AOS is the integration <i>you</i> own: runtime-neutral because it's files, portable because it's yours.
+    </p>
+  </div>
+</section>
+
+<section id="principles">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§06</span>
+      <h2>Operating principles</h2>
+      <span class="sec-note">NON-NEGOTIABLE</span>
+    </div>
+    <div class="principles">
+      <div class="principle"><h3>Files over platforms.</h3><p>Markdown, YAML, JSONL in your home directory. <code>git init ~/.aos</code> and your entire operation has version history. No accounts. No lock-in.</p></div>
+      <div class="principle"><h3>Enforced beats remembered.</h3><p>Guardrails and audit live in hooks that fire on every action — not in prompts an agent might forget under context pressure.</p></div>
+      <div class="principle"><h3>Never self-certify.</h3><p>The agent that did the work doesn't get to declare it correct. Contracts fail loudly; a paid skeptic tries to refute everything.</p></div>
+      <div class="principle"><h3>Every layer works standalone.</h3><p>Hooks alone are worth installing — context, gates, and audit with zero workflow change. Adopt the rest when the pain arrives.</p></div>
+      <div class="principle"><h3>Local first, local only.</h3><p>The console binds to 127.0.0.1. Your clients' context, your policies, your audit trail — nothing leaves the machine until <i>you</i> ship it.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-num">§07</span>
+      <h2>Roadmap</h2>
+      <span class="sec-note">FLIGHT SCHEDULE</span>
+    </div>
+    <div class="roadmap">
+      <div class="phase">
+        <div class="v">v0.1<span class="tag">FREE · FOREVER</span></div>
+        <div>
+          <h3>Solo operator <span class="status">SHIPPED</span></h3>
+          <ul>
+            <li><b>The full stack, locally:</b> spec, skills, hooks, gates, audit, verification, console</li>
+            <li>Claude Code integration · 18-test verified · MIT licensed</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="v">v0.2<span class="tag">FREE</span></div>
+        <div>
+          <h3>The operator's phone <span class="status next">NEXT</span></h3>
+          <ul>
+            <li><b>Approvals anywhere:</b> gate decisions and review requests via Telegram — approve a deploy from the couch</li>
+            <li><b>MCP adapter:</b> the same spec, policies, and audit for any MCP-capable runtime — not just Claude Code</li>
+            <li>Playbook extraction polish · richer economics (cost per outcome)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="v">v0.5<span class="tag">TEAMS · PAID</span></div>
+        <div>
+          <h3>Shared operations <span class="status later">PLANNED</span></h3>
+          <ul>
+            <li><b>Team workspaces:</b> shared context packs, policies, and playbooks — the whole team's agents brief from the same source of truth</li>
+            <li><b>Sync server (self-hostable):</b> project state and decision queues shared across machines and teammates</li>
+            <li><b>Approval routing:</b> route gates by role — juniors' deploys go to seniors, client-facing sends go to the account owner</li>
+            <li><b>Org-wide audit:</b> one exportable trail of every agent action across the company — compliance-ready (EU AI Act oversight requirements land Aug 2026)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="v">v1.0<span class="tag">ORGS</span></div>
+        <div>
+          <h3>Across companies <span class="status later">PLANNED</span></h3>
+          <ul>
+            <li><b>Cross-org sharing:</b> agencies and their clients on the same trail — the client sees, approves, and trusts what agents do in their business</li>
+            <li><b>Client trust console:</b> plain-language approvals and weekly digests for non-technical stakeholders</li>
+            <li><b>Policy baselines &amp; SSO:</b> company-wide guardrail floors no project can drop below</li>
+            <li><b>Playbook marketplace:</b> proven, verified procedures shared between organizations</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <h2>Stop flying blind.</h2>
+    <p>Two minutes to install. One command per repo. Your first audited, gated, verified run today.</p>
+    <div class="install-box">
+      <code><span class="prompt">$</span> curl -fsSL <span class="amber">https://raw.githubusercontent.com/albsugy/aos/main/install.sh</span> | bash</code>
+      <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash">COPY</button>
+    </div>
+    <p style="margin-top:22px"><a href="docs.html">Read the operator's manual →</a></p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:24px; flex-wrap:wrap; width:100%">
+    <span>AOS — Agent Operations Stack</span>
+    <a href="docs.html">Manual</a>
+    <a href="https://github.com/albsugy/aos">GitHub</a>
+    <span class="right">MIT © 2026 Medhat Albsugy · Dubai</span>
+  </div>
+</footer>
+
+<script>
+  for (const btn of document.querySelectorAll('.copy-btn')) {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        btn.textContent = 'COPIED';
+        setTimeout(() => (btn.textContent = 'COPY'), 1600);
+      } catch { /* clipboard unavailable */ }
+    });
+  }
+</script>
+</body>
+</html>

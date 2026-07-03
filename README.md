@@ -17,12 +17,21 @@ The design bet: frontier labs keep making agent *execution* better and cheaper; 
 what they never will — **your** context, **your** policies, **your** audit trail, portable
 across runtimes.
 
+**Site:** [albsugy.github.io/aos](https://albsugy.github.io/aos/) · **Manual:** [docs.html](https://albsugy.github.io/aos/docs.html)
+
 ## Install
 
 ```bash
-git clone <this repo> && cd aos
-pnpm install
-ln -sf "$PWD/bin/aos.js" ~/.local/bin/aos   # or: npm link (may need sudo)
+curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash
+```
+
+Requires git + Node ≥ 18. Installs to `~/.local/share/aos`, links `~/.local/bin/aos`,
+adds it to your PATH. Re-run to update, or `aos update`. Manual install:
+
+```bash
+git clone https://github.com/albsugy/aos.git && cd aos
+npm install --omit=dev
+ln -sf "$PWD/bin/aos.js" ~/.local/bin/aos
 ```
 
 ## Quickstart

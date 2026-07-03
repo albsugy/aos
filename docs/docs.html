@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOS Manual — install, usage, commands, reference</title>
+<meta name="description" content="The AOS operator's manual: installation, quickstart, concepts, policy reference, hooks, skills, CLI commands, console, data & privacy, troubleshooting.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c10'/%3E%3Crect x='6' y='6' width='20' height='20' fill='none' stroke='%23e8a33d' stroke-width='3'/%3E%3Crect x='13' y='13' width='6' height='6' fill='%23e8a33d'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:#0a0c10; --panel:#10141b; --line:#232a35; --line-soft:#1a2029;
+    --text:#cfd6df; --muted:#7d8794; --amber:#e8a33d; --amber-dim:rgba(232,163,61,.12);
+    --green:#4cbf63; --red:#e5534b;
+    --serif:"Instrument Serif",Georgia,serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+    --sans:"IBM Plex Sans",-apple-system,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html { scroll-behavior:smooth; }
+  body { background:var(--ink); color:var(--text); font:15.5px/1.7 var(--sans); -webkit-font-smoothing:antialiased; }
+  a { color:var(--amber); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code { font-family:var(--mono); font-size:.92em; background:var(--panel); border:1px solid var(--line-soft); padding:1px 6px; border-radius:3px; }
+  pre { font-family:var(--mono); font-size:12.5px; line-height:1.75; background:var(--panel); border:1px solid var(--line); padding:16px 18px; overflow-x:auto; margin:14px 0 20px; }
+  pre code { background:none; border:none; padding:0; }
+  pre .c { color:var(--muted); } pre .a { color:var(--amber); } pre .g { color:var(--green); }
+
+  header { position:sticky; top:0; z-index:50; background:color-mix(in srgb, var(--ink) 90%, transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+  .topbar { display:flex; align-items:center; gap:20px; height:56px; padding:0 22px; }
+  .wordmark { font-family:var(--mono); font-weight:600; font-size:14px; letter-spacing:.12em; border:1.5px solid var(--amber); padding:2px 9px; color:var(--text); }
+  .wordmark b { color:var(--amber); }
+  .topbar .t { font-family:var(--serif); font-size:19px; }
+  .topbar .links { margin-left:auto; display:flex; gap:18px; font-family:var(--mono); font-size:12.5px; }
+  .topbar .links a { color:var(--muted); }
+  #menu-btn { display:none; margin-left:auto; font-family:var(--mono); font-size:12px; background:none; color:var(--amber); border:1px solid var(--amber); padding:5px 12px; cursor:pointer; }
+
+  .layout { display:grid; grid-template-columns:260px 1fr; max-width:1180px; margin:0 auto; }
+  nav.side { border-right:1px solid var(--line); padding:28px 0 60px; position:sticky; top:56px; height:calc(100vh - 56px); overflow-y:auto; }
+  nav.side .group { font-family:var(--mono); font-size:10.5px; letter-spacing:.2em; color:var(--muted); padding:18px 22px 6px; }
+  nav.side a { display:block; padding:5px 22px; font-family:var(--mono); font-size:13px; color:var(--muted); border-left:2px solid transparent; }
+  nav.side a:hover { color:var(--text); text-decoration:none; }
+  nav.side a.active { color:var(--amber); border-left-color:var(--amber); background:var(--amber-dim); }
+
+  main { padding:44px 48px 120px; min-width:0; max-width:820px; }
+  section { margin-bottom:64px; scroll-margin-top:76px; }
+  .secnum { font-family:var(--mono); font-size:12px; letter-spacing:.16em; color:var(--amber); }
+  h1 { font-family:var(--serif); font-weight:400; font-size:44px; line-height:1.05; margin:6px 0 14px; }
+  h2 { font-family:var(--serif); font-weight:400; font-size:31px; margin:4px 0 16px; }
+  h3 { font-family:var(--mono); font-weight:600; font-size:14px; letter-spacing:.05em; margin:26px 0 8px; color:var(--text); }
+  p { margin-bottom:12px; color:var(--text); }
+  p.dim, li.dim { color:var(--muted); }
+  ul, ol { margin:0 0 14px 22px; }
+  li { margin-bottom:6px; }
+  .callout { border:1px solid var(--line); border-left:3px solid var(--amber); background:var(--panel); padding:13px 17px; margin:16px 0 20px; font-size:14.5px; }
+  .callout.red { border-left-color:var(--red); }
+  .callout b { font-family:var(--mono); font-size:12px; letter-spacing:.1em; color:var(--amber); display:block; margin-bottom:4px; }
+  .callout.red b { color:var(--red); }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:14px 0 20px; }
+  th,td { border:1px solid var(--line); padding:9px 13px; text-align:left; vertical-align:top; }
+  th { font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; color:var(--muted); background:var(--panel); font-weight:500; }
+  td code { white-space:nowrap; }
+  .table-scroll { overflow-x:auto; }
+  .chip { font-family:var(--mono); font-size:11.5px; padding:1px 9px; border-radius:20px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .chip.amber { color:var(--amber); border-color:color-mix(in srgb,var(--amber) 50%,transparent); background:var(--amber-dim); }
+  .chip.red { color:var(--red); border-color:color-mix(in srgb,var(--red) 50%,transparent); }
+  .chip.green { color:var(--green); border-color:color-mix(in srgb,var(--green) 45%,transparent); }
+  .chip.blue { color:#58a6ff; border-color:rgba(88,166,255,.4); }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns:1fr; }
+    nav.side { display:none; position:fixed; inset:56px 0 0 0; height:auto; background:var(--ink); z-index:40; border-right:none; }
+    nav.side.open { display:block; }
+    #menu-btn { display:block; }
+    .topbar .links { display:none; }
+    main { padding:32px 22px 100px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="topbar">
+    <a href="index.html" style="text-decoration:none"><span class="wordmark"><b>A</b>OS</span></a>
+    <span class="t">The Operator's Manual</span>
+    <nav class="links">
+      <a href="index.html">← Landing</a>
+      <a href="https://github.com/albsugy/aos">GitHub ↗</a>
+    </nav>
+    <button id="menu-btn" onclick="document.querySelector('nav.side').classList.toggle('open')">CONTENTS</button>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="side" id="sidenav">
+  <div class="group">START</div>
+  <a href="#overview">Overview</a>
+  <a href="#install">Installation</a>
+  <a href="#quickstart">Quickstart</a>
+  <div class="group">CORE</div>
+  <a href="#concepts">Concepts</a>
+  <a href="#layout-ref">Directory layout</a>
+  <a href="#policy">policy.yaml reference</a>
+  <a href="#hooks">Hooks</a>
+  <a href="#skills">Skills</a>
+  <div class="group">REFERENCE</div>
+  <a href="#cli">CLI commands</a>
+  <a href="#console">The console</a>
+  <a href="#privacy">Data &amp; privacy</a>
+  <div class="group">OPERATIONS</div>
+  <a href="#teams">Teams &amp; organizations</a>
+  <a href="#troubleshooting">Troubleshooting</a>
+  <a href="#uninstall">Update &amp; uninstall</a>
+</nav>
+
+<main>
+
+<section id="overview">
+  <span class="secnum">§00 · OVERVIEW</span>
+  <h1>AOS Manual</h1>
+  <p><b>AOS (Agent Operations Stack)</b> is the operations layer for AI coding agents. It gives every project
+  a portable memory, enforceable guardrails, an automatic audit trail, real verification, and a local console —
+  stored entirely as plain files under <code>~/.aos</code> that you own and any agent can read.</p>
+  <p>It is three thin parts:</p>
+  <ol>
+    <li><b>The Spec</b> — a file convention: context packs, policies, playbooks, run records, audit logs.</li>
+    <li><b>Skills + Hooks</b> — Claude Code integration that loads context, gates commands, and audits actions automatically, plus a six-stage ticket pipeline.</li>
+    <li><b>The Console</b> — a read-only local dashboard: decision queue, run states, verification verdicts, token economics.</li>
+  </ol>
+  <p class="dim">AOS is not an orchestration framework, not a platform, and not an SDK you embed. Your runtime
+  (Claude Code today; anything file-capable tomorrow) does the work — AOS records, gates, briefs, and reports.</p>
+</section>
+
+<section id="install">
+  <span class="secnum">§01 · INSTALLATION</span>
+  <h2>Installation</h2>
+  <h3>REQUIREMENTS</h3>
+  <ul>
+    <li>macOS or Linux</li>
+    <li><code>git</code></li>
+    <li>Node.js ≥ 18 (<code>node -v</code>)</li>
+    <li>Claude Code, for the skills/hooks integration (the CLI and console work without it)</li>
+  </ul>
+  <h3>ONE-LINE INSTALL</h3>
+  <pre><code><span class="c">$</span> curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash</code></pre>
+  <p>The installer: checks prerequisites → clones the app to <code>~/.local/share/aos</code> → installs
+  dependencies → links <code>~/.local/bin/aos</code> → adds that directory to your PATH (zsh, bash, or fish)
+  if it isn't already → verifies with <code>aos version</code>. Re-running it updates in place.</p>
+  <h3>OVERRIDES</h3>
+  <div class="table-scroll"><table>
+    <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+    <tr><td><code>AOS_INSTALL_DIR</code></td><td><code>~/.local/share/aos</code></td><td>Where the app lives</td></tr>
+    <tr><td><code>AOS_BIN_DIR</code></td><td><code>~/.local/bin</code></td><td>Where the <code>aos</code> symlink goes</td></tr>
+    <tr><td><code>AOS_REPO_URL</code></td><td>the GitHub repo</td><td>Install from a fork or mirror</td></tr>
+    <tr><td><code>AOS_HOME</code></td><td><code>~/.aos</code></td><td>Where all <em>data</em> lives (runtime, not install-time)</td></tr>
+  </table></div>
+  <h3>MANUAL INSTALL</h3>
+  <pre><code><span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
+<span class="c">$</span> npm install --omit=dev
+<span class="c">$</span> ln -sf "$PWD/bin/aos.js" ~/.local/bin/aos</code></pre>
+</section>
+
+<section id="quickstart">
+  <span class="secnum">§02 · QUICKSTART</span>
+  <h2>Quickstart</h2>
+  <p>From zero to your first gated, audited, verified run:</p>
+  <pre><code><span class="c"># 1 — register a repo as an AOS project</span>
+<span class="c">$</span> cd your-repo
+<span class="c">$</span> aos init
+<span class="g">✔</span> Registered project "your-repo"
+<span class="g">✔</span> Spec scaffolded at ~/.aos/projects/your-repo
+<span class="g">✔</span> Skills installed to .claude/skills/
+<span class="g">✔</span> Hooks wired in .claude/settings.json</code></pre>
+  <p>2 — Fill in the two files that matter (both under <code>~/.aos/projects/&lt;id&gt;/</code>):</p>
+  <ul>
+    <li><code>context/pack.md</code> — what every agent must know: architecture, conventions, boundaries, gotchas.</li>
+    <li><code>policy.yaml</code> — what agents may do: forbidden and gated commands, verification contracts. See <a href="#policy">§04</a>.</li>
+  </ul>
+  <p>3 — Start a <b>new</b> Claude Code session in the repo (hooks load at session start) and run a ticket:</p>
+  <pre><code><span class="a">/aos-ticket</span> PROJ-123: add rate limiting to the public API</code></pre>
+  <p>The pipeline runs intake → plan → implement → verify → package → learn. Gated commands (like
+  <code>git push</code>) pause for your approval. When it finishes, the run is <span class="chip amber">awaiting-review</span>
+  with a PR draft in its <code>outcome.md</code>.</p>
+  <pre><code><span class="c">$</span> aos status        <span class="c"># every project, run, and what needs you</span>
+<span class="c">$</span> aos console       <span class="c"># dashboard at http://127.0.0.1:4560</span></code></pre>
+  <div class="callout"><b>WORKS WITH ZERO WORKFLOW CHANGE</b>
+  Even if you never run <code>/aos-ticket</code>, the hooks alone give you session context injection,
+  policy gates, an audit trail, and token accounting on every ordinary Claude Code session.</div>
+</section>
+
+<section id="concepts">
+  <span class="secnum">§03 · CONCEPTS</span>
+  <h2>Concepts</h2>
+  <h3>PROJECT</h3>
+  <p>A registered repo (or several repos) mapped to a memory home under <code>~/.aos/projects/&lt;id&gt;/</code>.
+  The mapping lives in <code>~/.aos/registry.yaml</code>; AOS resolves which project you're in from your
+  working directory (longest path match, symlinks resolved).</p>
+  <h3>RUN</h3>
+  <p>One unit of work — usually one ticket. A run owns a folder of records: <code>ticket.md</code>,
+  <code>plan.md</code>, <code>verification.md</code>, <code>outcome.md</code>, <code>audit.jsonl</code>,
+  <code>meta.json</code>. One run per project is <b>active</b> at a time; hook audit lines flow into it.
+  Audit outside any run still lands in the project-level <code>audit.jsonl</code>.</p>
+  <h3>RUN STATES</h3>
+  <div class="table-scroll"><table>
+    <tr><th>State</th><th>Meaning</th></tr>
+    <tr><td><span class="chip blue">in-progress</span></td><td>Agent is working (set by <code>run start</code>)</td></tr>
+    <tr><td><span class="chip red">blocked</span></td><td>Agent stopped — needs your input to continue</td></tr>
+    <tr><td><span class="chip amber">awaiting-review</span></td><td>Verified and packaged — waiting for your review (default of <code>run finish</code>)</td></tr>
+    <tr><td><span class="chip green">done</span></td><td>You reviewed it</td></tr>
+    <tr><td><span class="chip green">shipped</span></td><td>Merged/deployed</td></tr>
+  </table></div>
+  <h3>LEVERAGE RATIO</h3>
+  <p>The percentage of finished runs whose verification passed on the <b>first</b> attempt. This is the number
+  that tells you how much agent output ships untouched, safely — the whole point of operating well. It's shown
+  per project in <code>aos status</code> and the console.</p>
+  <h3>GATES</h3>
+  <p>Policy rules matched against every Bash command an agent tries to run:
+  <b>forbidden</b> → blocked outright · <b>gated</b> → held for your approval · everything else → flows
+  (normal Claude Code permissions still apply on top).</p>
+</section>
+
+<section id="layout-ref">
+  <span class="secnum">§04 · DIRECTORY LAYOUT</span>
+  <h2>Directory layout</h2>
+  <pre><code>~/.aos/
+├── registry.yaml                <span class="c"># project id → repo paths</span>
+└── projects/&lt;id&gt;/
+    ├── context/
+    │   ├── pack.md              <span class="c"># the brief — loaded into every session</span>
+    │   └── decisions.md         <span class="c"># append-only decision log (last 40 lines load)</span>
+    ├── policy.yaml              <span class="c"># gates + verification contracts</span>
+    ├── learnings.md             <span class="c"># compounding gotchas (last 30 lines load)</span>
+    ├── playbooks/               <span class="c"># extracted repeatable procedures</span>
+    ├── state.json               <span class="c"># active run pointer</span>
+    ├── audit.jsonl              <span class="c"># actions outside any run</span>
+    ├── sessions.jsonl           <span class="c"># token usage per session</span>
+    └── runs/&lt;YYYY-MM-DD&gt;-&lt;ticket&gt;/
+        ├── meta.json            <span class="c"># state, verification, attempts, tokens</span>
+        ├── ticket.md            <span class="c"># source + acceptance criteria</span>
+        ├── plan.md
+        ├── audit.jsonl          <span class="c"># every action during this run</span>
+        ├── verification.md      <span class="c"># contract results + adversarial findings</span>
+        └── outcome.md           <span class="c"># summary, decisions, risks, PR draft</span></code></pre>
+  <p class="dim">Everything is plain text. <code>git init ~/.aos</code> gives your entire operation version
+  history; <code>grep</code> works; nothing needs AOS to be readable in ten years.</p>
+</section>
+
+<section id="policy">
+  <span class="secnum">§05 · POLICY REFERENCE</span>
+  <h2>policy.yaml reference</h2>
+  <pre><code>version: 1
+plan_gate: auto            <span class="c"># auto | ask — must a human approve plan.md first?</span>
+
+tiers:
+  forbidden:               <span class="c"># blocked outright, agent is told why</span>
+    - pattern: 'push\s+[^|;&amp;]*(--force|-f)\b'
+      reason: Force-push is forbidden by policy
+  gated:                   <span class="c"># held for human approval</span>
+    - pattern: '\bgit\s+push\b'
+      action: git-push
+    - pattern: '\bdeploy\b'
+      action: deploy
+
+verification:
+  adversarial_review: true <span class="c"># require a skeptic subagent in /aos-verify &amp; /aos-ticket</span>
+  contracts:               <span class="c"># deterministic checks run by `aos verify`</span>
+    - name: tests
+      command: npm test
+      required: true       <span class="c"># a required failure = verdict FAIL (exit 1)</span>
+    - name: lint
+      command: npm run lint
+      required: false
+      timeout_ms: 120000   <span class="c"># optional, default 10 minutes</span></code></pre>
+  <h3>SEMANTICS</h3>
+  <ul>
+    <li><code>pattern</code> is a JavaScript regex, matched <b>case-insensitively</b> against the full Bash command string.</li>
+    <li>Order of evaluation: forbidden → gated → allow. First match wins within a tier.</li>
+    <li>A broken regex is skipped silently — a bad pattern can never take the gate down.</li>
+    <li>Anything not matched is allowed by AOS; Claude Code's own permission system still applies.</li>
+    <li>Contract <code>command</code>s run with your shell in the repo directory — same trust model as <code>package.json</code> scripts.</li>
+    <li>Missing or invalid <code>policy.yaml</code> → safe defaults (force-push and <code>rm -rf /</code> forbidden; push/merge/deploy gated).</li>
+  </ul>
+  <div class="callout"><b>DESIGN INTENT</b>
+  Gates express <i>blast radius</i>, not distrust. Reads, tests, and edits flow freely; the moment a command
+  can affect the world outside the working tree — push, merge, deploy, send — a human enters the loop.</div>
+</section>
+
+<section id="hooks">
+  <span class="secnum">§06 · HOOKS</span>
+  <h2>Hooks</h2>
+  <p><code>aos init</code> wires four Claude Code hooks into the repo's <code>.claude/settings.json</code>.
+  They are the enforcement layer — active in every session, no skill invocation needed.</p>
+  <div class="table-scroll"><table>
+    <tr><th>Hook</th><th>Fires</th><th>What it does</th></tr>
+    <tr><td><code>SessionStart</code></td><td>new session</td><td>Injects the context pack, recent decisions, learnings, and open runs into the agent's context</td></tr>
+    <tr><td><code>PreToolUse</code></td><td>every Bash call</td><td>Evaluates the command against <code>policy.yaml</code>: forbidden → denied with reason; gated → surfaces as a Claude Code approval prompt tagged <code>[aos policy]</code></td></tr>
+    <tr><td><code>PostToolUse</code></td><td>every tool call</td><td>Appends a summarized audit line to the active run (or project) <code>audit.jsonl</code></td></tr>
+    <tr><td><code>SessionEnd</code></td><td>session close</td><td>Parses the transcript for token usage; records per session and per active run</td></tr>
+  </table></div>
+  <h3>FAILURE POLICY</h3>
+  <p class="dim">Hooks are wrapped so that any internal error exits silently with code 0 — a broken AOS install
+  can never break your Claude Code session. The trade-off: if AOS misbehaves, check
+  <a href="#troubleshooting">troubleshooting</a> rather than expecting loud errors.</p>
+  <h3>NON-AOS REPOS</h3>
+  <p class="dim">Hooks resolve the project from the session's working directory. In directories that aren't
+  registered, all hooks no-op instantly — installing AOS globally has zero effect on unregistered repos.</p>
+</section>
+
+<section id="skills">
+  <span class="secnum">§07 · SKILLS</span>
+  <h2>Skills</h2>
+  <h3>/aos-ticket &lt;ticket&gt;</h3>
+  <p>The full pipeline. Six stages, none skippable:</p>
+  <ol>
+    <li><b>Intake</b> — starts a run, records the ticket and explicit acceptance criteria (asks you if ambiguous)</li>
+    <li><b>Plan</b> — writes <code>plan.md</code>; pauses for approval if <code>plan_gate: ask</code></li>
+    <li><b>Implement</b> — normal agent work on a branch, gated and audited by the hooks</li>
+    <li><b>Verify</b> — runs <code>aos verify</code> contracts, then spawns an adversarial reviewer instructed to <i>refute</i> the work against the acceptance criteria; loops until clean or blocked</li>
+    <li><b>Package</b> — writes <code>outcome.md</code>: summary, changes, decisions, risks, test steps, PR draft; finishes the run as <span class="chip amber">awaiting-review</span></li>
+    <li><b>Learn</b> — appends learnings and decisions to project memory; proposes a playbook when a pattern repeats</li>
+  </ol>
+  <h3>/aos-verify</h3>
+  <p>Stage 4 standalone — verify anything, anytime: contracts + skeptic subagent, findings recorded to the
+  active run's <code>verification.md</code> when one exists.</p>
+  <h3>/aos-learn</h3>
+  <p>Distills the current session into <code>learnings.md</code>, <code>decisions.md</code>, pack updates,
+  and playbook candidates. Use at the end of significant unstructured work or when you say "remember this."</p>
+  <h3>/aos-ask &lt;question&gt;</h3>
+  <p>Answers "why did we…", "what happened with…" questions from run history, with <code>file:line</code>
+  citations. Says so plainly when history doesn't contain the answer.</p>
+</section>
+
+<section id="cli">
+  <span class="secnum">§08 · CLI REFERENCE</span>
+  <h2>CLI commands</h2>
+  <div class="table-scroll"><table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>aos init [--name &lt;n&gt;]</code></td><td>Register the current repo as a project: scaffolds the spec under <code>~/.aos</code>, copies skills into <code>.claude/skills/</code>, wires hooks into <code>.claude/settings.json</code>. Idempotent — safe to re-run.</td></tr>
+    <tr><td><code>aos status</code></td><td>All projects: run counts by state, active run, leverage ratio, token totals, and anything awaiting review.</td></tr>
+    <tr><td><code>aos context [--project &lt;id&gt;]</code></td><td>Print exactly what agents get injected at session start.</td></tr>
+    <tr><td><code>aos run start --ticket &lt;id&gt; [--title &lt;t&gt;]</code></td><td>Create a run folder, scaffold <code>ticket.md</code>, set it active. Prints the folder and <code>plan_gate</code>.</td></tr>
+    <tr><td><code>aos run finish [--state &lt;s&gt;]</code></td><td>Finish the active run (default <code>awaiting-review</code>) and clear the active pointer.</td></tr>
+    <tr><td><code>aos run state &lt;state&gt;</code></td><td>Set the active run's state: <code>in-progress · blocked · awaiting-review · done · shipped</code>.</td></tr>
+    <tr><td><code>aos run list</code></td><td>All runs for the current project with state and verification.</td></tr>
+    <tr><td><code>aos verify</code></td><td>Run the policy's verification contracts here. Writes <code>verification.md</code> on the active run. Exit 0 = all required passed; exit 1 otherwise.</td></tr>
+    <tr><td><code>aos find &lt;query&gt;</code></td><td>Search all project memory (runs, decisions, learnings, audit) — prints <code>file:line</code> matches.</td></tr>
+    <tr><td><code>aos console [--port &lt;p&gt;]</code></td><td>Serve the local console (default <code>127.0.0.1:4560</code>).</td></tr>
+    <tr><td><code>aos projects</code></td><td>List registered projects and their memory homes.</td></tr>
+    <tr><td><code>aos version</code></td><td>Print the installed version.</td></tr>
+    <tr><td><code>aos update</code></td><td>Update in place: <code>git pull --ff-only</code> + reinstall dependencies.</td></tr>
+    <tr><td><code>aos hook &lt;name&gt;</code></td><td class="dim">Internal — the entry points Claude Code hooks call (<code>pre-tool</code>, <code>post-tool</code>, <code>session-start</code>, <code>session-end</code>).</td></tr>
+  </table></div>
+  <p class="dim">Most commands resolve the project from your working directory; pass <code>--project &lt;id&gt;</code> to override.</p>
+</section>
+
+<section id="console">
+  <span class="secnum">§09 · THE CONSOLE</span>
+  <h2>The console</h2>
+  <p><code>aos console</code> serves a read-only dashboard at <code>http://127.0.0.1:4560</code> (change with
+  <code>--port</code>). It refreshes every 5 seconds from the files on disk — no database, no daemon.</p>
+  <h3>WHAT YOU SEE</h3>
+  <ul>
+    <li><b>Header KPIs</b> — projects, runs that need you, total tokens.</li>
+    <li><b>Decision queue</b> — every run that is <span class="chip red">blocked</span> or <span class="chip amber">awaiting-review</span>, across all projects. This is the batch-review surface: clear it twice a day.</li>
+    <li><b>Project tables</b> — runs with state and verification chips, attempts, tokens, recency. Finished rows recede visually; live work stands forward.</li>
+    <li><b>Run drawer</b> — click any run: outcome, verification report, the full audit timeline (gate decisions in amber, verification verdicts in green/red), ticket, and plan.</li>
+    <li><b>Leverage ratio</b> — per project, the % of finished runs that verified clean on the first attempt.</li>
+  </ul>
+  <div class="callout"><b>LOCAL ONLY</b>
+  The server binds to <code>127.0.0.1</code> — it is not reachable from your network. There is no
+  authentication because there is no exposure. Remote/mobile access arrives with the v0.2 Telegram
+  approvals and the v0.5 sync server.</div>
+</section>
+
+<section id="privacy">
+  <span class="secnum">§10 · DATA &amp; PRIVACY</span>
+  <h2>Data &amp; privacy</h2>
+  <ul>
+    <li><b>Everything is local.</b> AOS makes no network calls. No telemetry, no accounts, no cloud.</li>
+    <li><b>What is stored:</b> your context packs and policies (authored by you), run records and audit summaries (tool names, file paths, truncated commands), and token counts parsed from session transcripts.</li>
+    <li><b>What is not stored:</b> full transcripts, file contents, or credentials. Audit lines are summaries, capped in length.</li>
+    <li><b>Employer code:</b> run folders describe work done in a repo (tickets, plans, outcomes). If that's sensitive, point <code>AOS_HOME</code> at an approved volume, or keep per-employer data separate by setting <code>AOS_HOME</code> per machine/shell profile.</li>
+    <li><b>Back it up like it matters</b> — this data is your compounding asset: <code>git init ~/.aos &amp;&amp; git -C ~/.aos add -A &amp;&amp; git -C ~/.aos commit -m snapshot</code></li>
+  </ul>
+</section>
+
+<section id="teams">
+  <span class="secnum">§11 · TEAMS &amp; ORGANIZATIONS</span>
+  <h2>Teams &amp; organizations <span class="chip amber" style="vertical-align:middle">PLANNED — v0.5+</span></h2>
+  <p>The solo stack is free forever. The paid tier extends the same files across people:</p>
+  <ul>
+    <li><b>Team workspaces</b> — shared context packs, policies, and playbooks; every teammate's agents brief from one source of truth, and one teammate's learning compounds for everyone.</li>
+    <li><b>Self-hostable sync server</b> — project state, decision queues, and audit shared across machines; the file spec stays the source of truth, sync is transport.</li>
+    <li><b>Approval routing</b> — gates routed by role: a junior's deploy goes to a senior; a client-facing send goes to the account owner.</li>
+    <li><b>Org-wide audit &amp; policy baselines</b> — one exportable trail of every agent action in the company, and guardrail floors no project can drop below. Built with regulatory oversight requirements (EU AI Act, Aug 2026) in mind.</li>
+    <li><b>Cross-organization sharing</b> — agencies and their clients on the same trail: the client sees, approves, and trusts what agents do in their business.</li>
+  </ul>
+  <p class="dim">Interested in the team tier? Open an issue on GitHub — early design partners shape the spec.</p>
+</section>
+
+<section id="troubleshooting">
+  <span class="secnum">§12 · TROUBLESHOOTING</span>
+  <h2>Troubleshooting</h2>
+  <h3>`aos: command not found`</h3>
+  <p>Your shell hasn't picked up the PATH change. Restart the shell, or run
+  <code>export PATH="$HOME/.local/bin:$PATH"</code>. Verify with <code>which aos</code>.</p>
+  <h3>HOOKS DON'T SEEM TO FIRE</h3>
+  <ul>
+    <li>Hooks load at session start — start a <b>new</b> Claude Code session after <code>aos init</code>.</li>
+    <li>Check <code>.claude/settings.json</code> in the repo contains the four <code>aos hook</code> entries.</li>
+    <li>Confirm the repo is registered: <code>aos projects</code> should list its path. If you moved the repo, re-run <code>aos init</code>.</li>
+  </ul>
+  <h3>GATE DIDN'T TRIGGER ON A COMMAND</h3>
+  <ul>
+    <li>Test the pattern directly: does the project resolve? <code>cd</code> into the repo and run <code>aos context</code> — an error means the directory isn't matched to a project.</li>
+    <li>Patterns match the whole Bash command string, case-insensitively. Compound commands (<code>a &amp;&amp; b</code>) are matched as one string.</li>
+    <li>Remember gates apply to <b>Bash</b> tool calls from the agent — not to commands you type in your own terminal.</li>
+  </ul>
+  <h3>`node: bad option` OR SYNTAX ERRORS</h3>
+  <p>Node &lt; 18. Check <code>node -v</code>; upgrade and re-run the installer.</p>
+  <h3>CONSOLE PORT IN USE</h3>
+  <p><code>aos console --port 4561</code></p>
+  <h3>MOVED OR RENAMED A REPO</h3>
+  <p>Re-run <code>aos init</code> in the new location — it appends the new path to the same project. Stale
+  paths in <code>~/.aos/registry.yaml</code> can be deleted by hand; it's YAML, edit freely.</p>
+</section>
+
+<section id="uninstall">
+  <span class="secnum">§13 · UPDATE &amp; UNINSTALL</span>
+  <h2>Update &amp; uninstall</h2>
+  <h3>UPDATE</h3>
+  <pre><code><span class="c">$</span> aos update
+<span class="c"># or re-run the install one-liner — same effect</span></code></pre>
+  <h3>UNINSTALL</h3>
+  <pre><code><span class="c"># remove the app + launcher</span>
+<span class="c">$</span> rm -rf ~/.local/share/aos ~/.local/bin/aos
+
+<span class="c"># per repo: remove skills + the aos hook entries</span>
+<span class="c">$</span> rm -rf .claude/skills/aos-*        <span class="c"># then delete aos hooks from .claude/settings.json</span>
+
+<span class="c"># your data — keep it. But if you must:</span>
+<span class="c">$</span> rm -rf ~/.aos</code></pre>
+  <p class="dim">Nothing else is touched: no launch agents, no system files, no shell functions — one PATH
+  line in your shell rc is the only trace, marked <code># added by aos installer</code>.</p>
+</section>
+
+</main>
+</div>
+
+<script>
+  // active-section highlight
+  const links = [...document.querySelectorAll('nav.side a')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        map.get(e.target.id)?.classList.add('active');
+      }
+    }
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('main section').forEach(s => obs.observe(s));
+  // close mobile nav on selection
+  links.forEach(l => l.addEventListener('click', () => document.querySelector('nav.side').classList.remove('open')));
+</script>
+</body>
+</html>
