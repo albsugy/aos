@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOS Console</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --border: #262d38;
+    --text: #d5dbe3; --muted: #8b949e;
+    --amber: #d29922; --red: #f85149; --green: #3fb950; --blue: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .04em; }
+  header .kpis { display: flex; gap: 18px; margin-left: auto; color: var(--muted); font-size: 13px; }
+  header .kpis b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  section { margin-bottom: 28px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .project-head { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .project-head .name { font-weight: 600; }
+  .project-head .meta { color: var(--muted); font-size: 12.5px; }
+  .project-head .tokens { margin-left: auto; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--border); font-weight: 500; }
+  td { padding: 9px 16px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #1b2230; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.mono { font-family: var(--mono); font-size: 12.5px; }
+  .dim td { opacity: .55; } /* shipped/done rows recede; live work stands forward */
+  .chip { display: inline-block; padding: 1px 9px; border-radius: 20px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .chip.awaiting-review { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+  .chip.blocked, .chip.fail { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
+  .chip.pass, .chip.done, .chip.shipped { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+  .chip.in-progress { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .queue-row { display: flex; align-items: center; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .queue-row:hover { background: #1b2230; }
+  .queue-row:last-child { border-bottom: none; }
+  .queue-row .ticket { font-family: var(--mono); font-size: 13px; }
+  .queue-row .proj { color: var(--muted); font-size: 12.5px; }
+  .queue-row .age { margin-left: auto; color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+  .empty code { font-family: var(--mono); background: var(--panel); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
+  #error { display: none; padding: 10px 16px; background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid var(--red); border-radius: 8px; margin-bottom: 16px; color: var(--red); font-size: 13px; }
+  /* run detail drawer */
+  #drawer { position: fixed; top: 0; right: -560px; width: 560px; max-width: 92vw; height: 100vh; background: var(--panel); border-left: 1px solid var(--border); transition: right .18s ease; overflow-y: auto; z-index: 10; }
+  #drawer.open { right: 0; }
+  #drawer .head { position: sticky; top: 0; background: var(--panel); display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  #drawer .head .close { margin-left: auto; cursor: pointer; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; background: none; font-size: 13px; }
+  #drawer .head .close:hover { color: var(--text); }
+  #drawer .body { padding: 16px 18px 40px; }
+  #drawer h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 18px 0 8px; }
+  #drawer pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; font-family: var(--mono); }
+  .timeline { border-left: 2px solid var(--border); margin-left: 6px; padding-left: 16px; }
+  .tl-item { position: relative; padding: 3px 0 10px; font-size: 12.5px; }
+  .tl-item::before { content: ""; position: absolute; left: -21.5px; top: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .tl-item.gate::before { background: var(--amber); }
+  .tl-item.verify-pass::before { background: var(--green); }
+  .tl-item.verify-fail::before { background: var(--red); }
+  .tl-item .t { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-right: 8px; }
+  .tl-item .s { color: var(--muted); font-family: var(--mono); font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 9; }
+  #overlay.open { display: block; }
+  .loading { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AOS CONSOLE</h1>
+  <div class="kpis" id="kpis"></div>
+</header>
+<main>
+  <div id="error"></div>
+  <div id="app"><div class="loading">Loading…</div></div>
+</main>
+<div id="overlay" onclick="closeDrawer()"></div>
+<aside id="drawer" aria-label="Run detail"></aside>
+<script>
+const $ = (s) => document.querySelector(s);
+let state = null;
+
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtTok(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(n); }
+function rel(ts) {
+  const s = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (isNaN(s)) return '';
+  if (s < 90) return 'now';
+  if (s < 3600) return Math.round(s/60) + 'm';
+  if (s < 86400) return Math.round(s/3600) + 'h';
+  return Math.round(s/86400) + 'd';
+}
+const STATE_TIP = {
+  'in-progress': 'Agent is working', 'blocked': 'Agent stopped — needs your input',
+  'awaiting-review': 'Done and verified — waiting for your review', 'done': 'Reviewed', 'shipped': 'Shipped'
+};
+
+function render() {
+  const projects = state.projects || [];
+  const queue = projects.flatMap(p => p.runs.filter(r => r.state === 'awaiting-review' || r.state === 'blocked').map(r => ({...r, project: p})));
+  const totals = {
+    projects: projects.length,
+    queue: queue.length,
+    tokens: projects.reduce((a,p) => a + p.tokens.input + p.tokens.output, 0),
+  };
+  $('#kpis').innerHTML =
+    `<span><b>${totals.projects}</b> projects</span>` +
+    `<span title="Runs blocked or awaiting your review"><b>${totals.queue}</b> need you</span>` +
+    `<span title="Total tokens across all sessions"><b>${fmtTok(totals.tokens)}</b> tokens</span>`;
+
+  if (!projects.length) {
+    $('#app').innerHTML = `<div class="card"><div class="empty">No projects yet.<br>Run <code>aos init</code> inside a repo to register one.</div></div>`;
+    return;
+  }
+
+  let html = '';
+  html += `<section><h2 title="Everything that is blocked on a human decision">Decision queue</h2><div class="card">`;
+  if (!queue.length) {
+    html += `<div class="empty">Nothing needs you. ✨</div>`;
+  } else {
+    for (const r of queue) {
+      html += `<div class="queue-row" onclick="openRun('${esc(r.project.id)}','${esc(r.run)}')">
+        <span class="chip ${esc(r.state)}" title="${esc(STATE_TIP[r.state]||'')}">${esc(r.state)}</span>
+        <span class="ticket">${esc(r.ticket || r.run)}</span>
+        <span class="proj">${esc(r.project.name)}</span>
+        <span class="age" title="Last update">${rel(r.updated)}</span>
+      </div>`;
+    }
+  }
+  html += `</div></section>`;
+
+  for (const p of projects) {
+    const lev = p.leverage === null ? '—' : p.leverage + '%';
+    html += `<section><div class="card">
+      <div class="project-head">
+        <span class="name">${esc(p.name)}</span>
+        <span class="meta" title="Share of finished runs that passed verification on the first attempt">leverage ${lev}</span>
+        ${p.activeRun ? `<span class="meta" style="color:var(--blue)">● active: ${esc(p.activeRun)}</span>` : ''}
+        <span class="tokens" title="Session tokens in/out">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out</span>
+      </div>`;
+    if (!p.runs.length) {
+      html += `<div class="empty">No runs yet — start one with <code>/aos-ticket</code> in Claude Code.</div>`;
+    } else {
+      html += `<table><thead><tr>
+        <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
+        <th class="num" title="Verification attempts before pass">Attempts</th>
+        <th class="num">Tokens</th><th class="num">Updated</th>
+      </tr></thead><tbody>`;
+      for (const r of p.runs) {
+        const dim = ['done','shipped'].includes(r.state) ? ' class="dim"' : '';
+        html += `<tr${dim} onclick="openRun('${esc(p.id)}','${esc(r.run)}')">
+          <td class="mono">${esc(r.run)}</td>
+          <td>${esc(r.title || r.ticket || '')}</td>
+          <td><span class="chip ${esc(r.state)}" title="${esc(STATE_TIP[r.state]||'')}">${esc(r.state)}</span></td>
+          <td><span class="chip ${esc(r.verification)}">${esc(r.verification)}</span></td>
+          <td class="num">${r.verification_attempts || 0}</td>
+          <td class="num">${fmtTok((r.tokens?.input||0)+(r.tokens?.output||0))}</td>
+          <td class="num" title="${esc(r.updated)}">${rel(r.updated)}</td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+    html += `</div></section>`;
+  }
+  $('#app').innerHTML = html;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/state');
+    if (!res.ok) throw new Error('API ' + res.status);
+    state = await res.json();
+    $('#error').style.display = 'none';
+    render();
+  } catch (e) {
+    $('#error').textContent = 'Console cannot reach the AOS API: ' + e.message;
+    $('#error').style.display = 'block';
+  }
+}
+
+async function openRun(projectId, runId) {
+  $('#drawer').innerHTML = `<div class="head"><b>${esc(runId)}</b><button class="close" onclick="closeDrawer()" title="Close (Esc)">✕</button></div><div class="loading">Loading…</div>`;
+  $('#drawer').classList.add('open');
+  $('#overlay').classList.add('open');
+  try {
+    const res = await fetch(`/api/run?project=${encodeURIComponent(projectId)}&run=${encodeURIComponent(runId)}`);
+    const d = await res.json();
+    let body = `<div class="body">`;
+    body += `<span class="chip ${esc(d.meta.state)}">${esc(d.meta.state)}</span> <span class="chip ${esc(d.meta.verification)}">verify: ${esc(d.meta.verification)}</span>`;
+    if (d.outcome) body += `<h3>Outcome</h3><pre>${esc(d.outcome)}</pre>`;
+    if (d.verification) body += `<h3>Verification</h3><pre>${esc(d.verification)}</pre>`;
+    if (d.audit?.length) {
+      body += `<h3>Audit timeline</h3><div class="timeline">`;
+      for (const a of [...d.audit].reverse()) {
+        const cls = a.event === 'gate' ? 'gate' : a.event === 'verify' ? (a.verdict === 'pass' ? 'verify-pass' : 'verify-fail') : '';
+        const label = a.event === 'tool' ? esc(a.tool) : esc(a.event) + (a.decision ? ` → ${esc(a.decision)}` : '') + (a.verdict ? ` → ${esc(a.verdict)}` : '');
+        body += `<div class="tl-item ${cls}"><span class="t">${esc((a.ts||'').slice(11,19))}</span>${label}${a.summary || a.command ? `<span class="s" title="${esc(a.summary || a.command)}">${esc(a.summary || a.command)}</span>` : ''}</div>`;
+      }
+      body += `</div>`;
+    }
+    if (d.ticket) body += `<h3>Ticket</h3><pre>${esc(d.ticket)}</pre>`;
+    if (d.plan) body += `<h3>Plan</h3><pre>${esc(d.plan)}</pre>`;
+    body += `</div>`;
+    $('#drawer').innerHTML = `<div class="head"><b>${esc(runId)}</b><button class="close" onclick="closeDrawer()" title="Close (Esc)">✕</button></div>` + body;
+  } catch (e) {
+    $('#drawer').innerHTML += `<div class="empty">Failed to load run: ${esc(e.message)}</div>`;
+  }
+}
+function closeDrawer() {
+  $('#drawer').classList.remove('open');
+  $('#overlay').classList.remove('open');
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
