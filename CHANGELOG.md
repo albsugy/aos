@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-07-04
+
+Compiled installs.
+
+- **Installs ship a compiled bundle, not source:** `dist/aos.mjs` — single file, all
+  dependencies inlined, minified, built by esbuild (`npm run build`) and committed;
+  the installer links it directly. No npm download at install time.
+- **Node ≥ 22 required** (was 18) — installer, `engines`, `aos doctor`, docs, and CI updated.
+- **CI:** smoke suite runs against both source and the compiled bundle on node 22/24;
+  a dist-freshness job fails if `dist/` wasn't rebuilt with source changes.
+- **`aos update`** in compiled installs no longer touches npm at all — the pull delivers the new bundle.
+- Source entry restructured: CLI moved to `src/cli.js`; `bin/aos.js` is a thin shim for dev/npm use.
+
 ## 0.2.0 — 2026-07-04
 
 Production hardening.

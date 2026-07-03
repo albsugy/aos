@@ -25,13 +25,15 @@ across runtimes.
 curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash
 ```
 
-Requires git + Node ≥ 18. Installs to `~/.local/share/aos`, links `~/.local/bin/aos`,
-adds it to your PATH. Re-run to update, or `aos update`. Manual install:
+Requires git + Node ≥ 22. Clones to `~/.local/share/aos` and links the **compiled
+single-file bundle** (`dist/aos.mjs`, dependencies inlined, CI-verified against source)
+as `~/.local/bin/aos` — nothing is downloaded from npm at install time. Re-run to
+update, or `aos update`. Manual install:
 
 ```bash
 git clone https://github.com/albsugy/aos.git && cd aos
-npm install --omit=dev
-ln -sf "$PWD/bin/aos.js" ~/.local/bin/aos
+ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos   # committed compiled bundle
+# dev: npm ci && npm run build && npm test
 ```
 
 ## Quickstart
@@ -99,7 +101,9 @@ aos console             # http://127.0.0.1:4560
 
 ## Status & roadmap
 
-v0.2 — production-hardened (26 smoke tests + shellcheck in CI: `npm test`). Next, in pain-order:
+v0.3 — compiled single-file installs, Node ≥ 22, production-hardened (26 smoke tests
+run against both source and bundle in CI, plus dist-freshness gate and shellcheck).
+Next, in pain-order:
 mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
 polish · multi-operator sync · client-facing trust console.
 

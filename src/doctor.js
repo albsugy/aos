@@ -14,23 +14,24 @@ function check(label, fn) {
   }
 }
 
-export function runDoctor({ appRoot, version }) {
+export function runDoctor({ appRoot, version, bundled = false }) {
   const checks = [];
 
   checks.push(
-    check('node version >= 18', () => {
+    check('node version >= 22', () => {
       const major = Number(process.versions.node.split('.')[0]);
-      if (major < 18) throw new Error(`found ${process.versions.node}`);
+      if (major < 22) throw new Error(`found ${process.versions.node}`);
       return `v${process.versions.node}`;
     })
   );
 
-  checks.push(check('aos app', () => `${version} at ${appRoot}`));
+  checks.push(check('aos app', () => `${version} (${bundled ? 'compiled bundle' : 'source'}) at ${appRoot}`));
 
   checks.push(
-    check('yaml dependency', () => {
+    check('dependencies', () => {
+      if (bundled) return 'inlined in dist/aos.mjs';
       if (!fs.existsSync(path.join(appRoot, 'node_modules', 'yaml'))) {
-        throw new Error('missing — run: aos update (or npm ci in the app dir)');
+        throw new Error('missing — run: npm ci in the app dir');
       }
       return 'installed';
     })

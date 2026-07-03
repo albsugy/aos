@@ -139,16 +139,16 @@
   <ul>
     <li>macOS or Linux</li>
     <li><code>git</code></li>
-    <li>Node.js ≥ 18 (<code>node -v</code>)</li>
+    <li>Node.js ≥ 22 (<code>node -v</code>)</li>
     <li>Claude Code, for the skills/hooks integration (the CLI and console work without it)</li>
   </ul>
   <h3>ONE-LINE INSTALL</h3>
   <pre><code><span class="c">$</span> curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash</code></pre>
-  <p>The installer: checks prerequisites → clones the app to <code>~/.local/share/aos</code> → installs
-  the locked dependency tree (<code>npm ci</code> — reproducible) → links <code>~/.local/bin/aos</code> →
-  adds that directory to your PATH (zsh, bash, or fish) if it isn't already → verifies with
-  <code>aos version</code>. Re-running it updates in place. If anything seems off afterwards:
-  <code>aos doctor</code>.</p>
+  <p>The installer: checks prerequisites → clones the app to <code>~/.local/share/aos</code> → links the
+  <b>compiled single-file bundle</b> (<code>dist/aos.mjs</code>, all dependencies inlined, verified against
+  source by CI) as <code>~/.local/bin/aos</code> → adds that directory to your PATH (zsh, bash, or fish) if
+  it isn't already → verifies with <code>aos version</code>. Nothing is downloaded from npm at install time.
+  Re-running it updates in place. If anything seems off afterwards: <code>aos doctor</code>.</p>
   <h3>OVERRIDES</h3>
   <div class="table-scroll"><table>
     <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
@@ -159,9 +159,12 @@
     <tr><td><code>AOS_HOME</code></td><td><code>~/.aos</code></td><td>Where all <em>data</em> lives (runtime, not install-time)</td></tr>
   </table></div>
   <h3>MANUAL INSTALL</h3>
-  <pre><code><span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
-<span class="c">$</span> npm install --omit=dev
-<span class="c">$</span> ln -sf "$PWD/bin/aos.js" ~/.local/bin/aos</code></pre>
+  <pre><code><span class="c"># use the committed compiled bundle:</span>
+<span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
+<span class="c">$</span> ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
+
+<span class="c"># or build from source:</span>
+<span class="c">$</span> npm ci &amp;&amp; npm run build   <span class="c"># rebuilds dist/aos.mjs</span></code></pre>
 </section>
 
 <section id="quickstart">
@@ -429,7 +432,7 @@ verification:
     <li>Remember gates apply to <b>Bash</b> tool calls from the agent — not to commands you type in your own terminal.</li>
   </ul>
   <h3>`node: bad option` OR SYNTAX ERRORS</h3>
-  <p>Node &lt; 18. Check <code>node -v</code>; upgrade and re-run the installer.</p>
+  <p>Node &lt; 22. Check <code>node -v</code>; upgrade and re-run the installer.</p>
   <h3>CONSOLE PORT IN USE</h3>
   <p><code>aos console --port 4561</code></p>
   <h3>MOVED OR RENAMED A REPO</h3>
