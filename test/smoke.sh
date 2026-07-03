@@ -23,10 +23,25 @@ $AOS init --name demo >/dev/null
 grep -q "hook pre-tool" "$REPO/.claude/settings.json" || fail "hooks wired"
 pass "init: registry, spec, skills, hooks"
 
-# init twice must be idempotent (no duplicate hooks)
+# hooks must reference the stable launcher (invoked path), never a realpath pin
+grep -q '|| aos hook pre-tool' "$REPO/.claude/settings.json" || fail "hook PATH fallback missing"
+grep -q '|| true' "$REPO/.claude/settings.json" || fail "hook never-fail tail missing"
+pass "init: hooks use launcher + fallback"
+
+# init twice must be idempotent (each entry mentions its cmd twice: primary + fallback)
 $AOS init --name demo >/dev/null
 HOOK_COUNT=$(grep -o "hook pre-tool" "$REPO/.claude/settings.json" | wc -l | tr -d ' ')
-[ "$HOOK_COUNT" = "1" ] && pass "init: idempotent hooks" || fail "init duplicated hooks ($HOOK_COUNT)"
+[ "$HOOK_COUNT" = "2" ] && pass "init: idempotent hooks" || fail "init duplicated hooks ($HOOK_COUNT)"
+
+# old-format entries (pinned absolute path) get migrated on re-init
+node -e '
+  const fs = require("fs"); const p = process.argv[1];
+  const s = JSON.parse(fs.readFileSync(p, "utf8"));
+  s.hooks.PreToolUse = [{ matcher: "Bash", hooks: [{ type: "command", command: "node \"/old/gone/aos/bin/aos.js\" hook pre-tool" }] }];
+  fs.writeFileSync(p, JSON.stringify(s, null, 2));
+' "$REPO/.claude/settings.json"
+$AOS init --name demo >/dev/null
+grep -q "/old/gone" "$REPO/.claude/settings.json" && fail "old-format hook not migrated" || pass "init: migrates old-format hooks"
 
 # --- run lifecycle ---
 $AOS run start --ticket "LIN-1" --title "Demo ticket" | grep -q "Run started" || fail "run start"

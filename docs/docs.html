@@ -298,10 +298,15 @@ verification:
     <tr><td><code>PostToolUse</code></td><td>every tool call</td><td>Appends a summarized audit line to the active run (or project) <code>audit.jsonl</code></td></tr>
     <tr><td><code>SessionEnd</code></td><td>session close</td><td>Parses the transcript for token usage; records per session and per active run</td></tr>
   </table></div>
+  <h3>LAUNCHER RESOLUTION</h3>
+  <p class="dim">Hook commands call the stable launcher (<code>"$HOME/.local/bin/aos"</code>, with a PATH
+  fallback) rather than a pinned install path — so <code>aos update</code>, reinstalls, and switching between
+  a dev checkout and the installed package never break existing repos. Re-running <code>aos init</code>
+  migrates hooks written by older versions.</p>
   <h3>FAILURE POLICY</h3>
   <p class="dim">Hooks are wrapped so that any internal error exits silently with code 0 — a broken AOS install
-  can never break your Claude Code session. The trade-off: if AOS misbehaves, check
-  <a href="#troubleshooting">troubleshooting</a> rather than expecting loud errors.</p>
+  can never break your Claude Code session (the command ends in <code>|| true</code> by design). The trade-off:
+  if AOS misbehaves, check <a href="#troubleshooting">troubleshooting</a> rather than expecting loud errors.</p>
   <h3>NON-AOS REPOS</h3>
   <p class="dim">Hooks resolve the project from the session's working directory. In directories that aren't
   registered, all hooks no-op instantly — installing AOS globally has zero effect on unregistered repos.</p>
