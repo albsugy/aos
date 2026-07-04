@@ -160,6 +160,11 @@ printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
 $AOS run finish >/dev/null
 
+# --- supply-chain guard: the compiled CLI must never fetch a remote script and pipe it to a shell ---
+# It does all network I/O via fetch and self-updates by running the local, already-verified
+# install.sh — so it must not shell out to curl at all (a curl|bash reintroduction brings it back).
+grep -q 'curl' "$ROOT/dist/aos.mjs" && fail "compiled bundle shells out to curl (possible curl|bash supply-chain risk)" || pass "no curl in compiled bundle — network I/O via fetch, no remote-script execution"
+
 # --- doctor ---
 $AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "doctor exit code"
 $AOS doctor 2>/dev/null | grep -q "All clear" && pass "doctor: reports all clear" || fail "doctor output"

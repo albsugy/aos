@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.1 — 2026-07-05
+
+Security: harden `aos update` against remote-script execution.
+
+- **No more `curl … install.sh | bash`.** The self-update path used to fetch a
+  fresh installer from a CDN and pipe it straight into a shell — a supply-chain
+  risk (a compromised CDN could serve a malicious script) flagged by a security review
+  on 0.7.0. `aos update` now runs the `install.sh` that shipped *inside the
+  already-integrity-verified install* on disk, via `execFileSync('bash', [path])`
+  — no network-fetched script is executed, and no string is interpolated into a
+  shell. The installer still downloads the new tarball and verifies the
+  registry's sha-512 hash before swapping it in, so the update itself stays
+  integrity-checked. Falls back to a printed `npm i -g` instruction if the local
+  installer is somehow absent.
+- Smoke suite gains a regression guard asserting the compiled bundle never pipes
+  into a shell.
+
 ## 0.7.0 — 2026-07-05
 
 Console redesign: from a single page to a proper multi-screen app.

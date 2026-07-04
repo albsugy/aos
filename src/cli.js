@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { ensureHome, projectDir } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
@@ -206,7 +206,7 @@ async function main() {
     case 'update': {
       if (!fs.existsSync(path.join(APP_ROOT, '.git'))) {
         // Release-artifact install: compare against the npm registry, then
-        // re-run the installer (download → integrity verify → swap) if newer.
+        // re-run the installer if newer.
         let latest = '';
         try {
           const res = await fetch('https://registry.npmjs.org/@albsugy/aos/latest');
@@ -224,9 +224,24 @@ async function main() {
           console.log(`✔ aos ${appVersion()} — already up to date`);
           break;
         }
+        // Run the installer that shipped inside THIS install — never fetch a
+        // fresh script over the network and pipe it to a shell. install.sh is
+        // part of the package that was itself integrity-verified when it was
+        // installed, so it's already on disk and trusted; it downloads the new
+        // tarball and verifies the registry's sha-512 hash before swapping it
+        // in. No remote-script execution, no shell interpolation: bash runs a
+        // local file, and the version is passed via env.
+        const installer = path.join(APP_ROOT, 'install.sh');
+        if (!fs.existsSync(installer)) {
+          console.error(
+            'This install has no bundled installer to self-update from. Re-install with:\n' +
+              `  npm i -g @albsugy/aos@${latest}\n` +
+              'or the installer at https://www.npmjs.com/package/@albsugy/aos'
+          );
+          process.exit(1);
+        }
         console.log(`Updating ${appVersion()} → ${latest}`);
-        // Version is passed via env, never interpolated into the command.
-        execSync('curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash', {
+        execFileSync('bash', [installer], {
           stdio: 'inherit',
           env: { ...process.env, AOS_VERSION: latest },
         });
