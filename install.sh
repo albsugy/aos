@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# AOS installer — https://github.com/albsugy/aos
+# AOS installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash
+#   curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash
+#   # or: npm i -g @albsugy/aos
 #
-# Installs the compiled release artifact: download → checksum verify → unpack →
-# symlink. No git, no npm, no source code on the machine.
+# Installs the compiled bundle published on the npm registry: resolve version →
+# download tarball → verify registry integrity hash → unpack → symlink.
+# No git or npm client needed.
 #
 # Overrides:
-#   AOS_VERSION      release tag to install, e.g. v0.4.0     (default: latest)
-#   AOS_INSTALL_DIR  where the app lives                     (default: ~/.local/share/aos)
-#   AOS_BIN_DIR      where the symlink goes                  (default: ~/.local/bin)
+#   AOS_VERSION      version to install, e.g. 0.5.0 or v0.5.0  (default: latest)
+#   AOS_INSTALL_DIR  where the app lives                       (default: ~/.local/share/aos)
+#   AOS_BIN_DIR      where the symlink goes                    (default: ~/.local/bin)
+#   AOS_NPM_PKG      package name                              (default: @albsugy/aos)
+#   AOS_NPM_REGISTRY registry base URL                         (default: https://registry.npmjs.org)
 #   AOS_TARBALL_URL  direct tarball URL (mirrors / testing); checksum fetched from <url>.sha256
-#   AOS_FROM_SOURCE  =1 to clone and build from source instead (contributors; needs git + npm)
-#   AOS_REPO_URL     source-mode repo URL   (default: https://github.com/albsugy/aos.git)
+#   AOS_FROM_SOURCE  =1 to clone and build from source (requires repo access, git, npm)
+#   AOS_REPO_URL     source-mode repo URL   (default: git@github.com:albsugy/aos.git)
 #   AOS_REF          source-mode branch/tag (default: main)
 set -euo pipefail
 
-REPO="albsugy/aos"
-REPO_URL="${AOS_REPO_URL:-https://github.com/$REPO.git}"
+PKG="${AOS_NPM_PKG:-@albsugy/aos}"
+REG="${AOS_NPM_REGISTRY:-https://registry.npmjs.org}"
+REPO_URL="${AOS_REPO_URL:-git@github.com:albsugy/aos.git}"
 INSTALL_DIR="${AOS_INSTALL_DIR:-$HOME/.local/share/aos}"
 BIN_DIR="${AOS_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${AOS_VERSION:-latest}"
+VERSION="${VERSION#v}"
 REF="${AOS_REF:-main}"
 FROM_SOURCE="${AOS_FROM_SOURCE:-0}"
 
@@ -41,8 +47,19 @@ if [ -d "$INSTALL_DIR/.git" ] && [ "$FROM_SOURCE" != "1" ]; then
   fail "Found a source checkout at $INSTALL_DIR — update it with 'git pull', or remove it to switch to release installs."
 fi
 
+unpack_tarball() {
+  # npm tarballs nest everything under package/ — strip it; plain tarballs pass through.
+  local tarball="$1" dest="$2" first
+  mkdir -p "$dest"
+  first="$(tar -tzf "$tarball" | head -1)"
+  case "$first" in
+    package/*) tar -xzf "$tarball" -C "$dest" --strip-components=1 ;;
+    *)         tar -xzf "$tarball" -C "$dest" ;;
+  esac
+}
+
 if [ "$FROM_SOURCE" = "1" ]; then
-  # --- contributor path: clone + build ---------------------------------------
+  # --- contributor path (requires repo access): clone + build ----------------
   command -v git >/dev/null 2>&1 || fail "git is required for source installs."
   command -v npm >/dev/null 2>&1 || fail "npm is required for source installs."
   if [ -d "$INSTALL_DIR/.git" ]; then
@@ -56,41 +73,54 @@ if [ "$FROM_SOURCE" = "1" ]; then
   info "Building"
   ( cd "$INSTALL_DIR" && npm ci --no-fund --no-audit --loglevel=error >/dev/null && npm run build >/dev/null )
 else
-  # --- standard path: release artifact ---------------------------------------
-  if [ -n "${AOS_TARBALL_URL:-}" ]; then
-    TARBALL_URL="$AOS_TARBALL_URL"
-  elif [ "$VERSION" = "latest" ]; then
-    TARBALL_URL="https://github.com/$REPO/releases/latest/download/aos.tar.gz"
-  else
-    TARBALL_URL="https://github.com/$REPO/releases/download/$VERSION/aos.tar.gz"
-  fi
-
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
 
-  info "Downloading $TARBALL_URL"
-  curl -fsSL -o "$TMP/aos.tar.gz" "$TARBALL_URL" || fail "Download failed."
-  curl -fsSL -o "$TMP/aos.tar.gz.sha256" "$TARBALL_URL.sha256" || fail "Checksum download failed."
+  if [ -n "${AOS_TARBALL_URL:-}" ]; then
+    # --- direct tarball (mirrors / testing): sha256 sidecar verification -----
+    info "Downloading $AOS_TARBALL_URL"
+    curl -fsSL -o "$TMP/aos.tgz" "$AOS_TARBALL_URL" || fail "Download failed."
+    curl -fsSL -o "$TMP/aos.tgz.sha256" "$AOS_TARBALL_URL.sha256" || fail "Checksum download failed."
+    EXPECTED="$(awk '{print $1}' "$TMP/aos.tgz.sha256")"
+    ACTUAL="$(node -e 'const c=require("crypto"),f=require("fs");console.log(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$TMP/aos.tgz")"
+    [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] || fail "Checksum verification FAILED — refusing to install."
+    ok "Checksum verified (sha256)"
+  else
+    # --- standard path: the npm registry --------------------------------------
+    META_URL="$REG/$PKG/$VERSION"
+    info "Resolving $PKG@$VERSION from $REG"
+    META="$(curl -fsSL "$META_URL")" || fail "Could not resolve $PKG@$VERSION — is it published?"
+    RESOLVED="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(m.version||"")')"
+    TARBALL="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.tarball)||"")')"
+    INTEGRITY="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.integrity)||"")')"
+    [ -n "$RESOLVED" ] && [ -n "$TARBALL" ] || fail "Registry metadata is malformed."
 
-  (
-    cd "$TMP"
-    if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum -c aos.tar.gz.sha256 >/dev/null 2>&1
+    info "Downloading $PKG@$RESOLVED"
+    curl -fsSL -o "$TMP/aos.tgz" "$TARBALL" || fail "Download failed."
+
+    if [ -n "$INTEGRITY" ]; then
+      node -e '
+        const crypto = require("crypto"), fs = require("fs");
+        const [file, integrity] = process.argv.slice(1);
+        const dash = integrity.indexOf("-");
+        const algo = integrity.slice(0, dash), expected = integrity.slice(dash + 1);
+        const actual = crypto.createHash(algo).update(fs.readFileSync(file)).digest("base64");
+        process.exit(actual === expected ? 0 : 1);
+      ' "$TMP/aos.tgz" "$INTEGRITY" || fail "Integrity verification FAILED — refusing to install."
+      ok "Integrity verified (${INTEGRITY%%-*}, from registry)"
     else
-      shasum -a 256 -c aos.tar.gz.sha256 >/dev/null 2>&1
+      fail "Registry provided no integrity hash — refusing to install."
     fi
-  ) || fail "Checksum verification FAILED — refusing to install."
-  ok "Checksum verified"
+  fi
 
-  mkdir "$TMP/unpack"
-  tar -xzf "$TMP/aos.tar.gz" -C "$TMP/unpack"
+  unpack_tarball "$TMP/aos.tgz" "$TMP/unpack"
   [ -f "$TMP/unpack/dist/aos.mjs" ] || fail "Artifact is malformed (dist/aos.mjs missing)."
   [ -d "$TMP/unpack/assets" ]      || fail "Artifact is malformed (assets/ missing)."
 
   rm -rf "$INSTALL_DIR"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   mv "$TMP/unpack" "$INSTALL_DIR"
-  ok "Installed release artifact to $INSTALL_DIR"
+  ok "Installed to $INSTALL_DIR"
 fi
 
 # --- link the compiled bundle --------------------------------------------------
@@ -143,5 +173,5 @@ Next steps:
   aos status                     # see all projects and runs
   aos console                    # local dashboard at http://127.0.0.1:4560
 
-Docs: https://albsugy.github.io/aos/docs.html
+Package: https://www.npmjs.com/package/@albsugy/aos
 EOF

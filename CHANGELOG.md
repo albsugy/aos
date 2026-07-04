@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 — 2026-07-04
+
+Public distribution via npm; the compiled single-file bundle.
+
+- **The npm registry is now the public channel.** The package ships only the compiled
+  bundle (`dist/aos.mjs`), the skills/templates (`assets/`), and metadata.
+  `bin` points at the bundle; `yaml` moved to devDependencies (it's inlined).
+- **Two install methods, one artifact:** `npm i -g @albsugy/aos`, or
+  `curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash` — the
+  installer ships inside the package and is served by the jsDelivr CDN.
+- **The curl installer resolves versions from the npm registry** and verifies the
+  registry's sha-512 integrity hash before unpacking. `AOS_VERSION` pins an npm
+  version; `AOS_NPM_REGISTRY` supports mirrors; direct-URL and from-source modes remain.
+- **`aos update`** on release installs checks the npm registry (was GitHub Releases).
+- **Release workflow** publishes to npm on `v*` tags when the `NPM_TOKEN` secret is set
+  (skips with a notice otherwise) and attaches the npm-pack tarball to the GitHub release.
+
 ## 0.4.0 — 2026-07-04
 
 Standard package distribution: release artifacts instead of source clones.

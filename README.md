@@ -22,22 +22,23 @@ across runtimes.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash
+curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash
 ```
 
-Requires Node ≥ 22 (plus curl + tar). Downloads the **compiled release artifact**
-from GitHub Releases — a ~150 KB tarball with the single-file bundle
-(`dist/aos.mjs`, dependencies inlined) and the skills/templates — **verifies its
-SHA-256 checksum**, unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`.
-No source code, git history, or npm downloads on your machine. Pin a version with
-`AOS_VERSION=v0.4.0`. Update later with `aos update`.
+Or with npm directly:
 
 ```bash
-# contributors — build from source:
-git clone https://github.com/albsugy/aos.git && cd aos
-npm ci && npm run build && npm test
-ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
+npm i -g @albsugy/aos
 ```
+
+Requires Node ≥ 22 (curl path also needs curl + tar). Both channels deliver the same
+artifact: the **compiled package published on the npm registry** — the single-file
+bundle (`dist/aos.mjs`, dependencies inlined) plus the skills/templates. The curl
+installer resolves the version from the registry, **verifies the registry's sha-512
+integrity hash**, unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`.
+No source code and no git history land on your machine (the source repository is
+private; the published package is the compiled bundle). Pin with `AOS_VERSION=0.5.0`;
+update later with `aos update`.
 
 ## Quickstart
 
@@ -104,9 +105,9 @@ aos console             # http://127.0.0.1:4560
 
 ## Status & roadmap
 
-v0.3 — compiled single-file installs, Node ≥ 22, production-hardened (26 smoke tests
-run against both source and bundle in CI, plus dist-freshness gate and shellcheck).
-Next, in pain-order:
+v0.5 — npm-registry distribution (npm-registry distribution), Node ≥ 22,
+production-hardened (26 smoke tests run against both source and bundle in CI, plus
+dist-freshness gate and shellcheck). Next, in pain-order:
 mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
 polish · multi-operator sync · client-facing trust console.
 
