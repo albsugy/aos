@@ -6,7 +6,7 @@ import { projectDir, readIfExists } from './paths.js';
 
 function sumSessions(projectId) {
   const raw = readIfExists(path.join(projectDir(projectId), 'sessions.jsonl'));
-  const total = { input: 0, output: 0 };
+  const total = { input: 0, output: 0, cache_read: 0 };
   if (!raw) return total;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -14,6 +14,7 @@ function sumSessions(projectId) {
       const s = JSON.parse(line);
       total.input += s.input_tokens || 0;
       total.output += s.output_tokens || 0;
+      total.cache_read += s.cache_read_tokens || 0;
     } catch {
       /* skip */
     }
@@ -67,7 +68,8 @@ export function printStatus() {
     console.log(`  runs: ${counts}`);
     if (p.activeRun) console.log(`  active: ${p.activeRun}`);
     if (p.leverage !== null) console.log(`  leverage ratio: ${p.leverage}% clean-first-pass`);
-    console.log(`  tokens: ${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out`);
+    const cache = p.tokens.cache_read ? ` (+${fmtTokens(p.tokens.cache_read)} cache-read)` : '';
+    console.log(`  tokens: ${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out${cache}`);
     const awaiting = p.runs.filter((r) => r.state === 'awaiting-review');
     for (const r of awaiting) {
       console.log(`  ⏳ awaiting review: ${r.run}${r.ticket ? ` — ${r.ticket}` : ''}`);

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadPolicy } from './policy.js';
-import { getActiveRun, runDir, runMeta, saveRunMeta, appendAudit } from './run.js';
+import { getActiveRun, runDir, runMeta, mutateRunMeta, appendAudit } from './run.js';
 import { nowIso } from './paths.js';
 
 function runContract(contract, cwd) {
@@ -38,13 +38,10 @@ export function verifyContracts(projectId, cwd) {
 
   const active = getActiveRun(projectId);
   if (active) {
-    const meta = runMeta(projectId, active);
-    if (meta) {
+    mutateRunMeta(projectId, active, (meta) => {
       meta.verification = verdict;
       meta.verification_attempts = (meta.verification_attempts || 0) + 1;
-      meta.updated = nowIso();
-      saveRunMeta(projectId, active, meta);
-    }
+    });
     writeVerificationReport(projectId, active, results, verdict);
   }
   appendAudit(projectId, {

@@ -1,14 +1,21 @@
 # AOS project policy — gates, tiers, and verification contracts.
-# Patterns are JavaScript regexes matched (case-insensitive) against Bash commands.
+# Bash patterns are JavaScript regexes matched (case-insensitive) against commands.
+# protected_paths patterns are globs matched against absolute and repo-relative paths.
 version: 1
 
-# auto: agent proceeds after writing plan.md | ask: agent must get human approval of the plan
+# auto: agent proceeds after writing plan.md
+# ask:  file writes outside the run folder stay gated until the human runs `aos run approve`
 plan_gate: auto
 
 tiers:
   forbidden:
-    - pattern: 'push\s+[^|;&]*(--force|-f)\b'
-      reason: Force-push is forbidden by policy
+    # --force-with-lease is not matched here; it falls through to the gated git-push rule.
+    - pattern: 'push\s+[^|;&]*(--force(?!-with-lease)\b|(?<=\s)-f\b)'
+      reason: Force-push is forbidden by policy (--force-with-lease is gated instead)
+    - pattern: 'push\s+[^|;&]*\s\+\S'
+      reason: Force-push via +refspec is forbidden by policy
+    # rm -rf / and friends are ALSO caught structurally (flag permutations, sudo,
+    # /* targets) by a built-in check — this regex is the readable baseline.
     - pattern: 'rm\s+-rf\s+(/|~)(\s|$)'
       reason: Recursive delete of root/home is forbidden by policy
   gated:
@@ -16,9 +23,25 @@ tiers:
       action: git-push
     - pattern: '\bgh\s+pr\s+merge\b'
       action: merge
-    - pattern: '\bdeploy\b'
+    # Anchored to an invocation position so `cat docs/deploy.md` stays clean.
+    - pattern: '(^|[;&|]\s*)(sudo\s+)?(\S*/)?deploy\b'
       action: deploy
-  # Everything not matched above is auto-approved (normal Claude Code permissions still apply).
+    - pattern: '\b(npm|pnpm|yarn|make)\s+(run\s+)?deploy\b'
+      action: deploy
+    # Plan approval is the human's call: an agent running it hits this gate,
+    # and approving the prompt IS the approval.
+    - pattern: '\baos\s+run\s+approve\b'
+      action: plan-approve
+      reason: Plan approval is reserved for the human — approve only after reviewing plan.md
+  # File writes are gated too. Built-in (always on): .claude/settings.json,
+  # .git/hooks/, and AOS's own policy/audit/state files require approval, and
+  # shell scripts being written are scanned for forbidden/gated commands.
+  # Add your own globs here:
+  protected_paths:
+    []
+    # - pattern: '.env*'
+    #   decision: ask         # or: deny
+    #   reason: Environment files hold secrets
 
 verification:
   # When true, /aos-verify and /aos-ticket must spawn a skeptic subagent to refute the work.

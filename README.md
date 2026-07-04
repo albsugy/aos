@@ -65,9 +65,14 @@ aos console             # http://127.0.0.1:4560
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session |
-| `PreToolUse` | Gates Bash commands against `policy.yaml`: forbidden → blocked, gated → requires your approval |
-| `PostToolUse` | Appends every action to the run's `audit.jsonl` |
-| `SessionEnd` | Records token usage per session and per run |
+| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails). Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes stay gated until you run `aos run approve` |
+| `PostToolUse` | Appends every action to the run's `audit.jsonl` — each run is bound to the session that started it, so concurrent sessions don't pollute its trail |
+| `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run |
+
+**Threat model, honestly:** these gates are accident-protection for well-meaning agents —
+the failure mode that actually happens. They cover the tool paths agents really use (Bash,
+file writes), but a deliberately adversarial agent needs OS-level isolation (containers,
+sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need a hard boundary.
 
 ## The Spec
 
@@ -77,7 +82,7 @@ aos console             # http://127.0.0.1:4560
 └── projects/<id>/
     ├── context/pack.md            # the brief every agent loads
     ├── context/decisions.md       # append-only decision log
-    ├── policy.yaml                # tiers (forbidden/gated), plan_gate, verification contracts
+    ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, verification contracts
     ├── learnings.md               # compounding gotchas & fixes
     ├── playbooks/                 # extracted repeatable procedures
     └── runs/<date>-<ticket>/
@@ -95,7 +100,7 @@ aos console             # http://127.0.0.1:4560
 
 ## CLI
 
-`aos init | status | context | run start/finish/state/list | verify | find | console | projects | doctor | version | update`
+`aos init | status | context | run start/approve/finish/state/list | verify | find | console | projects | doctor | version | update`
 
 ## Principles
 
@@ -108,7 +113,7 @@ aos console             # http://127.0.0.1:4560
 ## Status & roadmap
 
 v0.5 — npm-registry distribution (compiled bundle only, private source), Node ≥ 22,
-production-hardened (26 smoke tests run against both source and bundle in CI, plus
+production-hardened (45 smoke tests run against both source and bundle in CI, plus
 dist-freshness gate and shellcheck). Next, in pain-order:
 mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
 polish · multi-operator sync · client-facing trust console.

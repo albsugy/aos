@@ -20,7 +20,9 @@ files live in the run folder printed by `aos run start`.
 ## 2. Plan
 
 3. Write `plan.md`: approach, files you expect to touch, risks, test strategy. Keep it short.
-4. If `plan_gate` is `ask`: present the plan to the user and wait for approval before proceeding.
+4. If `plan_gate` is `ask`: present the plan to the user. Approval is enforced by hooks, not
+   this prompt — implementation file writes stay gated until the plan is approved. Run
+   `aos run approve`; the gate on that command surfaces the approval prompt to the human.
 
 ## 3. Implement
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0 — 2026-07-04
+
+Guardrail hardening + concurrency/attribution fixes (from the first external-style review).
+
+- **File writes are gated:** `PreToolUse` now covers `Write`/`Edit`/`MultiEdit`/`NotebookEdit`,
+  not just Bash. Built-in protections: `.claude/settings.json`, `.git/hooks/`, and AOS's own
+  policy/audit/state files require approval — an agent can no longer rewire or silence its own
+  guardrails. User-defined `tiers.protected_paths` globs supported. Re-run `aos init` in each
+  repo to pick up the wider hook matcher (`aos doctor` flags stale wiring).
+- **Script laundering closed:** shell scripts being written are scanned with the same policy —
+  writing `run.sh` containing `git push --force` is denied at write time, not discovered at run time.
+- **Structural `rm` check:** catastrophic deletes are parsed token-wise (flag permutations like
+  `-fr`/`-Rf`, `sudo` prefixes, `/*` and `$HOME` targets), no longer regex-only.
+- **Sharper default patterns:** `--force-with-lease` downgrades from forbidden to gated;
+  `+refspec` force-pushes forbidden; `deploy` anchored to invocations (`cat docs/deploy.md`
+  no longer trips it).
+- **`plan_gate: ask` is enforced, not remembered:** implementation file writes stay gated until
+  the human approves via the new `aos run approve` (agent self-approval is itself gated).
+- **Run ↔ session binding:** each run binds to the session that started it; audit lines and
+  tokens from concurrent sessions in the same repo land in the project log instead of the run.
+- **Concurrency safety:** all read-modify-write cycles on `state.json`/`meta.json` go through
+  a bounded advisory lock; tmp files for atomic writes are pid-unique.
+- **Cache-read token accounting:** cache reads tracked separately in `sessions.jsonl`, run
+  meta, and `aos status` — no longer silently dropped.
+
 ## 0.5.1 — 2026-07-04
 
 Polish pass: correctness, DX, and release discipline.
