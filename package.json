@@ -1,6 +1,6 @@
 {
   "name": "@albsugy/aos",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agent Operations Stack — portable spec, guardrails, audit, verification, and console for operating AI coding agents",
   "type": "module",
   "bin": {
@@ -11,7 +11,19 @@
   },
   "scripts": {
     "test": "bash test/smoke.sh",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "assets",
+    "scripts",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "ai-agents",

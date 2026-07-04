@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — 2026-07-04
+
+CI reliability + release infrastructure.
+
+- **Fixed flaky console-UI smoke check** — `curl | grep -q` under `pipefail` races
+  (grep exits on first match → curl gets EPIPE → pipeline fails despite a match);
+  surfaced on ubuntu CI. Console checks now capture responses and match without pipes.
+- **Dist-freshness gate hardened:** also fails on *untracked* files in `dist/`,
+  which `git diff` alone cannot see.
+- **Release workflow:** pushing a `v*` tag re-verifies both suites and creates a
+  GitHub Release with generated notes.
+- **npm publish readiness:** `files` allowlist, `publishConfig.access=public`,
+  `prepublishOnly` build.
+
 ## 0.3.0 — 2026-07-04
 
 Compiled installs.
