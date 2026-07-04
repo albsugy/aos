@@ -21,7 +21,12 @@
     "CHANGELOG.md"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": false
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/albsugy/aos.git"
   },
   "keywords": [
     "ai-agents",
