@@ -99,6 +99,14 @@ else
       fail "Registry metadata is malformed."
     fi
 
+    # Self-update no-op: `aos update` asks for "latest" and passes the running
+    # version; skip the download if we already have it. Pinned installs
+    # (AOS_VERSION=x.y.z) always proceed.
+    if [ "$VERSION" = "latest" ] && [ -n "${AOS_CURRENT_VERSION:-}" ] && [ "${AOS_CURRENT_VERSION#v}" = "$RESOLVED" ]; then
+      ok "aos $RESOLVED — already up to date"
+      exit 0
+    fi
+
     info "Downloading $PKG@$RESOLVED"
     curl -fsSL -o "$TMP/aos.tgz" "$TARBALL" || fail "Download failed."
 

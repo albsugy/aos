@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.2 — 2026-07-05
+
+Packaging + a cleaner network-access surface.
+
+- **The compiled CLI makes no network requests.** `aos update` used to `fetch`
+  the npm registry to check for a newer version (flagged by Socket.dev on 0.7.1).
+  That check was redundant — the local `install.sh` already resolves the latest
+  version from the registry and verifies its sha-512. `aos update` now just runs
+  that installer, passing the running version so it no-ops when already current.
+  All outbound access lives in one place (the installer); `dist/aos.mjs` calls no
+  `fetch` and reaches no host.
+- **Fixes "EntryPointError" from package analyzers.** `package.json` declared
+  only `bin` (AOS is a CLI), so tools that resolve an entry point couldn't find
+  one. Added `main` and an `exports` map pointing at the compiled bundle.
+- **Importing the package no longer runs the CLI.** `dist/aos.mjs` now runs its
+  command dispatch only when it is the process entry point (resolved via realpath
+  so the `aos` launcher symlink and npm's bin shim still count); imported instead,
+  it just exposes `main` and has no side effects — notably it no longer creates
+  `~/.aos` on an importer's machine. Source and compiled invocation, including via
+  symlink, are unchanged (verified in the smoke suite).
+
 ## 0.7.1 — 2026-07-05
 
 Security: harden `aos update` against remote-script execution.
