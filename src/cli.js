@@ -176,31 +176,28 @@ async function main() {
       break;
     case 'update': {
       if (!fs.existsSync(path.join(APP_ROOT, '.git'))) {
-        // Release-artifact install: compare against the latest GitHub release,
-        // then re-run the installer (download → checksum → swap) if newer.
+        // Release-artifact install: compare against the npm registry, then
+        // re-run the installer (download → integrity verify → swap) if newer.
         let latest = '';
         try {
-          latest = execSync(
-            'curl -fsSLI -o /dev/null -w "%{url_effective}" https://github.com/albsugy/aos/releases/latest',
-            { encoding: 'utf8' }
-          )
-            .trim()
-            .split('/')
-            .pop();
-        } catch {
-          console.error('Could not reach GitHub to check for updates.');
+          const res = await fetch('https://registry.npmjs.org/@albsugy/aos/latest');
+          if (!res.ok) throw new Error(`registry responded ${res.status}`);
+          latest = (await res.json()).version || '';
+        } catch (e) {
+          console.error(`Could not check the npm registry for updates (${e.message}).`);
           process.exit(1);
         }
-        if (!/^v[0-9][0-9A-Za-z.-]*$/.test(latest || '')) {
-          console.error(`Could not determine the latest release (got "${latest}").`);
+        if (!/^[0-9][0-9A-Za-z.-]*$/.test(latest)) {
+          console.error(`Could not determine the latest version (got "${latest}").`);
           process.exit(1);
         }
-        if (latest === `v${appVersion()}`) {
+        if (latest === appVersion()) {
           console.log(`✔ aos ${appVersion()} — already up to date`);
           break;
         }
-        console.log(`Updating v${appVersion()} → ${latest}`);
-        execSync('curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash', {
+        console.log(`Updating ${appVersion()} → ${latest}`);
+        // Version is passed via env, never interpolated into the command.
+        execSync('curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash', {
           stdio: 'inherit',
           env: { ...process.env, AOS_VERSION: latest },
         });

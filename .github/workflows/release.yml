@@ -15,17 +15,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - name: verify — source
         run: bash test/smoke.sh
       - name: verify — compiled bundle
         run: AOS_BIN="node $PWD/dist/aos.mjs" bash test/smoke.sh
-      - name: build release artifact
+      - name: build release artifact (npm pack layout)
         run: |
-          tar -czf aos.tar.gz dist assets package.json LICENSE CHANGELOG.md
-          sha256sum aos.tar.gz > aos.tar.gz.sha256
-          sha256sum -c aos.tar.gz.sha256
+          npm pack
+          TGZ=$(ls albsugy-aos-*.tgz)
+          mv "$TGZ" aos.tgz
+          sha256sum aos.tgz > aos.tgz.sha256
+          sha256sum -c aos.tgz.sha256
       - name: create GitHub release with artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes aos.tar.gz aos.tar.gz.sha256
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes aos.tgz aos.tgz.sha256
+      - name: publish to npm (skips when NPM_TOKEN secret is not configured)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN secret not set — skipping npm publish. Add it (gh secret set NPM_TOKEN) or publish manually."
+            exit 0
+          fi
+          npm publish
