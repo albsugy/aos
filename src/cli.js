@@ -116,12 +116,20 @@ async function main() {
         console.log(`  files to fill: ticket.md → plan.md → (implement) → verification.md → outcome.md`);
       } else if (sub === 'finish') {
         const active = getActiveRun(p.id);
-        if (!active) return console.error('No active run.');
+        if (!active) {
+          console.error('No active run.');
+          process.exitCode = 1;
+          break;
+        }
         const meta = finishRun(p.id, active, flags.state || 'awaiting-review');
         console.log(`✔ Run ${active} → ${meta.state}`);
       } else if (sub === 'state') {
         const active = getActiveRun(p.id);
-        if (!active) return console.error('No active run.');
+        if (!active) {
+          console.error('No active run.');
+          process.exitCode = 1;
+          break;
+        }
         const meta = setRunState(p.id, active, positional[1] || 'in-progress');
         console.log(`✔ Run ${active} → ${meta.state}`);
       } else if (sub === 'list') {
@@ -152,7 +160,11 @@ async function main() {
     }
     case 'find': {
       const p = requireProject(flags);
-      if (!positional.length) return console.error('Usage: aos find <query>');
+      if (!positional.length) {
+        console.error('Usage: aos find <query>');
+        process.exitCode = 1;
+        break;
+      }
       printFind(p.id, positional.join(' '));
       break;
     }

@@ -20,10 +20,14 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false  # never use caching in release builds
       - run: npm ci
+      - name: package.json version must match the tag
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          [ "$PKG" = "$GITHUB_REF_NAME" ] || { echo "::error::package.json is $PKG but the tag is $GITHUB_REF_NAME"; exit 1; }
       - name: verify — source
-        run: bash test/smoke.sh
+        run: npm run test:source
       - name: verify — compiled bundle
-        run: AOS_BIN="node $PWD/dist/aos.mjs" bash test/smoke.sh
+        run: npm run test:bundle
       - name: build release artifact (npm pack layout)
         run: |
           npm pack

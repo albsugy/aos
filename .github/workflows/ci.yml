@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     name: smoke (${{ matrix.os }}, node ${{ matrix.node }})
@@ -15,24 +19,26 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         node: ['22', '24']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
+          package-manager-cache: false
       - run: npm ci
       - name: smoke — source
-        run: bash test/smoke.sh
+        run: npm run test:source
       - name: smoke — compiled bundle
-        run: AOS_BIN="node $PWD/dist/aos.mjs" bash test/smoke.sh
+        run: npm run test:bundle
 
   dist-freshness:
     name: committed dist matches source
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          package-manager-cache: false
       - run: npm ci
       - run: npm run build
       - name: dist/ must be rebuilt and committed with source changes
@@ -42,8 +48,8 @@ jobs:
           test -z "$(git status --porcelain -- dist)" || { git status -- dist; exit 1; }
 
   shellcheck:
-    name: shellcheck installer
+    name: shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: shellcheck install.sh test/smoke.sh
+      - uses: actions/checkout@v6
+      - run: shellcheck install.sh test/smoke.sh scripts/release.sh

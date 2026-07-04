@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1 — 2026-07-04
+
+Polish pass: correctness, DX, and release discipline.
+
+- **CLI exit codes:** `run finish`/`run state` with no active run and `find` without a
+  query now exit 1 instead of 0 — errors are scriptable.
+- **npm README fixed:** the package page no longer links to the repository's
+  unavailable site; the npm package page is the public home.
+- **Release tooling:** `npm run release -- <patch|minor|major|x.y.z>` — bumps, enforces
+  a CHANGELOG entry, builds, runs both test suites, commits, and tags; pushing stays
+  deliberate. Documented in RELEASING.md.
+- **Workflow hardening:** release fails fast if `package.json` doesn't match the tag;
+  CI cancels superseded runs, uses current action versions, and shellchecks all scripts.
+- **Package metadata:** declares `os: darwin/linux` honestly; `npm test` now runs both
+  source and bundle suites; manual `npm publish` self-verifies via `prepublishOnly`.
+
 ## 0.5.0 — 2026-07-04
 
 Public distribution via npm; the compiled single-file bundle.

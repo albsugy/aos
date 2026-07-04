@@ -10,10 +10,17 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "bash test/smoke.sh",
+    "test": "npm run test:source && npm run test:bundle",
+    "test:source": "bash test/smoke.sh",
+    "test:bundle": "AOS_BIN=\"node $PWD/dist/aos.mjs\" bash test/smoke.sh",
     "build": "node scripts/build.mjs",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm test",
+    "release": "bash scripts/release.sh"
   },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "files": [
     "dist",
     "assets",
@@ -39,6 +46,6 @@
   "license": "MIT",
   "devDependencies": {
     "esbuild": "^0.28.1",
-    "yaml": "^2.4.5"
+    "yaml": "^2.9.0"
   }
 }
