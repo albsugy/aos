@@ -2,9 +2,11 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fullState } from '../status.js';
+import { fullState, projectSummary } from '../status.js';
 import { runDir, runMeta } from '../run.js';
-import { readIfExists } from '../paths.js';
+import { projectDir, readIfExists, tailLines } from '../paths.js';
+import { getProject } from '../registry.js';
+import { loadPolicy } from '../policy.js';
 
 const UI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html');
 
@@ -28,6 +30,54 @@ function localHost(req) {
   return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1';
 }
 
+// Everything the project screen needs beyond /api/state: memory files,
+// a policy digest, and the recent session series for the token sparkline.
+function projectDetail(projectId) {
+  const p = getProject(projectId);
+  if (!p) return null;
+  const dir = projectDir(projectId);
+  const policy = loadPolicy(projectId);
+  const sessions = (readIfExists(path.join(dir, 'sessions.jsonl')) || '')
+    .split('\n')
+    .filter(Boolean)
+    .slice(-40)
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  let playbooks = [];
+  try {
+    playbooks = fs.readdirSync(path.join(dir, 'playbooks')).filter((f) => f.endsWith('.md'));
+  } catch {
+    // no playbooks dir yet
+  }
+  const decisions = readIfExists(path.join(dir, 'context', 'decisions.md'));
+  const learnings = readIfExists(path.join(dir, 'learnings.md'));
+  return {
+    summary: projectSummary(p),
+    pack: readIfExists(path.join(dir, 'context', 'pack.md')),
+    decisions: decisions ? tailLines(decisions, 120) : null,
+    learnings: learnings ? tailLines(learnings, 80) : null,
+    playbooks,
+    sessions,
+    policy: {
+      plan_gate: policy.plan_gate,
+      adversarial_review: policy.verification?.adversarial_review !== false,
+      forbidden: (policy.tiers?.forbidden || []).length,
+      gated: (policy.tiers?.gated || []).length,
+      protected_paths: (policy.tiers?.protected_paths || []).length,
+      contracts: (policy.verification?.contracts || []).map((c) => ({
+        name: c.name,
+        required: !!c.required,
+      })),
+    },
+  };
+}
+
 function runDetail(projectId, runId) {
   const meta = runMeta(projectId, runId);
   if (!meta) return null;
@@ -47,6 +97,7 @@ function runDetail(projectId, runId) {
     .filter(Boolean);
   return {
     meta,
+    dir,
     audit,
     ticket: readIfExists(path.join(dir, 'ticket.md')),
     plan: readIfExists(path.join(dir, 'plan.md')),
@@ -65,6 +116,12 @@ export function serveConsole(port = 4560) {
         res.end(fs.readFileSync(UI_PATH));
       } else if (url.pathname === '/api/state') {
         json(res, 200, fullState());
+      } else if (url.pathname === '/api/project') {
+        const project = safeId(url.searchParams.get('project'));
+        if (!project) return json(res, 400, { error: 'invalid project id' });
+        const detail = projectDetail(project);
+        if (!detail) return json(res, 404, { error: 'project not found' });
+        json(res, 200, detail);
       } else if (url.pathname === '/api/run') {
         const project = safeId(url.searchParams.get('project'));
         const run = safeId(url.searchParams.get('run'));
