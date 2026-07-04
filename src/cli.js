@@ -176,9 +176,37 @@ async function main() {
       break;
     case 'update': {
       if (!fs.existsSync(path.join(APP_ROOT, '.git'))) {
-        console.error('This aos install is not a git checkout — reinstall with the install script.');
-        process.exit(1);
+        // Release-artifact install: compare against the latest GitHub release,
+        // then re-run the installer (download → checksum → swap) if newer.
+        let latest = '';
+        try {
+          latest = execSync(
+            'curl -fsSLI -o /dev/null -w "%{url_effective}" https://github.com/albsugy/aos/releases/latest',
+            { encoding: 'utf8' }
+          )
+            .trim()
+            .split('/')
+            .pop();
+        } catch {
+          console.error('Could not reach GitHub to check for updates.');
+          process.exit(1);
+        }
+        if (!/^v[0-9][0-9A-Za-z.-]*$/.test(latest || '')) {
+          console.error(`Could not determine the latest release (got "${latest}").`);
+          process.exit(1);
+        }
+        if (latest === `v${appVersion()}`) {
+          console.log(`✔ aos ${appVersion()} — already up to date`);
+          break;
+        }
+        console.log(`Updating v${appVersion()} → ${latest}`);
+        execSync('curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash', {
+          stdio: 'inherit',
+          env: { ...process.env, AOS_VERSION: latest },
+        });
+        break;
       }
+      // Dev checkout: pull + rebuild deps as needed.
       const head = () => execSync('git rev-parse HEAD', { cwd: APP_ROOT, encoding: 'utf8' }).trim();
       const before = head();
       execSync('git pull --ff-only', { cwd: APP_ROOT, stdio: 'inherit' });

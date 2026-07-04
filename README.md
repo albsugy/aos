@@ -25,15 +25,18 @@ across runtimes.
 curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash
 ```
 
-Requires git + Node ≥ 22. Clones to `~/.local/share/aos` and links the **compiled
-single-file bundle** (`dist/aos.mjs`, dependencies inlined, CI-verified against source)
-as `~/.local/bin/aos` — nothing is downloaded from npm at install time. Re-run to
-update, or `aos update`. Manual install:
+Requires Node ≥ 22 (plus curl + tar). Downloads the **compiled release artifact**
+from GitHub Releases — a ~150 KB tarball with the single-file bundle
+(`dist/aos.mjs`, dependencies inlined) and the skills/templates — **verifies its
+SHA-256 checksum**, unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`.
+No source code, git history, or npm downloads on your machine. Pin a version with
+`AOS_VERSION=v0.4.0`. Update later with `aos update`.
 
 ```bash
+# contributors — build from source:
 git clone https://github.com/albsugy/aos.git && cd aos
-ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos   # committed compiled bundle
-# dev: npm ci && npm run build && npm test
+npm ci && npm run build && npm test
+ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
 ```
 
 ## Quickstart

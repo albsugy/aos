@@ -25,7 +25,20 @@ export function runDoctor({ appRoot, version, bundled = false }) {
     })
   );
 
-  checks.push(check('aos app', () => `${version} (${bundled ? 'compiled bundle' : 'source'}) at ${appRoot}`));
+  checks.push(
+    check('aos app', () => {
+      const mode = fs.existsSync(path.join(appRoot, '.git')) ? 'dev checkout' : 'release artifact';
+      return `${version} (${bundled ? 'compiled bundle' : 'source'}, ${mode}) at ${appRoot}`;
+    })
+  );
+
+  checks.push(
+    check('install layout', () => {
+      const missing = ['assets', 'dist'].filter((d) => !fs.existsSync(path.join(appRoot, d)));
+      if (missing.length) throw new Error(`missing ${missing.join(', ')} — reinstall`);
+      return 'dist + assets present';
+    })
+  );
 
   checks.push(
     check('dependencies', () => {

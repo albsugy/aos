@@ -20,7 +20,12 @@ jobs:
         run: bash test/smoke.sh
       - name: verify — compiled bundle
         run: AOS_BIN="node $PWD/dist/aos.mjs" bash test/smoke.sh
-      - name: create GitHub release
+      - name: build release artifact
+        run: |
+          tar -czf aos.tar.gz dist assets package.json LICENSE CHANGELOG.md
+          sha256sum aos.tar.gz > aos.tar.gz.sha256
+          sha256sum -c aos.tar.gz.sha256
+      - name: create GitHub release with artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes aos.tar.gz aos.tar.gz.sha256

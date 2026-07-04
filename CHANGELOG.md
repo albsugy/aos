@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 — 2026-07-04
+
+Standard package distribution: release artifacts instead of source clones.
+
+- **Installs no longer clone the repo.** The installer downloads `aos.tar.gz` from
+  GitHub Releases (runtime only: `dist/` + `assets/` + metadata, ~150 KB), verifies
+  its **SHA-256 checksum**, unpacks, and links. git is no longer required to install.
+- **Release workflow** builds and attaches `aos.tar.gz` + `aos.tar.gz.sha256` to every
+  `v*` release after re-running both smoke suites.
+- **`aos update`** on release installs checks the latest GitHub release and only
+  downloads when newer; dev checkouts keep the `git pull` path.
+- **`AOS_VERSION=vX.Y.Z`** pins installs to a release; `AOS_TARBALL_URL` supports
+  mirrors/testing; `AOS_FROM_SOURCE=1` clones and builds for contributors.
+- Installer refuses to overwrite a dev checkout at the install path, and `aos doctor`
+  now reports the install mode (release artifact vs dev checkout) and verifies layout.
+
 ## 0.3.1 — 2026-07-04
 
 CI reliability + release infrastructure.
