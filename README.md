@@ -38,7 +38,9 @@ installer resolves the version from the registry, **verifies the registry's sha-
 integrity hash**, unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`.
 No source code and no git history land on your machine (the source repository is
 private; the published package is the compiled bundle). Pin with `AOS_VERSION=0.5.0`;
-update later with `aos update`.
+update later with `aos update`; diagnose with `aos doctor`.
+
+Uninstall: `rm -rf ~/.local/share/aos ~/.local/bin/aos` — your data in `~/.aos` is yours to keep.
 
 ## Quickstart
 
