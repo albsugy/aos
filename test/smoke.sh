@@ -160,10 +160,22 @@ printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
 $AOS run finish >/dev/null
 
-# --- supply-chain guard: the compiled CLI must never fetch a remote script and pipe it to a shell ---
-# It does all network I/O via fetch and self-updates by running the local, already-verified
-# install.sh — so it must not shell out to curl at all (a curl|bash reintroduction brings it back).
-grep -q 'curl' "$ROOT/dist/aos.mjs" && fail "compiled bundle shells out to curl (possible curl|bash supply-chain risk)" || pass "no curl in compiled bundle — network I/O via fetch, no remote-script execution"
+# --- supply-chain guard: the compiled CLI accesses the network in no way at all ---
+# All outbound access lives in install.sh (registry resolve + sha-512 verify); the CLI
+# self-updates by running that local, already-verified installer. So the bundle must
+# neither shell out to curl nor call fetch/reach the registry directly.
+grep -q 'curl' "$ROOT/dist/aos.mjs" && fail "compiled bundle shells out to curl (possible curl|bash supply-chain risk)" || pass "no curl in compiled bundle — no remote-script execution"
+grep -Eq 'fetch\(|registry\.npmjs\.org' "$ROOT/dist/aos.mjs" && fail "compiled bundle accesses the network (fetch/registry) — should delegate to install.sh" || pass "no network access in compiled bundle — installer owns all outbound I/O"
+
+# --- entry point: declared + importing the bundle is side-effect-free (no EntryPointError) ---
+node -e 'const p=require(process.argv[1]);process.exit(p.main&&p.exports?0:1)' "$ROOT/package.json" \
+  && pass "entry point: package.json declares main + exports" || fail "package.json has no main/exports entry point"
+IMPORT_HOME="$WORK/import-probe-home"
+AOS_HOME="$IMPORT_HOME" node --input-type=module \
+  -e "import('file://$ROOT/dist/aos.mjs').then(m => process.exit(typeof m.main === 'function' ? 0 : 1))" \
+  || fail "compiled bundle does not export main()"
+[ -d "$IMPORT_HOME" ] && fail "importing the bundle created AOS_HOME (side effect on import)" \
+  || pass "entry point: bundle exports main, import is side-effect-free"
 
 # --- doctor ---
 $AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "doctor exit code"

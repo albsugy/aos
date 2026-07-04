@@ -6,6 +6,11 @@
   "bin": {
     "aos": "dist/aos.mjs"
   },
+  "main": "dist/aos.mjs",
+  "exports": {
+    ".": "./dist/aos.mjs",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22"
   },

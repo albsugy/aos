@@ -205,45 +205,26 @@ async function main() {
       break;
     case 'update': {
       if (!fs.existsSync(path.join(APP_ROOT, '.git'))) {
-        // Release-artifact install: compare against the npm registry, then
-        // re-run the installer if newer.
-        let latest = '';
-        try {
-          const res = await fetch('https://registry.npmjs.org/@albsugy/aos/latest');
-          if (!res.ok) throw new Error(`registry responded ${res.status}`);
-          latest = (await res.json()).version || '';
-        } catch (e) {
-          console.error(`Could not check the npm registry for updates (${e.message}).`);
-          process.exit(1);
-        }
-        if (!/^[0-9][0-9A-Za-z.-]*$/.test(latest)) {
-          console.error(`Could not determine the latest version (got "${latest}").`);
-          process.exit(1);
-        }
-        if (latest === appVersion()) {
-          console.log(`✔ aos ${appVersion()} — already up to date`);
-          break;
-        }
-        // Run the installer that shipped inside THIS install — never fetch a
-        // fresh script over the network and pipe it to a shell. install.sh is
-        // part of the package that was itself integrity-verified when it was
-        // installed, so it's already on disk and trusted; it downloads the new
-        // tarball and verifies the registry's sha-512 hash before swapping it
-        // in. No remote-script execution, no shell interpolation: bash runs a
-        // local file, and the version is passed via env.
+        // Release-artifact install: self-update by running the install.sh that
+        // shipped inside THIS (integrity-verified) install. The CLI itself makes
+        // NO network requests — the installer owns all outbound access. It
+        // resolves the latest version from the registry, no-ops if we're already
+        // current (via AOS_CURRENT_VERSION below), and otherwise downloads the
+        // new tarball and verifies the registry's sha-512 hash before swapping
+        // it in. No remote-script execution and no shell interpolation: bash
+        // runs a local file, and the version is passed via env.
         const installer = path.join(APP_ROOT, 'install.sh');
         if (!fs.existsSync(installer)) {
           console.error(
             'This install has no bundled installer to self-update from. Re-install with:\n' +
-              `  npm i -g @albsugy/aos@${latest}\n` +
+              '  npm i -g @albsugy/aos@latest\n' +
               'or the installer at https://www.npmjs.com/package/@albsugy/aos'
           );
           process.exit(1);
         }
-        console.log(`Updating ${appVersion()} → ${latest}`);
         execFileSync('bash', [installer], {
           stdio: 'inherit',
-          env: { ...process.env, AOS_VERSION: latest },
+          env: { ...process.env, AOS_CURRENT_VERSION: appVersion() },
         });
         break;
       }
@@ -284,7 +265,26 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e.message || e);
-  process.exit(1);
-});
+// Run the CLI only when this module is the process entry point (the compiled
+// bundle invoked as `aos`). Importing it — package analyzers, or
+// `import { main } from '@albsugy/aos'` — must be side-effect-free: no arg
+// handling, no ~/.aos creation. Symlinks (the ~/.local/bin/aos launcher and
+// npm's bin shim) are resolved via realpath so the check holds however aos was
+// launched. In source mode bin/aos.js imports this file and calls main()
+// explicitly, so this guard is false there and never double-runs.
+function isEntryPoint() {
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+export { main };
+
+if (isEntryPoint()) {
+  main().catch((e) => {
+    console.error(e.message || e);
+    process.exit(1);
+  });
+}
