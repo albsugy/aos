@@ -83,7 +83,9 @@ else
     curl -fsSL -o "$TMP/aos.tgz.sha256" "$AOS_TARBALL_URL.sha256" || fail "Checksum download failed."
     EXPECTED="$(awk '{print $1}' "$TMP/aos.tgz.sha256")"
     ACTUAL="$(node -e 'const c=require("crypto"),f=require("fs");console.log(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$TMP/aos.tgz")"
-    [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] || fail "Checksum verification FAILED — refusing to install."
+    if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+      fail "Checksum verification FAILED — refusing to install."
+    fi
     ok "Checksum verified (sha256)"
   else
     # --- standard path: the npm registry --------------------------------------
@@ -93,7 +95,9 @@ else
     RESOLVED="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(m.version||"")')"
     TARBALL="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.tarball)||"")')"
     INTEGRITY="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.integrity)||"")')"
-    [ -n "$RESOLVED" ] && [ -n "$TARBALL" ] || fail "Registry metadata is malformed."
+    if [ -z "$RESOLVED" ] || [ -z "$TARBALL" ]; then
+      fail "Registry metadata is malformed."
+    fi
 
     info "Downloading $PKG@$RESOLVED"
     curl -fsSL -o "$TMP/aos.tgz" "$TARBALL" || fail "Download failed."
