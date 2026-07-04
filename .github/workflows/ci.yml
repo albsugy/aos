@@ -36,7 +36,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: dist/ must be rebuilt and committed with source changes
-        run: git diff --exit-code -- dist
+        run: |
+          git diff --exit-code -- dist
+          # git diff misses untracked files — catch new-but-uncommitted artifacts too
+          test -z "$(git status --porcelain -- dist)" || { git status -- dist; exit 1; }
 
   shellcheck:
     name: shellcheck installer

@@ -113,12 +113,16 @@ PORT=45997
 $AOS console --port $PORT >/dev/null 2>&1 &
 CONSOLE_PID=$!
 sleep 1
+# No `curl | grep -q` here: with pipefail, grep -q exiting on first match can
+# EPIPE curl mid-write and fail the pipeline despite a successful match (racy,
+# surfaced on Linux CI). Capture responses, then pattern-match without pipes.
 STATE=$(curl -s "http://127.0.0.1:$PORT/api/state")
-echo "$STATE" | grep -q '"id":"demo"' && pass "console API: state" || { kill $CONSOLE_PID; fail "console state"; }
+case "$STATE" in *'"id":"demo"'*) pass "console API: state";; *) kill $CONSOLE_PID; fail "console state";; esac
 RUN_ID=$(basename "$RUN_DIR")
 DETAIL=$(curl -s "http://127.0.0.1:$PORT/api/run?project=demo&run=$RUN_ID")
-echo "$DETAIL" | grep -q '"audit"' && pass "console API: run detail" || { kill $CONSOLE_PID; fail "console run detail"; }
-curl -s "http://127.0.0.1:$PORT/" | grep -q "AOS Console" && pass "console serves UI" || { kill $CONSOLE_PID; fail "console UI"; }
+case "$DETAIL" in *'"audit"'*) pass "console API: run detail";; *) kill $CONSOLE_PID; fail "console run detail";; esac
+UI=$(curl -s "http://127.0.0.1:$PORT/")
+case "$UI" in *"AOS Console"*) pass "console serves UI";; *) kill $CONSOLE_PID; fail "console UI";; esac
 
 # path traversal in ids must be rejected
 TRAV=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/run?project=..%2F..%2Fetc&run=passwd")
