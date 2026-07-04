@@ -138,33 +138,40 @@
   <h3>REQUIREMENTS</h3>
   <ul>
     <li>macOS or Linux</li>
-    <li><code>git</code></li>
+    <li><code>curl</code> and <code>tar</code> (present on any stock system)</li>
     <li>Node.js ≥ 22 (<code>node -v</code>)</li>
     <li>Claude Code, for the skills/hooks integration (the CLI and console work without it)</li>
+    <li class="dim"><code>git</code> — only for building from source</li>
   </ul>
   <h3>ONE-LINE INSTALL</h3>
   <pre><code><span class="c">$</span> curl -fsSL https://raw.githubusercontent.com/albsugy/aos/main/install.sh | bash</code></pre>
-  <p>The installer: checks prerequisites → clones the app to <code>~/.local/share/aos</code> → links the
-  <b>compiled single-file bundle</b> (<code>dist/aos.mjs</code>, all dependencies inlined, verified against
-  source by CI) as <code>~/.local/bin/aos</code> → adds that directory to your PATH (zsh, bash, or fish) if
-  it isn't already → verifies with <code>aos version</code>. Nothing is downloaded from npm at install time.
-  Re-running it updates in place. If anything seems off afterwards: <code>aos doctor</code>.</p>
+  <p>The installer downloads the <b>compiled release artifact</b> from GitHub Releases — a ~150&nbsp;KB
+  tarball containing only the runtime (<code>dist/aos.mjs</code> with all dependencies inlined, the skills
+  and templates in <code>assets/</code>, and version metadata) — <b>verifies its SHA-256 checksum</b>,
+  unpacks it to <code>~/.local/share/aos</code>, links <code>~/.local/bin/aos</code>, and adds that
+  directory to your PATH (zsh, bash, or fish) if needed. No source code, no git history, no npm downloads
+  land on your machine. If anything seems off afterwards: <code>aos doctor</code>.</p>
   <h3>OVERRIDES</h3>
   <div class="table-scroll"><table>
     <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+    <tr><td><code>AOS_VERSION</code></td><td><code>latest</code></td><td>Release tag to install, e.g. <code>AOS_VERSION=v0.4.0</code> for pinned installs</td></tr>
     <tr><td><code>AOS_INSTALL_DIR</code></td><td><code>~/.local/share/aos</code></td><td>Where the app lives</td></tr>
     <tr><td><code>AOS_BIN_DIR</code></td><td><code>~/.local/bin</code></td><td>Where the <code>aos</code> symlink goes</td></tr>
-    <tr><td><code>AOS_REPO_URL</code></td><td>the GitHub repo</td><td>Install from a fork or mirror</td></tr>
-    <tr><td><code>AOS_REF</code></td><td><code>main</code></td><td>Branch or tag to install, e.g. <code>AOS_REF=v0.2.0</code> for pinned installs</td></tr>
+    <tr><td><code>AOS_TARBALL_URL</code></td><td>—</td><td>Direct artifact URL (mirrors/testing); checksum fetched from <code>&lt;url&gt;.sha256</code></td></tr>
+    <tr><td><code>AOS_FROM_SOURCE</code></td><td><code>0</code></td><td><code>=1</code> clones and builds from source instead (contributors; needs git + npm). <code>AOS_REPO_URL</code>/<code>AOS_REF</code> pick the repo and branch</td></tr>
     <tr><td><code>AOS_HOME</code></td><td><code>~/.aos</code></td><td>Where all <em>data</em> lives (runtime, not install-time)</td></tr>
   </table></div>
   <h3>MANUAL INSTALL</h3>
-  <pre><code><span class="c"># use the committed compiled bundle:</span>
-<span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
-<span class="c">$</span> ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
+  <pre><code><span class="c"># from the release artifact (what the installer automates):</span>
+<span class="c">$</span> curl -fsSLO https://github.com/albsugy/aos/releases/latest/download/aos.tar.gz
+<span class="c">$</span> curl -fsSLO https://github.com/albsugy/aos/releases/latest/download/aos.tar.gz.sha256
+<span class="c">$</span> shasum -a 256 -c aos.tar.gz.sha256      <span class="c"># sha256sum on Linux</span>
+<span class="c">$</span> mkdir -p ~/.local/share/aos &amp;&amp; tar -xzf aos.tar.gz -C ~/.local/share/aos
+<span class="c">$</span> ln -sf ~/.local/share/aos/dist/aos.mjs ~/.local/bin/aos
 
-<span class="c"># or build from source:</span>
-<span class="c">$</span> npm ci &amp;&amp; npm run build   <span class="c"># rebuilds dist/aos.mjs</span></code></pre>
+<span class="c"># or build from source (contributors):</span>
+<span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
+<span class="c">$</span> npm ci &amp;&amp; npm run build &amp;&amp; ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos</code></pre>
 </section>
 
 <section id="quickstart">
@@ -445,7 +452,9 @@ verification:
   <h2>Update &amp; uninstall</h2>
   <h3>UPDATE</h3>
   <pre><code><span class="c">$</span> aos update
-<span class="c"># or re-run the install one-liner — same effect</span></code></pre>
+<span class="c"># release installs: checks the latest GitHub release, then downloads,</span>
+<span class="c"># checksum-verifies, and swaps in place only if newer.</span>
+<span class="c"># dev checkouts: git pull + rebuild. Re-running the installer also works.</span></code></pre>
   <h3>UNINSTALL</h3>
   <pre><code><span class="c"># remove the app + launcher</span>
 <span class="c">$</span> rm -rf ~/.local/share/aos ~/.local/bin/aos
