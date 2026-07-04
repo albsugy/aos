@@ -10,6 +10,7 @@ import {
   slugify,
   today,
   nowIso,
+  withLock,
 } from './paths.js';
 
 export function statePath(projectId) {
@@ -30,9 +31,11 @@ export function getActiveRun(projectId) {
 }
 
 export function setActiveRun(projectId, runId) {
-  const state = readJson(statePath(projectId), {});
-  state.activeRun = runId;
-  writeJson(statePath(projectId), state);
+  withLock(statePath(projectId), () => {
+    const state = readJson(statePath(projectId), {});
+    state.activeRun = runId;
+    writeJson(statePath(projectId), state);
+  });
 }
 
 export function runMeta(projectId, runId) {
@@ -43,7 +46,22 @@ export function saveRunMeta(projectId, runId, meta) {
   writeJson(path.join(runDir(projectId, runId), 'meta.json'), meta);
 }
 
-export function startRun(projectId, { ticket, title }) {
+// All meta updates go through here: read-modify-write under the lock so two
+// concurrent sessions (or a hook racing the CLI) can't drop each other's
+// update. The mutator returns false to signal "no change, don't write".
+export function mutateRunMeta(projectId, runId, mutate) {
+  const file = path.join(runDir(projectId, runId), 'meta.json');
+  return withLock(file, () => {
+    const meta = readJson(file, null);
+    if (!meta) return null;
+    if (mutate(meta) === false) return meta;
+    meta.updated = nowIso();
+    writeJson(file, meta);
+    return meta;
+  });
+}
+
+export function startRun(projectId, { ticket, title, planGate }) {
   const base = `${today()}-${slugify(ticket || title || 'run')}`;
   let runId = base;
   let i = 2;
@@ -58,7 +76,12 @@ export function startRun(projectId, { ticket, title }) {
     state: 'in-progress',
     verification: 'pending',
     verification_attempts: 0,
-    tokens: { input: 0, output: 0 },
+    // The session that started this run, bound by the post-tool hook. Audit
+    // and tokens from other concurrent sessions stay out of this run.
+    session: null,
+    plan_gate: planGate || 'auto',
+    plan_approved: false,
+    tokens: { input: 0, output: 0, cache_read: 0 },
     created: nowIso(),
     updated: nowIso(),
   };
@@ -73,12 +96,31 @@ export function startRun(projectId, { ticket, title }) {
 }
 
 export function setRunState(projectId, runId, state) {
-  const meta = runMeta(projectId, runId);
+  const meta = mutateRunMeta(projectId, runId, (m) => {
+    m.state = state;
+  });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  meta.state = state;
-  meta.updated = nowIso();
-  saveRunMeta(projectId, runId, meta);
   appendAudit(projectId, { event: 'run-state', run: runId, state });
+  return meta;
+}
+
+// Bind a run to the session that started it (first bind wins). Called by the
+// post-tool hook when it sees the `aos run start` command complete.
+export function bindRunSession(projectId, runId, sessionId) {
+  if (!sessionId) return null;
+  return mutateRunMeta(projectId, runId, (m) => {
+    if (m.session) return false;
+    m.session = sessionId;
+  });
+}
+
+export function approvePlan(projectId, runId) {
+  const meta = mutateRunMeta(projectId, runId, (m) => {
+    if (m.plan_approved) return false;
+    m.plan_approved = true;
+  });
+  if (!meta) throw new Error(`Unknown run: ${runId}`);
+  appendAudit(projectId, { event: 'plan-approved', run: runId });
   return meta;
 }
 
@@ -100,24 +142,30 @@ export function listRuns(projectId) {
 }
 
 // Audit lines go to the active run when one exists, else to the project log —
-// session exhaust outside a run is still worth keeping.
+// session exhaust outside a run is still worth keeping. A run bound to a
+// session only accepts that session's lines: a second concurrent session in
+// the same repo lands in the project log instead of polluting the run's
+// audit trail. Unbound runs (started from a terminal, not via a session)
+// keep the old accept-everything behavior.
 export function appendAudit(projectId, entry) {
   const active = getActiveRun(projectId);
   const line = JSON.stringify({ ts: nowIso(), ...entry });
   if (active && fs.existsSync(runDir(projectId, active))) {
-    appendLine(path.join(runDir(projectId, active), 'audit.jsonl'), line);
-  } else {
-    appendLine(path.join(projectDir(projectId), 'audit.jsonl'), line);
+    const boundSession = runMeta(projectId, active)?.session;
+    if (!boundSession || !entry.session || entry.session === boundSession) {
+      appendLine(path.join(runDir(projectId, active), 'audit.jsonl'), line);
+      return;
+    }
   }
+  appendLine(path.join(projectDir(projectId), 'audit.jsonl'), line);
 }
 
 export function addRunTokens(projectId, runId, usage) {
-  const meta = runMeta(projectId, runId);
-  if (!meta) return;
-  meta.tokens.input += usage.input || 0;
-  meta.tokens.output += usage.output || 0;
-  meta.updated = nowIso();
-  saveRunMeta(projectId, runId, meta);
+  mutateRunMeta(projectId, runId, (meta) => {
+    meta.tokens.input += usage.input || 0;
+    meta.tokens.output += usage.output || 0;
+    meta.tokens.cache_read = (meta.tokens.cache_read || 0) + (usage.cache_read || 0);
+  });
 }
 
 export function readRunFile(projectId, runId, file) {

@@ -118,6 +118,14 @@ export function runDoctor({ appRoot, version, bundled = false }) {
           )
         );
         if (pinned) throw new Error('old-format hooks (pinned path) — re-run aos init to migrate');
+        const fileGated = (settings.hooks.PreToolUse || []).some(
+          (e) =>
+            /Write/.test(e.matcher || '') &&
+            (e.hooks || []).some((h) => typeof h.command === 'string' && h.command.includes('aos'))
+        );
+        if (!fileGated) {
+          throw new Error('PreToolUse only gates Bash — re-run aos init to extend gating to file writes');
+        }
         return 'all four events, current format';
       })
     );

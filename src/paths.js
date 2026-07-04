@@ -57,9 +57,51 @@ export function readJson(p, fallback = null) {
 export function writeJson(p, obj) {
   ensureDir(path.dirname(p));
   // Atomic write: a crash mid-write must never leave truncated JSON behind.
-  const tmp = p + '.tmp';
+  // The tmp name carries the pid so two concurrent writers can't stomp
+  // each other's tmp file (last rename still wins, which is fine).
+  const tmp = `${p}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n');
   fs.renameSync(tmp, p);
+}
+
+// Advisory lock for read-modify-write cycles on shared JSON state (state.json,
+// meta.json), so two concurrent sessions can't silently drop each other's
+// update. Hooks must never hang a session, so waiting is bounded: on timeout
+// we proceed unlocked — availability beats strict serialization here.
+export function withLock(file, fn) {
+  const lock = file + '.lock';
+  ensureDir(path.dirname(lock));
+  const deadline = Date.now() + 250;
+  let held = false;
+  while (!held && Date.now() < deadline) {
+    try {
+      fs.closeSync(fs.openSync(lock, 'wx'));
+      held = true;
+    } catch {
+      try {
+        // A holder that died leaves the lock behind — reclaim after 2s.
+        if (Date.now() - fs.statSync(lock).mtimeMs > 2000) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue; // lock vanished between open and stat — retry immediately
+      }
+      const spinUntil = Date.now() + 10;
+      while (Date.now() < spinUntil); // contention is rare and sub-ms; a brief spin beats async plumbing
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (held) {
+      try {
+        fs.unlinkSync(lock);
+      } catch {
+        // already reclaimed as stale — nothing to release
+      }
+    }
+  }
 }
 
 export function tailLines(text, n) {

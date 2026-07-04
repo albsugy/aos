@@ -6,7 +6,7 @@ import { ensureHome, projectDir } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
-import { startRun, finishRun, setRunState, getActiveRun, listRuns } from './run.js';
+import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan } from './run.js';
 import { verifyContracts } from './verify.js';
 import { printStatus } from './status.js';
 import { printFind } from './search.js';
@@ -68,6 +68,7 @@ Usage:
   aos status                        All projects: runs, states, leverage ratio, tokens
   aos context [--project <id>]      Print the project context pack (what agents load)
   aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
+  aos run approve                   Approve the active run's plan (human step when plan_gate: ask)
   aos run finish [--state <s>]      Finish active run (default state: awaiting-review)
   aos run state <state>             Set active run state (in-progress|blocked|awaiting-review|done|shipped)
   aos run list                      List runs for this project
@@ -108,12 +109,28 @@ async function main() {
       const sub = positional[0];
       const p = requireProject(flags);
       if (sub === 'start') {
-        const { runId, dir } = startRun(p.id, { ticket: flags.ticket, title: flags.title });
         const policy = loadPolicy(p.id);
+        const { runId, dir } = startRun(p.id, {
+          ticket: flags.ticket,
+          title: flags.title,
+          planGate: policy.plan_gate,
+        });
         console.log(`✔ Run started: ${runId}`);
         console.log(`  folder: ${dir}`);
         console.log(`  plan_gate: ${policy.plan_gate}`);
+        if (policy.plan_gate === 'ask') {
+          console.log(`  implementation writes stay gated until the human runs: aos run approve`);
+        }
         console.log(`  files to fill: ticket.md → plan.md → (implement) → verification.md → outcome.md`);
+      } else if (sub === 'approve') {
+        const active = getActiveRun(p.id);
+        if (!active) {
+          console.error('No active run.');
+          process.exitCode = 1;
+          break;
+        }
+        approvePlan(p.id, active);
+        console.log(`✔ Plan approved for ${active} — implementation writes are no longer plan-gated`);
       } else if (sub === 'finish') {
         const active = getActiveRun(p.id);
         if (!active) {

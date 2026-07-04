@@ -59,7 +59,9 @@ function installSkills(repoRoot) {
 }
 
 const HOOK_DEFS = [
-  { event: 'PreToolUse', matcher: 'Bash', cmd: 'hook pre-tool' },
+  // File tools are gated too: protected paths, script-content scanning, and
+  // plan-gate enforcement all hang off pre-tool.
+  { event: 'PreToolUse', matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', cmd: 'hook pre-tool' },
   { event: 'PostToolUse', matcher: null, cmd: 'hook post-tool' },
   { event: 'SessionStart', matcher: null, cmd: 'hook session-start' },
   { event: 'SessionEnd', matcher: null, cmd: 'hook session-end' },

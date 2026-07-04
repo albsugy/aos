@@ -104,6 +104,62 @@ $AOS run finish >/dev/null
 $AOS status | grep -q "awaiting-review" && pass "status shows awaiting-review" || fail "status"
 $AOS find "LIN-1" | grep -q "ticket.md" && pass "find searches project memory" || fail "find"
 
+# --- hardened Bash gates (defaults merge in even with a partial policy.yaml) ---
+IN_RMFR='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"sudo rm -fr /"},"session_id":"s1"}'
+IN_RMSTAR='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"rm -rf /*"},"session_id":"s1"}'
+IN_FWL='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin main"},"session_id":"s1"}'
+IN_DOCDEPLOY='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"cat docs/deploy.md"},"session_id":"s1"}'
+IN_RUNDEPLOY='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"./deploy prod"},"session_id":"s1"}'
+hook_out "$IN_RMFR"   | grep -q '"permissionDecision":"deny"' && pass "gate: rm -fr / → deny (flag permutation)" || fail "rm -fr bypass"
+hook_out "$IN_RMSTAR" | grep -q '"permissionDecision":"deny"' && pass "gate: rm -rf /* → deny (glob target)" || fail "rm -rf /* bypass"
+hook_out "$IN_FWL"    | grep -q '"permissionDecision":"ask"'  && pass "gate: force-with-lease → ask, not deny" || fail "force-with-lease verdict"
+[ -z "$(hook_out "$IN_DOCDEPLOY")" ] && pass "gate: cat docs/deploy.md → allow (no false positive)" || fail "deploy false positive"
+hook_out "$IN_RUNDEPLOY" | grep -q '"permissionDecision":"ask"' && pass "gate: ./deploy → ask" || fail "deploy invocation not gated"
+
+# --- file-write gates: self-protection + script laundering ---
+IN_SETTINGS='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/.claude/settings.json","content":"{}"},"session_id":"s1"}'
+IN_POLICY='{"cwd":"'$REPO'","tool_name":"Edit","tool_input":{"file_path":"'$AOS_HOME'/projects/demo/policy.yaml","new_string":"tiers: {}"},"session_id":"s1"}'
+IN_LAUNDER='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/run.sh","content":"#!/bin/bash\ngit push --force origin main"},"session_id":"s1"}'
+IN_OKWRITE='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/src/ok.js","content":"export {}"},"session_id":"s1"}'
+hook_out "$IN_SETTINGS" | grep -q '"permissionDecision":"ask"'  && pass "gate: write .claude/settings.json → ask" || fail "settings write not gated"
+hook_out "$IN_POLICY"   | grep -q '"permissionDecision":"ask"'  && pass "gate: write policy.yaml → ask (self-protection)" || fail "policy write not gated"
+hook_out "$IN_LAUNDER"  | grep -q '"permissionDecision":"deny"' && pass "gate: script with forbidden command → deny (no laundering)" || fail "script laundering not caught"
+[ -z "$(hook_out "$IN_OKWRITE")" ] && pass "gate: normal file write → allow (silent)" || fail "normal write gated"
+
+# --- plan gate: enforced, not remembered ---
+cat > "$AOS_HOME/projects/demo/policy.yaml" <<'EOF'
+version: 1
+plan_gate: ask
+EOF
+$AOS run start --ticket "LIN-2" >/dev/null
+RUN2=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
+RUN2_DIR="$AOS_HOME/projects/demo/runs/$RUN2"
+IN_IMPL='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/src/feature.js","content":"export {}"},"session_id":"sA"}'
+IN_PLANFILE='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$RUN2_DIR'/plan.md","content":"# Plan"},"session_id":"sA"}'
+hook_out "$IN_IMPL" | grep -q '"permissionDecision":"ask"' && pass "plan gate: repo write before approval → ask" || fail "plan gate not enforced"
+[ -z "$(hook_out "$IN_PLANFILE")" ] && pass "plan gate: writing plan.md itself → allow" || fail "plan gate blocks plan.md"
+hook_out '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sA"}' \
+  | grep -q '"permissionDecision":"ask"' && pass "plan gate: agent self-approval → ask (human decides)" || fail "self-approval not gated"
+$AOS run approve >/dev/null
+[ -z "$(hook_out "$IN_IMPL")" ] && pass "plan gate: repo write after approval → allow" || fail "plan gate stuck after approval"
+
+# --- session binding: concurrent sessions don't pollute the run ---
+printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-2"},"session_id":"sA"}' | $AOS hook post-tool
+grep -q '"session": "sA"' "$RUN2_DIR/meta.json" && pass "binding: run bound to starting session" || fail "run not bound"
+printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Grep","tool_input":{"pattern":"x"},"session_id":"sB"}' | $AOS hook post-tool
+grep -q '"session":"sB"' "$RUN2_DIR/audit.jsonl" && fail "foreign session polluted run audit" || pass "binding: foreign session kept out of run audit"
+grep -q '"session":"sB"' "$AOS_HOME/projects/demo/audit.jsonl" && pass "binding: foreign session lands in project audit" || fail "foreign session audit lost"
+
+# --- token accounting: cache reads tracked, attribution respects binding ---
+TRANS="$WORK/transcript.jsonl"
+echo '{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":100,"output_tokens":7}}}' > "$TRANS"
+printf '%s' '{"cwd":"'"$REPO"'","session_id":"sA","transcript_path":"'"$TRANS"'"}' | $AOS hook session-end
+grep -q '"cache_read_tokens":100' "$AOS_HOME/projects/demo/sessions.jsonl" && pass "tokens: cache reads recorded per session" || fail "cache reads not recorded"
+grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: cache reads attributed to bound run" || fail "cache reads not on run"
+printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"}' | $AOS hook session-end
+grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
+$AOS run finish >/dev/null
+
 # --- doctor ---
 $AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "doctor exit code"
 $AOS doctor 2>/dev/null | grep -q "All clear" && pass "doctor: reports all clear" || fail "doctor output"
