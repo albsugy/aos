@@ -17,7 +17,7 @@ The design bet: frontier labs keep making agent *execution* better and cheaper; 
 what they never will — **your** context, **your** policies, **your** audit trail, portable
 across runtimes.
 
-**Site:** [albsugy.github.io/aos](https://albsugy.github.io/aos/) · **Manual:** [docs.html](https://albsugy.github.io/aos/docs.html)
+**Package:** [npmjs.com/package/@albsugy/aos](https://www.npmjs.com/package/@albsugy/aos)
 
 ## Install
 
