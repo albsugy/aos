@@ -177,6 +177,10 @@ case "$STATE" in *'"id":"demo"'*) pass "console API: state";; *) kill $CONSOLE_P
 RUN_ID=$(basename "$RUN_DIR")
 DETAIL=$(curl -s "http://127.0.0.1:$PORT/api/run?project=demo&run=$RUN_ID")
 case "$DETAIL" in *'"audit"'*) pass "console API: run detail";; *) kill $CONSOLE_PID; fail "console run detail";; esac
+PROJ=$(curl -s "http://127.0.0.1:$PORT/api/project?project=demo")
+case "$PROJ" in *'"policy"'*) pass "console API: project detail";; *) kill $CONSOLE_PID; fail "console project detail";; esac
+PMISS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/project?project=nope")
+[ "$PMISS" = "404" ] && pass "console API: unknown project → 404" || { kill $CONSOLE_PID; fail "unknown project ($PMISS)"; }
 UI=$(curl -s "http://127.0.0.1:$PORT/")
 case "$UI" in *"AOS Console"*) pass "console serves UI";; *) kill $CONSOLE_PID; fail "console UI";; esac
 

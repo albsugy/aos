@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0 — 2026-07-05
+
+Console redesign: from a single page to a proper multi-screen app.
+
+- **Screens + navigation:** sidebar (projects with needs-you badges and live-run
+  dots), breadcrumbs, hash routing — Overview → Project → Run; Esc walks back up.
+- **Overview:** fleet KPIs (projects, need-you, active runs, tokens incl. cache),
+  decision queue, per-project cards with leverage bars and state counts.
+- **Project screen:** runs table with state filter chips + search, tokens-per-session
+  sparkline, project memory (context pack / decisions / learnings, rendered), policy
+  digest (plan gate, rule counts, contracts), playbooks.
+- **Run screen:** full page replacing the drawer — pipeline stage strip
+  (intake → plan → implement → verify → package), plan-approval chip, tabbed
+  Outcome / Verification / Audit / Ticket / Plan with safe markdown rendering
+  (tables, task lists, fenced code), audit timeline with event filters, copyable
+  run folder path.
+- **New API:** read-only `/api/project` (memory, policy digest, session series);
+  `/api/run` now includes the run folder path. Same localhost + safe-id guards.
+- **Visual design ("The Ledger"):** warm paper-and-ink theme with serif display
+  type, monospace figures, earthy semantic status colors (olive/clay/ochre/teal)
+  replacing the generic dark-dashboard look; hairline rules over boxed cards,
+  status dot+label tags, a ledger-style KPI strip, a paper-grain texture, one
+  entrance reveal on navigation, and a warm-charcoal `prefers-color-scheme: dark`
+  counterpart. Still one self-contained file, no external fonts or assets.
+
 ## 0.6.0 — 2026-07-04
 
 Guardrail hardening + concurrency/attribution fixes (from the first external-style review).

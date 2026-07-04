@@ -113,7 +113,7 @@ sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need
 ## Status & roadmap
 
 v0.5 — npm-registry distribution (compiled bundle only, private source), Node ≥ 22,
-production-hardened (45 smoke tests run against both source and bundle in CI, plus
+production-hardened (47 smoke tests run against both source and bundle in CI, plus
 dist-freshness gate and shellcheck). Next, in pain-order:
 mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
 polish · multi-operator sync · client-facing trust console.

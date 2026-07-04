@@ -5,220 +5,701 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AOS Console</title>
 <style>
+  /* ══ The Ledger — a warm paper-and-ink operator's console ══
+     Serif display · mono figures · earthy semantic status · hairline rules. */
   :root {
-    --bg: #0e1116; --panel: #161b22; --border: #262d38;
-    --text: #d5dbe3; --muted: #8b949e;
-    --amber: #d29922; --red: #f85149; --green: #3fb950; --blue: #58a6ff;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: light;
+    --paper: #f4f1e8; --surface: #fbf9f3; --surface-2: #ece7d9; --inset: #f0ece1;
+    --ink: #211f18; --ink-2: #59544a; --ink-3: #948d7d; --ink-4: #b6af9e;
+    --rule: #e3ddce; --rule-2: #d0c8b5;
+    --accent: #8a3d22; --accent-2: #a94e2c;
+    /* earthy semantic palette (also aliased to legacy names used inline) */
+    --s-progress: #2c6a68; --s-await: #986612; --s-block: #9c3a26;
+    --s-good: #566b2b; --s-idle: #948d7d; --s-life: #6a4a68;
+    --blue: var(--s-progress); --amber: var(--s-await); --red: var(--s-block);
+    --green: var(--s-good); --violet: var(--s-life);
+    --shadow: 0 1px 2px rgba(40,32,18,.05), 0 12px 30px -20px rgba(40,32,18,.28);
+    --shadow-lift: 0 2px 4px rgba(40,32,18,.06), 0 18px 40px -22px rgba(40,32,18,.34);
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: #14130d; --surface: #1c1a13; --surface-2: #272419; --inset: #17150f;
+      --ink: #ece5d3; --ink-2: #b0a891; --ink-3: #7d7565; --ink-4: #58513f;
+      --rule: #2b2820; --rule-2: #3c382b;
+      --accent: #d1743e; --accent-2: #e28c56;
+      --s-progress: #4f9e97; --s-await: #cc9c3c; --s-block: #cd6248;
+      --s-good: #93ab5b; --s-idle: #7d7565; --s-life: #ab8aa9;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 14px 34px -20px rgba(0,0,0,.6);
+      --shadow-lift: 0 2px 4px rgba(0,0,0,.35), 0 20px 44px -22px rgba(0,0,0,.7);
+    }
   }
   * { box-sizing: border-box; margin: 0; }
-  body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
-  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .04em; }
-  header .kpis { display: flex; gap: 18px; margin-left: auto; color: var(--muted); font-size: 13px; }
-  header .kpis b { color: var(--text); font-family: var(--mono); font-weight: 600; }
-  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
-  section { margin-bottom: 28px; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .project-head { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  .project-head .name { font-weight: 600; }
-  .project-head .meta { color: var(--muted); font-size: 12.5px; }
-  .project-head .tokens { margin-left: auto; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font: 13.5px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  /* faint paper grain for atmosphere — never intrusive */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 9998; opacity: .03;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-2); text-decoration: underline; text-underline-offset: 2px; }
+  code { font: .9em var(--mono); background: var(--inset); border: 1px solid var(--rule); padding: .5px 5px; border-radius: 4px; }
+  ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  *::-webkit-scrollbar { width: 11px; height: 11px; }
+  *::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 11px; border: 3px solid var(--paper); }
+  *::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* micro-label used everywhere */
+  .cap { font: 600 10px/1 var(--sans); text-transform: uppercase; letter-spacing: .16em; color: var(--ink-3); }
+
+  /* ── shell ─────────────────────────────────────────────── */
+  #shell { display: flex; height: 100vh; }
+  #side { width: 246px; flex: none; background: var(--surface); border-right: 1px solid var(--rule); display: flex; flex-direction: column; overflow-y: auto; }
+  .brand { padding: 22px 22px 18px; border-bottom: 1px solid var(--rule); }
+  .brand b { display: block; font: 500 26px/1 var(--serif); letter-spacing: .06em; color: var(--ink); }
+  .brand span { display: block; margin-top: 6px; font: 600 9.5px/1 var(--sans); text-transform: uppercase; letter-spacing: .28em; color: var(--ink-3); }
+  .navhead { padding: 20px 22px 8px; font: 600 9.5px/1 var(--sans); text-transform: uppercase; letter-spacing: .18em; color: var(--ink-4); }
+  .navlink { display: flex; align-items: center; gap: 9px; padding: 8px 22px; color: var(--ink-2); font-size: 13px; border-left: 2px solid transparent; transition: color .12s, background .12s; }
+  .navlink:hover { color: var(--ink); background: color-mix(in srgb, var(--surface-2) 55%, transparent); text-decoration: none; }
+  .navlink.on { color: var(--ink); background: color-mix(in srgb, var(--surface-2) 70%, transparent); border-left-color: var(--accent); font-weight: 500; }
+  .navlink.home { font-weight: 500; }
+  .navlink .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .navlink .badge { margin-left: auto; flex: none; min-width: 19px; text-align: center; font: 600 10.5px/1.5 var(--mono); color: var(--s-await); background: color-mix(in srgb, var(--s-await) 13%, transparent); border-radius: 9px; padding: 1px 6px; }
+  .navlink .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); }
+  .navlink .dot.live { background: var(--s-progress); box-shadow: 0 0 0 0 color-mix(in srgb, var(--s-progress) 55%, transparent); animation: beat 2.4s infinite; }
+  @keyframes beat { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--s-progress) 45%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  #side .foot { margin-top: auto; padding: 14px 22px; border-top: 1px solid var(--rule); font: 10.5px var(--mono); color: var(--ink-4); display: flex; align-items: center; gap: 7px; }
+  #side .foot::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--s-good); flex: none; }
+
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #topbar { display: flex; align-items: center; gap: 10px; padding: 0 26px; height: 54px; flex: none; background: color-mix(in srgb, var(--paper) 86%, transparent); border-bottom: 1px solid var(--rule); backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 5; }
+  .crumbs { display: flex; align-items: center; gap: 9px; font-size: 13px; min-width: 0; }
+  .crumbs .sep { color: var(--ink-4); }
+  .crumbs a { color: var(--ink-3); }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs .here { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sync { margin-left: auto; display: flex; align-items: center; gap: 7px; color: var(--ink-3); font: 11px var(--mono); text-transform: lowercase; letter-spacing: .04em; }
+  #sync .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--s-good); }
+  #sync.err .dot { background: var(--s-block); }
+  #sync.err { color: var(--s-block); }
+  #screen { flex: 1; overflow-y: auto; padding: 30px 26px 72px; }
+  .page { max-width: 1180px; }
+  #screen.enter .page { animation: rise .34s cubic-bezier(.22,.61,.36,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  #error { display: none; padding: 11px 15px; background: color-mix(in srgb, var(--s-block) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--s-block) 40%, transparent); border-radius: 9px; margin-bottom: 18px; color: var(--s-block); font-size: 13px; }
+
+  /* ── shared ────────────────────────────────────────────── */
+  section { margin-bottom: 34px; }
+  h2 { display: flex; align-items: center; gap: 9px; font: 600 10.5px/1 var(--sans); text-transform: uppercase; letter-spacing: .16em; color: var(--ink-3); margin-bottom: 13px; }
+  h2::before { content: ""; width: 5px; height: 5px; background: var(--accent); flex: none; transform: rotate(45deg); }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 13px; box-shadow: var(--shadow); overflow: hidden; }
+
+  /* ledger stat strip */
+  .kpis { display: flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--rule); border-radius: 13px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 30px; }
+  .kpi { flex: 1 1 168px; padding: 18px 22px; border-left: 1px solid var(--rule); }
+  .kpi:first-child { border-left: none; }
+  .kpi .l { font: 600 10px/1 var(--sans); text-transform: uppercase; letter-spacing: .15em; color: var(--ink-3); }
+  .kpi .v { font: 400 30px/1.05 var(--serif); letter-spacing: .01em; color: var(--ink); margin-top: 9px; font-variant-numeric: tabular-nums; }
+  .kpi .v small { font: 400 15px var(--serif); color: var(--ink-3); }
+  .kpi .sub { font: 11.5px var(--mono); color: var(--ink-3); margin-top: 5px; }
+
+  /* status tag: dot + label, tinted */
+  .tag { display: inline-flex; align-items: center; gap: 6px; font: 11px/1 var(--sans); letter-spacing: .02em; color: var(--ink-2); background: var(--surface-2); padding: 4px 9px 4px 8px; border-radius: 6px; white-space: nowrap; }
+  .tag i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); flex: none; }
+  .tag.in-progress { color: var(--s-progress); background: color-mix(in srgb, var(--s-progress) 10%, var(--surface)); }
+  .tag.awaiting-review, .tag.ask { color: var(--s-await); background: color-mix(in srgb, var(--s-await) 11%, var(--surface)); }
+  .tag.blocked, .tag.fail, .tag.deny { color: var(--s-block); background: color-mix(in srgb, var(--s-block) 10%, var(--surface)); }
+  .tag.pass, .tag.done, .tag.shipped { color: var(--s-good); background: color-mix(in srgb, var(--s-good) 11%, var(--surface)); }
+  .tag.pending, .tag.auto { color: var(--ink-3); }
+  .tag.in-progress i, .tag.awaiting-review i, .tag.ask i, .tag.blocked i, .tag.fail i,
+  .tag.deny i, .tag.pass i, .tag.done i, .tag.shipped i { background: currentColor; }
+
+  /* tables */
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--border); font-weight: 500; }
-  td { padding: 9px 16px; border-bottom: 1px solid var(--border); }
+  th { text-align: left; font: 600 10px/1 var(--sans); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-3); padding: 11px 16px; border-bottom: 1px solid var(--rule); }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
   tr:last-child td { border-bottom: none; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: #1b2230; }
-  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  td.mono { font-family: var(--mono); font-size: 12.5px; }
-  .dim td { opacity: .55; } /* shipped/done rows recede; live work stands forward */
-  .chip { display: inline-block; padding: 1px 9px; border-radius: 20px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
-  .chip.awaiting-review { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); background: color-mix(in srgb, var(--amber) 10%, transparent); }
-  .chip.blocked, .chip.fail { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); }
-  .chip.pass, .chip.done, .chip.shipped { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
-  .chip.in-progress { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 45%, transparent); }
-  .queue-row { display: flex; align-items: center; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
-  .queue-row:hover { background: #1b2230; }
-  .queue-row:last-child { border-bottom: none; }
-  .queue-row .ticket { font-family: var(--mono); font-size: 13px; }
-  .queue-row .proj { color: var(--muted); font-size: 12.5px; }
-  .queue-row .age { margin-left: auto; color: var(--muted); font-size: 12px; font-family: var(--mono); }
-  .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
-  .empty code { font-family: var(--mono); background: var(--panel); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; }
-  #error { display: none; padding: 10px 16px; background: color-mix(in srgb, var(--red) 12%, transparent); border: 1px solid var(--red); border-radius: 8px; margin-bottom: 16px; color: var(--red); font-size: 13px; }
-  /* run detail drawer */
-  #drawer { position: fixed; top: 0; right: -560px; width: 560px; max-width: 92vw; height: 100vh; background: var(--panel); border-left: 1px solid var(--border); transition: right .18s ease; overflow-y: auto; z-index: 10; }
-  #drawer.open { right: 0; }
-  #drawer .head { position: sticky; top: 0; background: var(--panel); display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-  #drawer .head .close { margin-left: auto; cursor: pointer; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; background: none; font-size: 13px; }
-  #drawer .head .close:hover { color: var(--text); }
-  #drawer .body { padding: 16px 18px 40px; }
-  #drawer h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 18px 0 8px; }
-  #drawer pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; font-family: var(--mono); }
-  .timeline { border-left: 2px solid var(--border); margin-left: 6px; padding-left: 16px; }
-  .tl-item { position: relative; padding: 3px 0 10px; font-size: 12.5px; }
-  .tl-item::before { content: ""; position: absolute; left: -21.5px; top: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .tl-item.gate::before { background: var(--amber); }
-  .tl-item.verify-pass::before { background: var(--green); }
-  .tl-item.verify-fail::before { background: var(--red); }
-  .tl-item .t { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-right: 8px; }
-  .tl-item .s { color: var(--muted); font-family: var(--mono); font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 9; }
-  #overlay.open { display: block; }
-  .loading { color: var(--muted); padding: 24px; text-align: center; }
+  tbody tr.rowlink { cursor: pointer; transition: background .1s; }
+  tbody tr.rowlink:hover { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  td.mono { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; color: var(--ink-2); }
+  .tscroll { overflow-x: auto; }
+  td.trunc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dim td { opacity: .5; }
+
+  .lev { display: inline-flex; align-items: center; gap: 8px; }
+  .lev .bar { width: 60px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .lev .bar i { display: block; height: 100%; background: var(--s-good); }
+  .lev .n { font: 600 12px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  .empty { padding: 34px 20px; text-align: center; color: var(--ink-3); font: italic 15px/1.6 var(--serif); }
+  .empty code { font-style: normal; font-size: 12.5px; }
+  .skel { padding: 30px 20px; text-align: center; color: var(--ink-4); font-size: 12.5px; }
+
+  .filters { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+  .fchip { cursor: pointer; background: none; font: 12px var(--sans); padding: 4px 12px; border-radius: 7px; border: 1px solid var(--rule-2); color: var(--ink-2); transition: all .12s; }
+  .fchip:hover { color: var(--ink); border-color: var(--ink-4); }
+  .fchip.on { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+  .filters input { margin-left: auto; background: var(--inset); color: var(--ink); border: 1px solid var(--rule-2); border-radius: 7px; padding: 5px 11px; font: 12.5px var(--sans); width: 200px; }
+  .filters input::placeholder { color: var(--ink-4); }
+  .filters input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+
+  /* ── overview project cards ────────────────────────────── */
+  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .pcard { background: var(--surface); border: 1px solid var(--rule); border-radius: 13px; box-shadow: var(--shadow); padding: 18px 20px; cursor: pointer; display: block; color: inherit; transition: transform .14s, box-shadow .14s, border-color .14s; }
+  .pcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); border-color: var(--rule-2); text-decoration: none; }
+  .pcard .top { display: flex; align-items: baseline; gap: 10px; }
+  .pcard .name { font: 500 17px/1.2 var(--serif); color: var(--ink); }
+  .pcard .age { margin-left: auto; color: var(--ink-4); font: 11px var(--mono); }
+  .pcard .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .pcard .tok { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); color: var(--ink-3); font: 11.5px var(--mono); }
+  .pcard .active { color: var(--s-progress); font: 12px var(--mono); }
+
+  /* ── decision queue ────────────────────────────────────── */
+  .qrow { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-bottom: 1px solid var(--rule); cursor: pointer; transition: background .1s; }
+  .qrow:hover { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+  .qrow:last-child { border-bottom: none; }
+  .qrow .ticket { font: 13px var(--mono); color: var(--ink); }
+  .qrow .proj { color: var(--ink-3); font-size: 12.5px; }
+  .qrow .age { margin-left: auto; color: var(--ink-4); font: 11.5px var(--mono); }
+
+  /* ── project screen ────────────────────────────────────── */
+  .phead { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+  .phead h1 { font: 500 27px/1.1 var(--serif); letter-spacing: .01em; }
+  .phead .repo { color: var(--ink-4); font: 11.5px var(--mono); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .phead .active { color: var(--s-progress); font: 12.5px var(--mono); }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } #side { width: 200px; } }
+  details.mem { border-bottom: 1px solid var(--rule); }
+  details.mem:last-child { border-bottom: none; }
+  details.mem summary { cursor: pointer; padding: 13px 16px; font-size: 13px; color: var(--ink-2); list-style: none; display: flex; align-items: center; gap: 9px; }
+  details.mem summary::-webkit-details-marker { display: none; }
+  details.mem summary::before { content: "›"; color: var(--ink-4); font-size: 15px; transition: transform .14s; display: inline-block; }
+  details.mem[open] summary::before { transform: rotate(90deg); }
+  details.mem summary:hover { color: var(--ink); }
+  details.mem summary .cnt { margin-left: auto; color: var(--ink-4); font: 11px var(--mono); }
+  details.mem .inner { padding: 0 18px 16px 26px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--ink-3); }
+  .kv .v { font-family: var(--mono); font-size: 12px; color: var(--ink-2); text-align: right; }
+  .spark { display: block; }
+  .spark-wrap { margin-top: 8px; }
+
+  /* ── run screen ────────────────────────────────────────── */
+  .rhead { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; margin-bottom: 9px; }
+  .rhead h1 { font: 500 22px var(--mono); letter-spacing: -.01em; color: var(--ink); }
+  .rmeta { color: var(--ink-3); font-size: 12.5px; margin-bottom: 22px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .rmeta > span { display: inline-flex; gap: 6px; }
+  .rmeta b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
+  .path { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-4); font: 11.5px var(--mono); max-width: 100%; }
+  .path .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 460px; direction: rtl; }
+  .path button { visibility: hidden; cursor: pointer; background: none; border: 1px solid var(--rule-2); color: var(--ink-3); border-radius: 5px; font: 10.5px var(--sans); padding: 1px 7px; }
+  .path:hover button { visibility: visible; }
+  .path button:hover { color: var(--ink); border-color: var(--ink-4); }
+
+  /* pipeline stage strip */
+  .stages { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 0; margin: 6px 0 26px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--rule); border-radius: 13px; box-shadow: var(--shadow); }
+  .stage { display: flex; align-items: center; }
+  .stage .dot { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--rule-2); background: var(--surface); flex: none; z-index: 1; }
+  .stage.done .dot { background: var(--s-good); border-color: var(--s-good); }
+  .stage.now .dot { border-color: var(--s-progress); background: color-mix(in srgb, var(--s-progress) 35%, var(--surface)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--s-progress) 15%, transparent); }
+  .stage.fail .dot { background: var(--s-block); border-color: var(--s-block); }
+  .stage .lbl { margin: 0 8px; font: 600 10.5px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em; color: var(--ink-4); }
+  .stage.done .lbl, .stage.now .lbl { color: var(--ink); }
+  .stage.fail .lbl { color: var(--s-block); }
+  .stage .link { width: 42px; height: 2px; background: var(--rule-2); }
+  .stage.done .link { background: color-mix(in srgb, var(--s-good) 60%, var(--rule)); }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); margin-bottom: 18px; flex-wrap: wrap; }
+  .tab { cursor: pointer; background: none; border: none; border-bottom: 2px solid transparent; color: var(--ink-3); font: 13px var(--sans); padding: 9px 14px; margin-bottom: -1px; transition: color .12s; }
+  .tab:hover { color: var(--ink); }
+  .tab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 500; }
+  .tab .n { color: var(--ink-4); font: 10.5px var(--mono); margin-left: 6px; }
+  .doc { background: var(--surface); border: 1px solid var(--rule); border-radius: 13px; box-shadow: var(--shadow); padding: 22px 26px; max-width: 880px; }
+
+  /* rendered markdown */
+  .md { color: var(--ink-2); font-size: 13.5px; }
+  .md h3 { font: 600 17px/1.3 var(--serif); color: var(--ink); margin: 18px 0 8px; } .md h3:first-child { margin-top: 0; }
+  .md h4 { font: 600 14.5px var(--serif); color: var(--ink); margin: 15px 0 6px; }
+  .md h5, .md h6 { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: .1em; color: var(--ink-3); margin: 15px 0 6px; }
+  .md p { margin: 8px 0; } .md ul, .md ol { margin: 8px 0 8px 22px; } .md li { margin: 3px 0; }
+  .md b { color: var(--ink); font-weight: 600; }
+  .md li.task { list-style: none; margin-left: -20px; }
+  .md pre.codeblock { background: var(--inset); border: 1px solid var(--rule); border-radius: 9px; padding: 12px 14px; font: 12px/1.6 var(--mono); color: var(--ink); overflow-x: auto; margin: 10px 0; white-space: pre; }
+  .md hr { border: none; border-top: 1px solid var(--rule); margin: 16px 0; }
+  .md blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--ink-3); margin: 8px 0; font-style: italic; }
+  .md .tablewrap { overflow-x: auto; margin: 10px 0; }
+  .md table { border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+  .md td, .md th { padding: 7px 12px; font-size: 12.5px; border-bottom: 1px solid var(--rule); }
+  .md tr:first-child td { color: var(--ink-3); font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: .06em; background: var(--inset); }
+
+  /* audit timeline */
+  .timeline { border-left: 2px solid var(--rule); margin: 8px 0 0 8px; padding-left: 20px; }
+  .tl-item { position: relative; padding: 3px 0 14px; font-size: 12.5px; color: var(--ink); }
+  .tl-item::before { content: ""; position: absolute; left: -26px; top: 7px; width: 9px; height: 9px; border-radius: 50%; background: var(--ink-4); border: 2px solid var(--paper); box-sizing: content-box; }
+  .tl-item.gate-ask::before { background: var(--s-await); }
+  .tl-item.gate-deny::before { background: var(--s-block); }
+  .tl-item.verify-pass::before { background: var(--s-good); }
+  .tl-item.verify-fail::before { background: var(--s-block); }
+  .tl-item.lifecycle::before { background: var(--s-life); }
+  .tl-item .t { color: var(--ink-4); font: 11px var(--mono); margin-right: 9px; }
+  .tl-item .s { color: var(--ink-3); font: 11.5px var(--mono); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 720px; margin-top: 2px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>AOS CONSOLE</h1>
-  <div class="kpis" id="kpis"></div>
-</header>
-<main>
-  <div id="error"></div>
-  <div id="app"><div class="loading">Loading…</div></div>
-</main>
-<div id="overlay" onclick="closeDrawer()"></div>
-<aside id="drawer" aria-label="Run detail"></aside>
+<div id="shell">
+  <nav id="side" aria-label="Projects"></nav>
+  <div id="main">
+    <div id="topbar">
+      <div class="crumbs" id="crumbs"></div>
+      <div id="sync" title="The console polls the local AOS API every 5s (pauses when this tab is hidden)"><span class="dot"></span><span id="synct">live</span></div>
+    </div>
+    <div id="screen"><div id="error"></div><div class="skel">Loading…</div></div>
+  </div>
+</div>
 <script>
+'use strict';
 const $ = (s) => document.querySelector(s);
-let state = null;
+let state = null;                    // /api/state payload
+const projCache = new Map();         // id -> /api/project payload
+const runCache = new Map();          // id/run -> /api/run payload
+const ui = { runFilter: 'open', runSearch: '', runTab: null, auditFilter: 'all' };
+let lastSync = 0, lastKey = '', drawnNav = '';
 
+/* ── helpers ─────────────────────────────────────────────── */
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function fmtTok(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(n); }
+function fmtTok(n) { n = n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(n); }
+function shortRun(id) { return String(id).replace(/^\d{4}-\d{2}-\d{2}-/, ''); }
 function rel(ts) {
   const s = (Date.now() - new Date(ts).getTime()) / 1000;
   if (isNaN(s)) return '';
   if (s < 90) return 'now';
-  if (s < 3600) return Math.round(s/60) + 'm';
-  if (s < 86400) return Math.round(s/3600) + 'h';
-  return Math.round(s/86400) + 'd';
+  if (s < 3600) return Math.round(s/60) + 'm ago';
+  if (s < 86400) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
 }
 const STATE_TIP = {
   'in-progress': 'Agent is working', 'blocked': 'Agent stopped — needs your input',
-  'awaiting-review': 'Done and verified — waiting for your review', 'done': 'Reviewed', 'shipped': 'Shipped'
+  'awaiting-review': 'Done and verified — waiting for your review', 'done': 'Reviewed', 'shipped': 'Shipped',
 };
+const VERIFY_TIP = { pass: 'All required contracts passed', fail: 'A required contract failed', pending: 'Not verified yet' };
+function chip(val, tip) { return `<span class="tag ${esc(val)}" title="${esc(tip || '')}"><i></i>${esc(val)}</span>`; }
+function leverage(v) {
+  if (v === null || v === undefined) return '<span class="tag pending" title="No finished runs yet"><i></i>no data</span>';
+  return `<span class="lev" title="Share of finished runs that passed verification on the first attempt"><span class="bar"><i style="width:${v}%"></i></span><span class="n">${v}%</span></span>`;
+}
+function needsYou(p) { return p.runs.filter(r => r.state === 'awaiting-review' || r.state === 'blocked').length; }
+function lastActivity(p) { return p.runs.length ? p.runs[0].updated : null; }
 
-function render() {
-  const projects = state.projects || [];
-  const queue = projects.flatMap(p => p.runs.filter(r => r.state === 'awaiting-review' || r.state === 'blocked').map(r => ({...r, project: p})));
-  const totals = {
-    projects: projects.length,
-    queue: queue.length,
-    tokens: projects.reduce((a,p) => a + p.tokens.input + p.tokens.output, 0),
-  };
-  $('#kpis').innerHTML =
-    `<span><b>${totals.projects}</b> projects</span>` +
-    `<span title="Runs blocked or awaiting your review"><b>${totals.queue}</b> need you</span>` +
-    `<span title="Total tokens across all sessions"><b>${fmtTok(totals.tokens)}</b> tokens</span>`;
-
-  if (!projects.length) {
-    $('#app').innerHTML = `<div class="card"><div class="empty">No projects yet.<br>Run <code>aos init</code> inside a repo to register one.</div></div>`;
-    return;
+/* Minimal, safe markdown: escape first, then transform. No raw HTML passes through. */
+function md(src) {
+  if (!src) return '';
+  const fences = [];
+  let s = String(src).replace(/\r/g, '').replace(/```\w*\n?([\s\S]*?)```/g, (m, code) => {
+    fences.push(code.replace(/\n$/, ''));
+    return ` ${fences.length - 1} `;
+  });
+  s = esc(s);
+  const out = [];
+  let list = null, table = false, para = [];
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const closeTable = () => { if (table) { out.push('</table></div>'); table = false; } };
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.join(' ')}</p>`); para = []; } };
+  const inline = (t) => t
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  for (const raw of s.split('\n')) {
+    const t = raw.trim();
+    const fence = t.match(/^ (\d+) $/);
+    if (fence) { flushPara(); closeList(); closeTable(); out.push(`<pre class="codeblock">${esc(fences[+fence[1]])}</pre>`); continue; }
+    if (/^\|.*\|$/.test(t)) {
+      flushPara(); closeList();
+      const cells = t.slice(1, -1).split('|').map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+      if (!table) { out.push('<div class="tablewrap"><table>'); table = true; }
+      out.push('<tr>' + cells.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>');
+      continue;
+    }
+    closeTable();
+    if (!t) { flushPara(); closeList(); continue; }
+    const h = t.match(/^(#{1,4})\s+(.*)/);
+    if (h) { flushPara(); closeList(); const lvl = h[1].length + 2; out.push(`<h${lvl}>${inline(h[2])}</h${lvl}>`); continue; }
+    if (/^---+$/.test(t)) { flushPara(); closeList(); out.push('<hr>'); continue; }
+    if (t.startsWith('&gt;')) { flushPara(); closeList(); out.push(`<blockquote>${inline(t.slice(4).trim())}</blockquote>`); continue; }
+    const cb = t.match(/^[-*]\s+\[( |x|X)\]\s+(.*)/);
+    if (cb) {
+      flushPara();
+      if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+      out.push(`<li class="task">${cb[1] === ' ' ? '☐' : '☑'} ${inline(cb[2])}</li>`);
+      continue;
+    }
+    const li = t.match(/^[-*]\s+(.*)/);
+    if (li) { flushPara(); if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(li[1])}</li>`); continue; }
+    const ol = t.match(/^\d+[.)]\s+(.*)/);
+    if (ol) { flushPara(); if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(ol[1])}</li>`); continue; }
+    closeList();
+    para.push(inline(t));
   }
+  flushPara(); closeList(); closeTable();
+  return `<div class="md">${out.join('')}</div>`;
+}
 
+function spark(sessions) {
+  const vals = (sessions || []).map(s => (s.input_tokens || 0) + (s.output_tokens || 0));
+  if (vals.length < 2) return '<span class="tag pending" title="Needs at least two recorded sessions"><i></i>no trend yet</span>';
+  const w = 168, h = 40, max = Math.max(...vals, 1), n = vals.length - 1;
+  const xy = vals.map((v, i) => [(i / n * w), (h - 4 - (v / max) * (h - 12))]);
+  const line = xy.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  const area = `${line} ${w},${h} 0,${h}`;
+  return `<div class="spark-wrap"><svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Tokens per session">
+    <polygon points="${area}" fill="color-mix(in srgb, var(--s-progress) 12%, transparent)"/>
+    <polyline points="${line}" fill="none" stroke="var(--s-progress)" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="${xy[xy.length-1][0].toFixed(1)}" cy="${xy[xy.length-1][1].toFixed(1)}" r="2.5" fill="var(--s-progress)"/>
+  </svg></div>`;
+}
+
+/* ── routing ─────────────────────────────────────────────── */
+function route() {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === 'p' && parts[1] && parts[2] === 'r' && parts[3]) return { screen: 'run', id: parts[1], run: parts[3] };
+  if (parts[0] === 'p' && parts[1]) return { screen: 'project', id: parts[1] };
+  return { screen: 'overview' };
+}
+function go(hash) { location.hash = hash; }
+window.addEventListener('hashchange', () => { lastKey = ''; draw(); loadDetails(true); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const r = route();
+  if (r.screen === 'run') go(`#/p/${encodeURIComponent(r.id)}`);
+  else if (r.screen === 'project') go('#/');
+});
+
+/* ── data ────────────────────────────────────────────────── */
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('API ' + res.status);
+  return res.json();
+}
+async function refresh() {
+  try {
+    state = await getJSON('/api/state');
+    lastSync = Date.now();
+    $('#sync').classList.remove('err');
+    await loadDetails(false);
+    draw();
+  } catch (e) {
+    $('#sync').classList.add('err');
+    const err = $('#error');
+    if (err) { err.textContent = 'Console cannot reach the AOS API: ' + e.message; err.style.display = 'block'; }
+  }
+}
+async function loadDetails(force) {
+  const r = route();
+  try {
+    if (r.screen === 'project' || r.screen === 'run') {
+      if (force || !projCache.has(r.id) || r.screen === 'project') {
+        const d = await getJSON(`/api/project?project=${encodeURIComponent(r.id)}`);
+        if (d) projCache.set(r.id, d);
+      }
+    }
+    if (r.screen === 'run') {
+      const d = await getJSON(`/api/run?project=${encodeURIComponent(r.id)}&run=${encodeURIComponent(r.run)}`);
+      runCache.set(`${r.id}/${r.run}`, d || { error: true });
+    }
+  } catch { /* screen renders its own not-found state */ }
+  draw();
+}
+
+/* ── rendering ───────────────────────────────────────────── */
+function draw() {
+  if (!state) return;
+  const r = route();
+  drawSide(r);
+  drawCrumbs(r);
+  $('#synct').textContent = lastSync ? 'live' : '…';
+  // Don't yank the DOM out from under someone typing in a filter box.
+  if (document.activeElement && document.activeElement.tagName === 'INPUT' && $('#screen').contains(document.activeElement)) return;
+  const html = r.screen === 'project' ? renderProject(r) : r.screen === 'run' ? renderRun(r) : renderOverview();
+  const key = r.screen + '|' + JSON.stringify([html.length, ui]);
+  if (key === lastKey && $('#screen').dataset.drawn) return; // cheap change guard: same route, same content size, same ui state
+  lastKey = key;
+  $('#screen').innerHTML = `<div id="error"></div><div class="page">` + html + `</div>`;
+  $('#screen').dataset.drawn = '1';
+  // Play the entrance reveal only on navigation, not on live data refresh.
+  const navKey = r.screen + '|' + (r.id || '') + '|' + (r.run || '');
+  if (navKey !== drawnNav) {
+    const el = $('#screen');
+    el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter');
+    drawnNav = navKey;
+  }
+}
+
+function drawSide(r) {
+  const projects = state.projects || [];
+  let html = `<div class="brand"><b>AOS</b><span>Operations Console</span></div>`;
+  html += `<a class="navlink home ${r.screen === 'overview' ? 'on' : ''}" href="#/">Overview</a>`;
+  html += `<div class="navhead">Projects</div>`;
+  for (const p of projects) {
+    const n = needsYou(p);
+    const on = r.screen !== 'overview' && r.id === p.id;
+    html += `<a class="navlink ${on ? 'on' : ''}" href="#/p/${encodeURIComponent(p.id)}" title="${esc(p.name)}">
+      <span class="dot ${p.activeRun ? 'live' : ''}" title="${p.activeRun ? 'Active run in progress' : 'Idle'}"></span>
+      <span class="nm">${esc(p.name)}</span>
+      ${n ? `<span class="badge" title="${n} run(s) need you">${n}</span>` : ''}
+    </a>`;
+  }
+  if (!projects.length) html += `<div class="empty" style="font-size:12.5px;padding:20px">No projects yet</div>`;
+  html += `<div class="foot">read-only · 127.0.0.1</div>`;
+  $('#side').innerHTML = html;
+}
+
+function drawCrumbs(r) {
+  const link = (href, txt) => `<a href="${href}">${esc(txt)}</a>`;
   let html = '';
-  html += `<section><h2 title="Everything that is blocked on a human decision">Decision queue</h2><div class="card">`;
-  if (!queue.length) {
-    html += `<div class="empty">Nothing needs you. ✨</div>`;
+  if (r.screen === 'overview') html = `<span class="here">Overview</span>`;
+  else if (r.screen === 'project') html = `${link('#/', 'Overview')}<span class="sep">/</span><span class="here">${esc(r.id)}</span>`;
+  else html = `${link('#/', 'Overview')}<span class="sep">/</span>${link('#/p/' + encodeURIComponent(r.id), r.id)}<span class="sep">/</span><span class="here">${esc(r.run)}</span>`;
+  $('#crumbs').innerHTML = html;
+}
+
+function renderOverview() {
+  const projects = state.projects || [];
+  if (!projects.length) {
+    return `<div class="card"><div class="empty">No projects yet.<br>Run <code>aos init</code> inside a repo to register one.</div></div>`;
+  }
+  const queue = projects.flatMap(p => p.runs
+    .filter(x => x.state === 'awaiting-review' || x.state === 'blocked')
+    .map(x => ({ ...x, project: p })));
+  queue.sort((a, b) => (a.updated < b.updated ? 1 : -1));
+  const active = projects.filter(p => p.activeRun).length;
+  const tok = projects.reduce((a, p) => ({ i: a.i + p.tokens.input, o: a.o + p.tokens.output, c: a.c + (p.tokens.cache_read || 0) }), { i: 0, o: 0, c: 0 });
+
+  let html = `<div class="kpis">
+    <div class="kpi"><div class="l">Projects</div><div class="v">${projects.length}</div></div>
+    <div class="kpi" title="Runs blocked or awaiting your review"><div class="l">Need you</div><div class="v" style="color:${queue.length ? 'var(--s-await)' : 'var(--s-good)'}">${queue.length}</div></div>
+    <div class="kpi" title="Projects with a run in progress"><div class="l">Active runs</div><div class="v">${active}</div></div>
+    <div class="kpi" title="Fresh input + output across all sessions (cache reads shown separately — they cost ~10% of fresh tokens)"><div class="l">Tokens</div><div class="v">${fmtTok(tok.i + tok.o)}</div><div class="sub">${fmtTok(tok.i)} in · ${fmtTok(tok.o)} out${tok.c ? ` · ${fmtTok(tok.c)} cached` : ''}</div></div>
+  </div>`;
+
+  html += `<section><h2 title="Everything blocked on a human decision, newest first">Decision queue</h2><div class="card">`;
+  html += queue.length
+    ? queue.map(q => `<div class="qrow" onclick="go('#/p/${encodeURIComponent(q.project.id)}/r/${encodeURIComponent(q.run)}')">
+        ${chip(q.state, STATE_TIP[q.state])}
+        <span class="ticket">${esc(q.ticket || q.run)}</span>
+        <span class="proj">${esc(q.project.name)}</span>
+        <span class="age" title="${esc(q.updated)}">${rel(q.updated)}</span>
+      </div>`).join('')
+    : `<div class="empty">Nothing needs you.</div>`;
+  html += `</div></section>`;
+
+  html += `<section><h2>Projects</h2><div class="pgrid">`;
+  for (const p of projects) {
+    const counts = Object.entries(p.counts).map(([k, v]) => `<span class="tag ${esc(k)}" title="${esc(STATE_TIP[k] || '')}"><i></i>${v} ${esc(k)}</span>`).join(' ');
+    const last = lastActivity(p);
+    html += `<a class="pcard" href="#/p/${encodeURIComponent(p.id)}">
+      <div class="top"><span class="name">${esc(p.name)}</span><span class="age" title="${esc(last || '')}">${last ? rel(last) : ''}</span></div>
+      <div class="row">${leverage(p.leverage)}${p.activeRun ? `<span class="active">● ${esc(p.activeRun)}</span>` : ''}</div>
+      <div class="row">${counts || '<span class="tag pending"><i></i>no runs</span>'}</div>
+      <div class="tok" title="Fresh input · output tokens across sessions">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out</div>
+    </a>`;
+  }
+  html += `</div></section>`;
+  return html;
+}
+
+function renderProject(r) {
+  const p = (state.projects || []).find(x => x.id === r.id);
+  if (!p) return `<div class="card"><div class="empty">Unknown project “${esc(r.id)}”.</div></div>`;
+  const d = projCache.get(r.id); // may be undefined while loading
+  const open = p.runs.filter(x => ['in-progress', 'blocked', 'awaiting-review'].includes(x.state));
+
+  let html = `<div class="phead"><h1>${esc(p.name)}</h1>
+    <span class="repo" title="${esc((p.repos || []).join('\n'))}">${esc((p.repos || [])[0] || '')}</span>
+    ${p.activeRun ? `<a class="active" href="#/p/${encodeURIComponent(p.id)}/r/${encodeURIComponent(p.activeRun)}">● active: ${esc(p.activeRun)}</a>` : ''}
+  </div>`;
+
+  html += `<div class="kpis">
+    <div class="kpi"><div class="l">Leverage</div><div class="v">${p.leverage === null ? '<small>no finished runs</small>' : p.leverage + '<small>%</small>'}</div><div class="sub">clean-first-pass rate</div></div>
+    <div class="kpi"><div class="l">Runs</div><div class="v">${p.runs.length}</div><div class="sub">${open.length} open</div></div>
+    <div class="kpi" title="Fresh input + output; cache reads listed separately"><div class="l">Tokens</div><div class="v">${fmtTok(p.tokens.input + p.tokens.output)}</div><div class="sub">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out${p.tokens.cache_read ? ` · ${fmtTok(p.tokens.cache_read)} cached` : ''}</div></div>
+    <div class="kpi"><div class="l">Tokens / session</div>${spark(d && d.sessions)}</div>
+  </div>`;
+
+  // runs table with filters
+  const filters = [['open', 'Open'], ['all', 'All'], ['awaiting-review', 'Awaiting review'], ['blocked', 'Blocked'], ['done', 'Done'], ['shipped', 'Shipped']];
+  const q = ui.runSearch.toLowerCase();
+  let runs = p.runs;
+  if (ui.runFilter === 'open') runs = open;
+  else if (ui.runFilter !== 'all') runs = runs.filter(x => x.state === ui.runFilter);
+  if (q) runs = runs.filter(x => `${x.run} ${x.ticket || ''} ${x.title || ''}`.toLowerCase().includes(q));
+
+  html += `<section><h2>Runs</h2><div class="card">
+    <div class="filters">
+      ${filters.map(([k, l]) => `<button class="fchip ${ui.runFilter === k ? 'on' : ''}" onclick="ui.runFilter='${k}';lastKey='';draw()">${l}</button>`).join('')}
+      <input type="search" placeholder="Filter by ticket or run id…" value="${esc(ui.runSearch)}"
+        oninput="ui.runSearch=this.value" onchange="lastKey='';draw()" onsearch="lastKey='';draw()">
+    </div>`;
+  if (!p.runs.length) {
+    html += `<div class="empty">No runs yet — start one with <code>/aos-ticket</code> in Claude Code,<br>or <code>aos run start --ticket "…"</code> from a terminal.</div>`;
+  } else if (!runs.length) {
+    html += `<div class="empty">No runs match this filter.</div>`;
   } else {
-    for (const r of queue) {
-      html += `<div class="queue-row" onclick="openRun('${esc(r.project.id)}','${esc(r.run)}')">
-        <span class="chip ${esc(r.state)}" title="${esc(STATE_TIP[r.state]||'')}">${esc(r.state)}</span>
-        <span class="ticket">${esc(r.ticket || r.run)}</span>
-        <span class="proj">${esc(r.project.name)}</span>
-        <span class="age" title="Last update">${rel(r.updated)}</span>
-      </div>`;
+    html += `<div class="tscroll"><table><thead><tr>
+      <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
+      <th class="num" title="Verification attempts before pass">Att.</th>
+      <th class="num" title="Fresh input + output tokens attributed to this run">Tokens</th><th class="num">Updated</th>
+    </tr></thead><tbody>`;
+    for (const x of runs) {
+      const dim = ['done', 'shipped'].includes(x.state) ? ' dim' : '';
+      html += `<tr class="rowlink${dim}" onclick="go('#/p/${encodeURIComponent(p.id)}/r/${encodeURIComponent(x.run)}')">
+        <td class="mono" title="${esc(x.run)}">${esc(shortRun(x.run))}</td>
+        <td class="trunc" title="${esc(x.title || x.ticket || '')}">${esc(x.title || x.ticket || '—')}</td>
+        <td>${chip(x.state, STATE_TIP[x.state])}</td>
+        <td>${chip(x.verification, VERIFY_TIP[x.verification])}</td>
+        <td class="num">${x.verification_attempts || 0}</td>
+        <td class="num">${fmtTok((x.tokens?.input || 0) + (x.tokens?.output || 0))}</td>
+        <td class="num" title="${esc(x.updated)}">${rel(x.updated)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+  html += `</div></section>`;
+
+  // memory + policy
+  html += `<div class="cols"><section><h2 title="What every agent session in this project loads">Project memory</h2><div class="card">`;
+  if (!d) html += `<div class="skel">Loading…</div>`;
+  else {
+    const mem = [
+      ['Context pack', d.pack, 'context/pack.md'],
+      ['Decisions', d.decisions, 'context/decisions.md'],
+      ['Learnings', d.learnings, 'learnings.md'],
+    ];
+    html += mem.map(([label, body, file]) => `<details class="mem"><summary>${label}<span class="cnt" title="${esc(file)}">${body ? (body.trim().split('\n').length + ' lines') : 'empty'}</span></summary><div class="inner">${body ? md(body) : `<div class="empty" style="text-align:left;padding:8px 0">Nothing here yet — fill in <code>${esc(file)}</code>.</div>`}</div></details>`).join('');
+    if (d.playbooks && d.playbooks.length) {
+      html += `<details class="mem"><summary>Playbooks<span class="cnt">${d.playbooks.length}</span></summary><div class="inner"><ul class="md">${d.playbooks.map(f => `<li><code>${esc(f)}</code></li>`).join('')}</ul></div></details>`;
     }
   }
   html += `</div></section>`;
 
-  for (const p of projects) {
-    const lev = p.leverage === null ? '—' : p.leverage + '%';
-    html += `<section><div class="card">
-      <div class="project-head">
-        <span class="name">${esc(p.name)}</span>
-        <span class="meta" title="Share of finished runs that passed verification on the first attempt">leverage ${lev}</span>
-        ${p.activeRun ? `<span class="meta" style="color:var(--blue)">● active: ${esc(p.activeRun)}</span>` : ''}
-        <span class="tokens" title="Session tokens in/out">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out</span>
-      </div>`;
-    if (!p.runs.length) {
-      html += `<div class="empty">No runs yet — start one with <code>/aos-ticket</code> in Claude Code.</div>`;
-    } else {
-      html += `<table><thead><tr>
-        <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
-        <th class="num" title="Verification attempts before pass">Attempts</th>
-        <th class="num">Tokens</th><th class="num">Updated</th>
-      </tr></thead><tbody>`;
-      for (const r of p.runs) {
-        const dim = ['done','shipped'].includes(r.state) ? ' class="dim"' : '';
-        html += `<tr${dim} onclick="openRun('${esc(p.id)}','${esc(r.run)}')">
-          <td class="mono">${esc(r.run)}</td>
-          <td>${esc(r.title || r.ticket || '')}</td>
-          <td><span class="chip ${esc(r.state)}" title="${esc(STATE_TIP[r.state]||'')}">${esc(r.state)}</span></td>
-          <td><span class="chip ${esc(r.verification)}">${esc(r.verification)}</span></td>
-          <td class="num">${r.verification_attempts || 0}</td>
-          <td class="num">${fmtTok((r.tokens?.input||0)+(r.tokens?.output||0))}</td>
-          <td class="num" title="${esc(r.updated)}">${rel(r.updated)}</td>
-        </tr>`;
+  html += `<section><h2 title="From policy.yaml — what the hooks enforce">Policy</h2><div class="card">`;
+  if (!d) html += `<div class="skel">Loading…</div>`;
+  else {
+    const pol = d.policy;
+    html += `<div class="kv"><span class="k" title="ask: implementation writes stay gated until aos run approve">plan gate</span><span class="v">${chip(pol.plan_gate === 'ask' ? 'ask' : 'auto')}</span></div>`;
+    html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v">${pol.adversarial_review ? '✓ required' : 'off'}</span></div>`;
+    html += `<div class="kv"><span class="k">rules</span><span class="v">${pol.forbidden} forbidden · ${pol.gated} gated · ${pol.protected_paths} protected</span></div>`;
+    html += `<div class="kv"><span class="k">contracts</span><span class="v">${pol.contracts.length ? pol.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''}`).join(' · ') : 'none configured'}</span></div>`;
+    if (pol.contracts.some(c => c.required)) html += `<div class="kv"><span class="k"></span><span class="v" style="color:var(--ink-4)">* required to pass</span></div>`;
+  }
+  html += `</div></section></div>`;
+  return html;
+}
+
+function stageStrip(d) {
+  const m = d.meta;
+  const finished = ['awaiting-review', 'done', 'shipped'].includes(m.state);
+  const st = [
+    ['Intake', !!d.ticket, false],
+    ['Plan', !!d.plan, false],
+    ['Implement', (d.audit || []).some(a => a.event === 'tool') || finished, false],
+    ['Verify', m.verification === 'pass', m.verification === 'fail'],
+    ['Package', !!d.outcome || finished, false],
+  ];
+  let current = st.findIndex(([, done, fail]) => !done && !fail);
+  if (finished) current = -1;
+  return `<div class="stages" title="Pipeline progress, derived from the run folder">` + st.map(([label, done, fail], i) =>
+    `<span class="stage ${fail ? 'fail' : done ? 'done' : i === current ? 'now' : ''}">${i ? '<span class="link"></span>' : ''}<span class="dot"></span><span class="lbl">${label}</span></span>`
+  ).join('') + `</div>`;
+}
+
+function renderRun(r) {
+  const d = runCache.get(`${r.id}/${r.run}`);
+  if (!d) return `<div class="skel">Loading run…</div>`;
+  if (d.error) return `<div class="card"><div class="empty">Run not found.</div></div>`;
+  const m = d.meta;
+  const dir = d.dir || '';
+
+  const tabs = [
+    ['outcome', 'Outcome', d.outcome],
+    ['verification', 'Verification', d.verification],
+    ['audit', 'Audit', (d.audit || []).length ? 'y' : ''],
+    ['ticket', 'Ticket', d.ticket],
+    ['plan', 'Plan', d.plan],
+  ];
+  if (!ui.runTab || !tabs.find(([k]) => k === ui.runTab)) {
+    ui.runTab = (tabs.find(([, , has]) => has) || tabs[0])[0];
+  }
+
+  let html = `<div class="rhead"><h1>${esc(m.run)}</h1>${chip(m.state, STATE_TIP[m.state])}${chip(m.verification, VERIFY_TIP[m.verification])}`;
+  if (m.plan_gate === 'ask') html += `<span class="tag ${m.plan_approved ? 'pass' : 'ask'}" title="${m.plan_approved ? 'Human approved the plan' : 'Implementation writes are gated until: aos run approve'}"><i></i>plan ${m.plan_approved ? 'approved' : 'awaiting approval'}</span>`;
+  html += `</div>`;
+  html += `<div class="rmeta">
+    ${m.ticket ? `<span>ticket <b>${esc(m.ticket)}</b></span>` : ''}
+    ${m.title ? `<span>${esc(m.title)}</span>` : ''}
+    <span title="Verification attempts">attempts <b>${m.verification_attempts || 0}</b></span>
+    <span title="Fresh input · output tokens attributed to this run${m.tokens?.cache_read ? `, plus ${fmtTok(m.tokens.cache_read)} cache reads` : ''}">tokens <b>${fmtTok(m.tokens?.input || 0)} in · ${fmtTok(m.tokens?.output || 0)} out</b></span>
+    <span title="${esc(m.created || '')}">started <b>${rel(m.created)}</b></span>
+    <span title="${esc(m.updated || '')}">updated <b>${rel(m.updated)}</b></span>
+    ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(dir)}</span><button onclick="navigator.clipboard.writeText('${esc(dir)}');this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy run folder path">copy</button></span>` : ''}
+  </div>`;
+  html += stageStrip(d);
+
+  html += `<div class="tabs">` + tabs.map(([k, label, has]) =>
+    `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="ui.runTab='${k}';lastKey='';draw()">${label}${k === 'audit' ? `<span class="n">${(d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
+  ).join('') + `</div>`;
+
+  if (ui.runTab === 'audit') {
+    const kinds = [['all', 'All'], ['gate', 'Gates'], ['verify', 'Verify'], ['lifecycle', 'Lifecycle']];
+    let audit = [...(d.audit || [])].sort((a, b) => (String(a.ts) < String(b.ts) ? 1 : -1));
+    if (ui.auditFilter === 'gate') audit = audit.filter(a => a.event === 'gate');
+    else if (ui.auditFilter === 'verify') audit = audit.filter(a => a.event === 'verify');
+    else if (ui.auditFilter === 'lifecycle') audit = audit.filter(a => ['run-start', 'run-state', 'plan-approved', 'session-start', 'session-end'].includes(a.event));
+    html += `<div class="filters" style="border:none;padding:0 0 14px">` + kinds.map(([k, l]) =>
+      `<button class="fchip ${ui.auditFilter === k ? 'on' : ''}" onclick="ui.auditFilter='${k}';lastKey='';draw()">${l}</button>`).join('') + `</div>`;
+    if (!audit.length) html += `<div class="empty">No audit entries${ui.auditFilter !== 'all' ? ' for this filter' : ' yet'}.</div>`;
+    else {
+      html += `<div class="timeline">`;
+      for (const a of audit) {
+        const cls = a.event === 'gate' ? `gate-${a.decision || 'ask'}`
+          : a.event === 'verify' ? (a.verdict === 'pass' ? 'verify-pass' : 'verify-fail')
+          : ['run-start', 'run-state', 'plan-approved'].includes(a.event) ? 'lifecycle' : '';
+        const label = a.event === 'tool'
+          ? esc(a.tool)
+          : esc(a.event) + (a.decision ? ` → ${esc(a.decision)}` : '') + (a.verdict ? ` → ${esc(a.verdict)}` : '') + (a.state ? ` → ${esc(a.state)}` : '');
+        const detail = a.summary || a.command || '';
+        html += `<div class="tl-item ${cls}"><span class="t">${esc((a.ts || '').slice(11, 19))}</span>${label}${detail ? `<span class="s" title="${esc(detail)}">${esc(detail)}</span>` : ''}</div>`;
       }
-      html += `</tbody></table>`;
+      html += `</div>`;
     }
-    html += `</div></section>`;
+  } else {
+    const body = d[ui.runTab];
+    const hint = {
+      outcome: 'The agent writes outcome.md at the Package stage — summary, changes, risks, PR draft.',
+      verification: 'aos verify writes contract verdicts here; the skeptic subagent appends its findings.',
+      ticket: 'Intake writes ticket.md — source ticket + acceptance criteria.',
+      plan: 'The Plan stage writes plan.md — approach, files, risks, test strategy.',
+    }[ui.runTab];
+    html += body ? `<div class="doc">${md(body)}</div>` : `<div class="card"><div class="empty">Not written yet.<br><span style="font-size:12.5px">${esc(hint || '')}</span></div></div>`;
   }
-  $('#app').innerHTML = html;
+  return html;
 }
 
-async function refresh() {
-  try {
-    const res = await fetch('/api/state');
-    if (!res.ok) throw new Error('API ' + res.status);
-    state = await res.json();
-    $('#error').style.display = 'none';
-    render();
-  } catch (e) {
-    $('#error').textContent = 'Console cannot reach the AOS API: ' + e.message;
-    $('#error').style.display = 'block';
-  }
-}
-
-async function openRun(projectId, runId) {
-  $('#drawer').innerHTML = `<div class="head"><b>${esc(runId)}</b><button class="close" onclick="closeDrawer()" title="Close (Esc)">✕</button></div><div class="loading">Loading…</div>`;
-  $('#drawer').classList.add('open');
-  $('#overlay').classList.add('open');
-  try {
-    const res = await fetch(`/api/run?project=${encodeURIComponent(projectId)}&run=${encodeURIComponent(runId)}`);
-    const d = await res.json();
-    let body = `<div class="body">`;
-    body += `<span class="chip ${esc(d.meta.state)}">${esc(d.meta.state)}</span> <span class="chip ${esc(d.meta.verification)}">verify: ${esc(d.meta.verification)}</span>`;
-    if (d.outcome) body += `<h3>Outcome</h3><pre>${esc(d.outcome)}</pre>`;
-    if (d.verification) body += `<h3>Verification</h3><pre>${esc(d.verification)}</pre>`;
-    if (d.audit?.length) {
-      body += `<h3>Audit timeline</h3><div class="timeline">`;
-      for (const a of [...d.audit].reverse()) {
-        const cls = a.event === 'gate' ? 'gate' : a.event === 'verify' ? (a.verdict === 'pass' ? 'verify-pass' : 'verify-fail') : '';
-        const label = a.event === 'tool' ? esc(a.tool) : esc(a.event) + (a.decision ? ` → ${esc(a.decision)}` : '') + (a.verdict ? ` → ${esc(a.verdict)}` : '');
-        body += `<div class="tl-item ${cls}"><span class="t">${esc((a.ts||'').slice(11,19))}</span>${label}${a.summary || a.command ? `<span class="s" title="${esc(a.summary || a.command)}">${esc(a.summary || a.command)}</span>` : ''}</div>`;
-      }
-      body += `</div>`;
-    }
-    if (d.ticket) body += `<h3>Ticket</h3><pre>${esc(d.ticket)}</pre>`;
-    if (d.plan) body += `<h3>Plan</h3><pre>${esc(d.plan)}</pre>`;
-    body += `</div>`;
-    $('#drawer').innerHTML = `<div class="head"><b>${esc(runId)}</b><button class="close" onclick="closeDrawer()" title="Close (Esc)">✕</button></div>` + body;
-  } catch (e) {
-    $('#drawer').innerHTML += `<div class="empty">Failed to load run: ${esc(e.message)}</div>`;
-  }
-}
-function closeDrawer() {
-  $('#drawer').classList.remove('open');
-  $('#overlay').classList.remove('open');
-}
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
-
+/* ── boot ────────────────────────────────────────────────── */
 refresh();
-setInterval(refresh, 5000);
+setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 </script>
 </body>
 </html>
