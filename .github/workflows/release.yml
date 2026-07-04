@@ -5,17 +5,20 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: write   # create the GitHub release
+  id-token: write   # npm Trusted Publishing (OIDC) — no token secret needed
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14 — node 24 bundles both.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false  # never use caching in release builds
       - run: npm ci
       - name: verify — source
         run: bash test/smoke.sh
@@ -32,12 +35,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes aos.tgz aos.tgz.sha256
-      - name: publish to npm (skips when NPM_TOKEN secret is not configured)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::notice::NPM_TOKEN secret not set — skipping npm publish. Add it (gh secret set NPM_TOKEN) or publish manually."
-            exit 0
-          fi
-          npm publish
+      - name: publish to npm via Trusted Publishing (OIDC)
+        # Requires the trusted publisher configured on npmjs.com:
+        #   package Settings → Trusted Publisher → GitHub Actions
+        #   owner: albsugy · repo: aos · workflow: release.yml · allowed action: npm publish
+        # Provenance is disabled in package.json publishConfig (private source repo).
+        run: npm publish
