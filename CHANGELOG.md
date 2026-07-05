@@ -15,14 +15,14 @@ platform remains a separate product).
   bundle — and switched the build to esbuild `legalComments: external` so any
   dependency license banners are preserved rather than stripped.
 - **Package metadata:** added `homepage` and `bugs` fields.
-- **Governance & docs:** added `SECURITY.md`, `CONTRIBUTING.md`,
-  `CODE_OF_CONDUCT.md`, issue/PR templates, Dependabot config, and README badges;
-  rewrote the README/landing/manual "the compiled bundle" framing to reflect the open
-  repository.
-- **Doc accuracy sweep:** `aos update` help/manual text no longer claims
-  `git pull` for release installs (stale since 0.7.1); the landing-page roadmap
-  uses phase labels instead of version numbers that had drifted from the actual
-  npm releases.
+- **Governance:** added `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+  issue/PR templates, Dependabot config, and README badges; rewrote the README's
+  "the compiled bundle" framing to reflect the open repository.
+- **Docs live elsewhere.** The landing page and operator's manual moved out of
+  this repo to separate hosting — the repo carries the code, the README, and the
+  spec. (Neither was ever in the published npm package.)
+- **`aos update` help text** no longer claims `git pull` for release installs
+  (stale since 0.7.1).
 
 ## 0.7.2 — 2026-07-05
 
