@@ -135,17 +135,11 @@ Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup
 follow [SECURITY.md](SECURITY.md) rather than opening a public issue. By participating
 you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Status & roadmap
+## Status
 
-Production-hardened and published on npm: Node ≥ 22, a smoke suite run against both
+Published on npm and production-hardened: Node ≥ 22, a smoke suite run against both
 the source and the compiled bundle across macOS/Linux and Node 22/24 in CI, plus a
-dist-freshness gate and shellcheck. Open items for this **open-source core**, in
-pain-order: mobile approvals (Telegram) · MCP adapter for non-Claude runtimes ·
-playbook extraction polish.
-
-Building on top of this spec, a separate **hosted platform** for teams and
-organizations — shared context/policies, cross-machine sync, org-wide audit — is in
-the works as a commercial product. This repository is and stays the local-first core.
+dist-freshness gate and shellcheck. It runs entirely on your machine and works standalone.
 
 ## License
 

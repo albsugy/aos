@@ -2,25 +2,19 @@
 
 ## Unreleased
 
-Open-sourcing the repository (the local-first core stays MIT; the hosted team
-platform remains a separate product).
+Prepared the repository to be public.
 
 - **Source-install URL is HTTPS**, not SSH — `AOS_FROM_SOURCE=1` and the
   documented `git clone` now work for everyone, not just those with push access.
 - **npm provenance enabled** (`publishConfig.provenance: true`). Releases from
   this version onward carry a signed attestation tracing the bundle back to this
-  repo's CI. Requires the repo to be public — release only after flipping it.
+  repo's CI. Requires a public repo — release only after making it public.
 - **Bundled-dependency licenses attributed.** Added `THIRD-PARTY-LICENSES.md`
-  crediting the inlined `yaml` (ISC) — proper attribution for the redistributed
-  bundle — and switched the build to esbuild `legalComments: external` so any
-  dependency license banners are preserved rather than stripped.
+  crediting the inlined `yaml` (ISC), and switched the build to esbuild
+  `legalComments: external` so dependency license banners are preserved.
 - **Package metadata:** added `homepage` and `bugs` fields.
 - **Governance:** added `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-  issue/PR templates, Dependabot config, and README badges; rewrote the README's
-  "private source" framing to reflect the open repository.
-- **Docs live elsewhere.** The landing page and operator's manual moved out of
-  this repo to separate hosting — the repo carries the code, the README, and the
-  spec. (Neither was ever in the published npm package.)
+  issue/PR templates, Dependabot config, and README badges.
 - **`aos update` help text** no longer claims `git pull` for release installs
   (stale since 0.7.1).
 
@@ -118,8 +112,8 @@ Polish pass: correctness, DX, and release discipline.
 
 - **CLI exit codes:** `run finish`/`run state` with no active run and `find` without a
   query now exit 1 instead of 0 — errors are scriptable.
-- **npm README fixed:** the package page no longer links to the (private) repo's
-  unavailable site; the npm package page is the public home.
+- **npm README fixed:** the package page no longer links to an unavailable site;
+  the npm package page is the public home.
 - **Release tooling:** `npm run release -- <patch|minor|major|x.y.z>` — bumps, enforces
   a CHANGELOG entry, builds, runs both test suites, commits, and tags; pushing stays
   deliberate. Documented in RELEASING.md.
@@ -130,7 +124,7 @@ Polish pass: correctness, DX, and release discipline.
 
 ## 0.5.0 — 2026-07-04
 
-Public distribution via npm; source stays private.
+Public distribution via npm.
 
 - **The npm registry is now the public channel.** The package ships only the compiled
   bundle (`dist/aos.mjs`), the skills/templates (`assets/`), and metadata — no source.
@@ -205,4 +199,4 @@ Production hardening.
 
 Initial release: file spec (`~/.aos`), policy gates, run lifecycle, audit, Claude Code
 skills (`/aos-ticket`, `/aos-verify`, `/aos-learn`, `/aos-ask`) and hooks, verification
-contracts, local console, curl installer, landing page and manual.
+contracts, local console, and curl installer.

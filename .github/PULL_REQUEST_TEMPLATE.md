@@ -10,4 +10,4 @@
 - [ ] If I touched `src/`, `bin/`, `assets/`, or the console, I ran `npm run build` and committed the updated `dist/`
 - [ ] `shellcheck` is clean for any changed shell scripts
 - [ ] `CHANGELOG.md` updated under `## Unreleased` (for user-visible changes)
-- [ ] Scoped to the local-first core (see CONTRIBUTING.md)
+- [ ] Keeps to the local-first shape — files over platforms, local-only (see CONTRIBUTING.md)
