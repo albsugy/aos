@@ -8,9 +8,8 @@ Maintainer-only. This file is not shipped in the npm package.
 - Trusted publisher configured on npmjs.com (package → Settings → Trusted Publisher):
   GitHub Actions · owner `albsugy` · repo `aos` · workflow `release.yml` · allowed action `npm publish`
 - Publishing access set to "Require two-factor authentication and disallow tokens"
-- **Repo is public.** `publishConfig.provenance` is `true`, and npm provenance
-  requires a public source repo. Publishing requires a public repository — flip the
-  repo to public before the first provenance release.
+- **Public repository.** `publishConfig.provenance` is `true`; npm provenance
+  attestations require the source repository to be public.
 
 ## Ship a release
 

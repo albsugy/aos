@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 — 2026-07-05
+## 0.8.1 — 2026-07-05
 
 The open-source release: public repository, provenance-attested publishes, and
 two features that make day one useful — a repo-aware `aos init` and recorded
@@ -36,7 +36,7 @@ Prepared the repository to be public.
   documented `git clone` now work for everyone, not just those with push access.
 - **npm provenance enabled** (`publishConfig.provenance: true`). Releases from
   this version onward carry a signed attestation tracing the bundle back to this
-  repo's CI. Requires a public repo — release only after making it public.
+  repo's CI. Attestations require a public repository.
 - **Bundled-dependency licenses attributed.** Added `THIRD-PARTY-LICENSES.md`
   crediting the inlined `yaml` (ISC), and switched the build to esbuild
   `legalComments: external` so dependency license banners are preserved.
@@ -51,12 +51,11 @@ Prepared the repository to be public.
 Packaging + a cleaner network-access surface.
 
 - **The compiled CLI makes no network requests.** `aos update` used to `fetch`
-  the npm registry to check for a newer version (flagged by a security review on 0.7.1).
-  That check was redundant — the local `install.sh` already resolves the latest
-  version from the registry and verifies its sha-512. `aos update` now just runs
-  that installer, passing the running version so it no-ops when already current.
-  All outbound access lives in one place (the installer); `dist/aos.mjs` calls no
-  `fetch` and reaches no host.
+  the npm registry to check for a newer version. That check was redundant — the
+  local `install.sh` already resolves the latest version from the registry and
+  verifies its sha-512. `aos update` now just runs that installer, passing the
+  running version so it no-ops when already current. All outbound access lives in
+  one place (the installer); `dist/aos.mjs` calls no `fetch` and reaches no host.
 - **Fixes "EntryPointError" from package analyzers.** `package.json` declared
   only `bin` (AOS is a CLI), so tools that resolve an entry point couldn't find
   one. Added `main` and an `exports` map pointing at the compiled bundle.
@@ -73,14 +72,13 @@ Security: harden `aos update` against remote-script execution.
 
 - **No more `curl … install.sh | bash`.** The self-update path used to fetch a
   fresh installer from a CDN and pipe it straight into a shell — a supply-chain
-  risk (a compromised CDN could serve a malicious script) flagged by a security review
-  on 0.7.0. `aos update` now runs the `install.sh` that shipped *inside the
-  already-integrity-verified install* on disk, via `execFileSync('bash', [path])`
-  — no network-fetched script is executed, and no string is interpolated into a
-  shell. The installer still downloads the new tarball and verifies the
-  registry's sha-512 hash before swapping it in, so the update itself stays
-  integrity-checked. Falls back to a printed `npm i -g` instruction if the local
-  installer is somehow absent.
+  risk (a compromised CDN could serve a malicious script). `aos update` now runs
+  the `install.sh` that shipped *inside the already-integrity-verified install*
+  on disk, via `execFileSync('bash', [path])` — no network-fetched script is
+  executed, and no string is interpolated into a shell. The installer still
+  downloads the new tarball and verifies the registry's sha-512 hash before
+  swapping it in, so the update itself stays integrity-checked. Falls back to a
+  printed `npm i -g` instruction if the local installer is somehow absent.
 - Smoke suite gains a regression guard asserting the compiled bundle never pipes
   into a shell.
 
@@ -154,8 +152,8 @@ Polish pass: correctness, DX, and release discipline.
 
 Public distribution via npm.
 
-- **The npm registry is now the public channel.** The package ships only the compiled
-  bundle (`dist/aos.mjs`), the skills/templates (`assets/`), and metadata.
+- **The npm registry is now the public channel.** The package ships the compiled
+  single-file bundle (`dist/aos.mjs`), the skills/templates (`assets/`), and metadata.
   `bin` points at the bundle; `yaml` moved to devDependencies (it's inlined).
 - **Two install methods, one artifact:** `npm i -g @albsugy/aos`, or
   `curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash` — the
@@ -201,7 +199,7 @@ CI reliability + release infrastructure.
 
 Compiled installs.
 
-- **Installs ship a compiled single-file bundle:** `dist/aos.mjs` — single file, all
+- **Installs ship a compiled single-file bundle:** `dist/aos.mjs` — all
   dependencies inlined, minified, built by esbuild (`npm run build`) and committed;
   the installer links it directly. No npm download at install time.
 - **Node ≥ 22 required** (was 18) — installer, `engines`, `aos doctor`, docs, and CI updated.
