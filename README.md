@@ -25,6 +25,7 @@ what they never will — **your** context, **your** policies, **your** audit tra
 across runtimes.
 
 **Package:** [npmjs.com/package/@albsugy/aos](https://www.npmjs.com/package/@albsugy/aos)
+· **Full manual:** [DOCS.md](DOCS.md)
 
 ## Install
 
