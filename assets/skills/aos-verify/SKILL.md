@@ -16,5 +16,7 @@ Verify $ARGUMENTS (default: the current branch's work) without self-certifying.
    asked, edge cases, error paths, tests that assert nothing, unintended side effects in
    touched files. Report file:line findings." 
 4. Triage its findings honestly — fix confirmed issues, note rejected ones with reasons.
-   If a run is active, append findings + dispositions to its `verification.md`.
+   If a run is active, append findings + dispositions to its `verification.md` under a heading
+   titled exactly `## Adversarial review` — `aos run finish` looks for that heading to record
+   whether the review actually happened.
 5. Report to the user: contract verdict, adversarial findings summary, and your confidence.

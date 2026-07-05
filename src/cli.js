@@ -88,12 +88,20 @@ async function main() {
 
   switch (cmd) {
     case 'init': {
-      const { project, home } = init(process.cwd(), { name: flags.name });
+      const { project, home, detection } = init(process.cwd(), { name: flags.name });
       console.log(`✔ Registered project "${project.name}" (${project.id})`);
       console.log(`✔ Spec scaffolded at ${home}`);
+      if (detection?.pack) {
+        console.log(`✔ Context pack drafted from the repo${detection.summary ? ` (${detection.summary})` : ''} — review and refine it`);
+      } else {
+        console.log(`✔ Context pack scaffolded (blank template — fill it in)`);
+      }
+      if (detection?.contracts?.length) {
+        console.log(`✔ Seeded ${detection.contracts.length} verification contract(s): ${detection.contracts.map((c) => c.name).join(', ')}`);
+      }
       console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-learn, aos-ask)`);
       console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens)`);
-      console.log(`\nNext: edit ${path.join(home, 'context', 'pack.md')} and policy.yaml,`);
+      console.log(`\nNext: review ${path.join(home, 'context', 'pack.md')} and policy.yaml,`);
       console.log(`then start a Claude Code session here and run /aos-ticket <ticket>.`);
       break;
     }
@@ -140,6 +148,14 @@ async function main() {
         }
         const meta = finishRun(p.id, active, flags.state || 'awaiting-review');
         console.log(`✔ Run ${active} → ${meta.state}`);
+        if (meta.adversarial_review === 'absent') {
+          console.log(
+            '⚠ No adversarial review recorded in verification.md — run /aos-verify before shipping\n' +
+              '  (or set verification.adversarial_review: false in policy.yaml if intentional).'
+          );
+        } else if (meta.adversarial_review === 'present') {
+          console.log('✔ Adversarial review recorded in verification.md');
+        }
       } else if (sub === 'state') {
         const active = getActiveRun(p.id);
         if (!active) {
@@ -151,8 +167,12 @@ async function main() {
         console.log(`✔ Run ${active} → ${meta.state}`);
       } else if (sub === 'list') {
         for (const r of listRuns(p.id)) {
+          const adv =
+            r.adversarial_review && r.adversarial_review !== 'pending'
+              ? `  adv:${r.adversarial_review}`
+              : '';
           console.log(
-            `${r.run}  [${r.state}]  verify:${r.verification}${r.ticket ? `  ${r.ticket}` : ''}`
+            `${r.run}  [${r.state}]  verify:${r.verification}${adv}${r.ticket ? `  ${r.ticket}` : ''}`
           );
         }
       } else {

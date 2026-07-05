@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-07-05
+
+The open-source release: public repository, provenance-attested publishes, and
+two features that make day one useful — a repo-aware `aos init` and recorded
+(not assumed) adversarial review.
+
+- **`aos init` drafts the context pack from your repo.** Instead of a blank
+  template, `context/pack.md` starts filled in: description, runtime, language,
+  frameworks, package manager, and top-level structure detected from
+  `package.json`, `tsconfig.json`, lockfiles, the README, and
+  Python/Go/Rust/Ruby/JVM markers. You review and refine instead of facing an
+  empty page. Repos with no signal still get the blank template; re-running
+  `init` never overwrites an existing pack.
+- **`aos init` seeds verification contracts.** Detected `test`/`typecheck`/`lint`
+  scripts become `verification.contracts` in the scaffolded `policy.yaml`
+  (tests required, the rest advisory), so `aos verify` works out of the box.
+  Package-manager aware — including Bun, where the seeded command is
+  `bun run test` because `bun test` bypasses `scripts.test` for Bun's native
+  runner. The template's guidance comments survive the injection.
+- **Adversarial review is recorded, not assumed.** `aos run finish` scans the
+  run's `verification.md` for an adversarial-review section and records
+  `present`/`absent`/`not-required` in `meta.json`. Surfaced everywhere the
+  operator decides: a warning on `finish`, an `adv:` column in `aos run list`,
+  and ⚠/✓ flags in the `aos status` review queue. The `/aos-ticket` and
+  `/aos-verify` skills now write findings under a standardized
+  `## Adversarial review` heading. This verifies evidence-of-process, not
+  quality — honest by design.
+- Note: `aos run list` and `aos status` output gained the adversarial-review
+  segment — adjust anything parsing that stdout positionally.
 
 Prepared the repository to be public.
 

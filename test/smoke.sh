@@ -160,6 +160,54 @@ printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
 $AOS run finish >/dev/null
 
+# --- adversarial review: evidence-of-process recorded at finish ---
+$AOS run start --ticket "LIN-3" >/dev/null
+RUN3=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
+RUN3_DIR="$AOS_HOME/projects/demo/runs/$RUN3"
+FINISH_OUT=$($AOS run finish)
+echo "$FINISH_OUT" | grep -q "No adversarial review" && pass "finish: warns when adversarial review absent" || fail "no absent warning"
+grep -q '"adversarial_review": "absent"' "$RUN3_DIR/meta.json" && pass "finish: records adversarial_review=absent" || fail "absent not recorded"
+$AOS run start --ticket "LIN-4" >/dev/null
+RUN4=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
+RUN4_DIR="$AOS_HOME/projects/demo/runs/$RUN4"
+printf '## Adversarial review\n\nSkeptic hunted the acceptance criteria and edge cases; found nothing unmet.\n' > "$RUN4_DIR/verification.md"
+$AOS run finish >/dev/null
+grep -q '"adversarial_review": "present"' "$RUN4_DIR/meta.json" && pass "finish: records adversarial_review=present" || fail "present not recorded"
+
+# --- init: repo-aware context pack + seeded verification contracts ---
+DETECT_REPO="$WORK/detect-repo"
+mkdir -p "$DETECT_REPO/src"
+cat > "$DETECT_REPO/package.json" <<'EOF'
+{
+  "name": "detectme",
+  "description": "A sample project for detection.",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test", "lint": "eslint .", "typecheck": "tsc --noEmit" },
+  "devDependencies": { "react": "^18.0.0" }
+}
+EOF
+touch "$DETECT_REPO/tsconfig.json"
+( cd "$DETECT_REPO" && git init -q -b main && $AOS init --name detectme >/dev/null )
+DPACK="$AOS_HOME/projects/detectme/context/pack.md"
+DPOL="$AOS_HOME/projects/detectme/policy.yaml"
+grep -q "A sample project for detection" "$DPACK" && pass "init: pack drafted from package.json" || fail "pack not drafted from repo"
+grep -q "TypeScript" "$DPACK" && pass "init: pack detects language" || fail "language not detected in pack"
+grep -q "React" "$DPACK" && pass "init: pack detects framework" || fail "framework not detected in pack"
+grep -q "name: tests" "$DPOL" && pass "init: seeds required test contract" || fail "test contract not seeded"
+grep -q "adversarial_review" "$DPOL" && pass "init: policy keeps template after contract injection" || fail "policy structure lost on injection"
+grep -q "Deterministic checks" "$DPOL" && pass "init: contracts guidance comment survives injection" || fail "contracts comment dropped on injection"
+# bun: `bun test` bypasses scripts.test (native runner) — seeded command must be `bun run test`,
+# and the modern text lockfile (bun.lock) must be detected, not just legacy bun.lockb
+BUN_REPO="$WORK/bun-repo"; mkdir -p "$BUN_REPO"
+printf '{ "name": "bunny", "description": "Bun app.", "scripts": { "test": "vitest run" } }' > "$BUN_REPO/package.json"
+touch "$BUN_REPO/bun.lock"
+( cd "$BUN_REPO" && git init -q -b main && $AOS init --name bunny >/dev/null )
+grep -q "command: bun run test" "$AOS_HOME/projects/bunny/policy.yaml" && pass "init: bun repo seeds 'bun run test' (not native runner)" || fail "bun test command wrong"
+# a repo with no signal falls back to the blank template
+BARE_REPO="$WORK/bare-repo"; mkdir -p "$BARE_REPO"
+( cd "$BARE_REPO" && git init -q -b main && $AOS init --name bare >/dev/null )
+grep -q "one paragraph: purpose" "$AOS_HOME/projects/bare/context/pack.md" && pass "init: no signal → blank template" || fail "blank fallback missing"
+
 # --- supply-chain guard: the compiled CLI accesses the network in no way at all ---
 # All outbound access lives in install.sh (registry resolve + sha-512 verify); the CLI
 # self-updates by running that local, already-verified installer. So the bundle must
