@@ -15,14 +15,14 @@
 #   AOS_NPM_PKG      package name                              (default: @albsugy/aos)
 #   AOS_NPM_REGISTRY registry base URL                         (default: https://registry.npmjs.org)
 #   AOS_TARBALL_URL  direct tarball URL (mirrors / testing); checksum fetched from <url>.sha256
-#   AOS_FROM_SOURCE  =1 to clone and build from source (requires repo access, git, npm)
-#   AOS_REPO_URL     source-mode repo URL   (default: git@github.com:albsugy/aos.git)
+#   AOS_FROM_SOURCE  =1 to clone and build from source (needs git + npm)
+#   AOS_REPO_URL     source-mode repo URL   (default: https://github.com/albsugy/aos.git)
 #   AOS_REF          source-mode branch/tag (default: main)
 set -euo pipefail
 
 PKG="${AOS_NPM_PKG:-@albsugy/aos}"
 REG="${AOS_NPM_REGISTRY:-https://registry.npmjs.org}"
-REPO_URL="${AOS_REPO_URL:-git@github.com:albsugy/aos.git}"
+REPO_URL="${AOS_REPO_URL:-https://github.com/albsugy/aos.git}"
 INSTALL_DIR="${AOS_INSTALL_DIR:-$HOME/.local/share/aos}"
 BIN_DIR="${AOS_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${AOS_VERSION:-latest}"
@@ -59,7 +59,7 @@ unpack_tarball() {
 }
 
 if [ "$FROM_SOURCE" = "1" ]; then
-  # --- contributor path (requires repo access): clone + build ----------------
+  # --- contributor path: clone + build (needs git + npm) ---------------------
   command -v git >/dev/null 2>&1 || fail "git is required for source installs."
   command -v npm >/dev/null 2>&1 || fail "npm is required for source installs."
   if [ -d "$INSTALL_DIR/.git" ]; then

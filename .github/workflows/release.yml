@@ -43,5 +43,7 @@ jobs:
         # Requires the trusted publisher configured on npmjs.com:
         #   package Settings → Trusted Publisher → GitHub Actions
         #   owner: albsugy · repo: aos · workflow: release.yml · allowed action: npm publish
-        # Provenance requires a public repository.
+        # Provenance is enabled in package.json publishConfig; it needs id-token:
+        # write (granted above) and a PUBLIC repo, so only release after the repo
+        # is public — publishing provenance requires a public repository.
         run: npm publish

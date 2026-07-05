@@ -1,7 +1,14 @@
 # AOS — Agent Operations Stack
 
+[![npm](https://img.shields.io/npm/v/@albsugy/aos?color=cb3837&logo=npm)](https://www.npmjs.com/package/@albsugy/aos)
+[![CI](https://github.com/albsugy/aos/actions/workflows/ci.yml/badge.svg)](https://github.com/albsugy/aos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
+
 Operate AI coding agents like a professional: **portable memory, enforced guardrails,
 automatic audit, real verification, and a local console** — all stored as plain files you own.
+
+Open source (MIT), local-first, and runs entirely on your machine.
 
 AOS is not an orchestration framework and not a platform. It's three thin parts:
 
@@ -32,13 +39,24 @@ npm i -g @albsugy/aos
 ```
 
 Requires Node ≥ 22 (curl path also needs curl + tar). Both channels deliver the same
-artifact: the **compiled package published on the npm registry** — the single-file
-bundle (`dist/aos.mjs`, dependencies inlined) plus the skills/templates. The curl
-installer resolves the version from the registry, **verifies the registry's sha-512
-integrity hash**, unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`.
-No source code and no git history land on your machine (the source repository is
-private; the published package is the compiled bundle). Pin with `AOS_VERSION=0.5.0`;
-update later with `aos update`; diagnose with `aos doctor`.
+artifact from the npm registry: the single-file bundle (`dist/aos.mjs`, dependencies
+inlined) plus the skills/templates — a small, fast install. The curl installer resolves
+the version from the registry, **verifies the registry's sha-512 integrity hash**,
+unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`. Pin with
+`AOS_VERSION=0.7.2`; update later with `aos update`; diagnose with `aos doctor`.
+
+Prefer to build it yourself? The source is right here — clone and run:
+
+```bash
+git clone https://github.com/albsugy/aos.git && cd aos
+npm ci && npm run build
+ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
+```
+
+(Or `AOS_FROM_SOURCE=1` with the curl installer does the same.) Releases published
+from this public repo onward carry npm
+[provenance attestations](https://docs.npmjs.com/generating-provenance-statements),
+so you can verify the bundle was built from this source by CI.
 
 Uninstall: `rm -rf ~/.local/share/aos ~/.local/bin/aos` — your data in `~/.aos` is yours to keep.
 
@@ -110,12 +128,25 @@ sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need
 - **Every layer works standalone** — hooks alone are worth installing; the pipeline is optional.
 - **Local-only** — the console binds 127.0.0.1; nothing leaves your machine.
 
+## Contributing
+
+Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup
+(`npm ci && npm test`), the dist-freshness rule, and scope. Security reports: please
+follow [SECURITY.md](SECURITY.md) rather than opening a public issue. By participating
+you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Status & roadmap
 
-v0.5 — npm-registry distribution (npm-registry distribution), Node ≥ 22,
-production-hardened (47 smoke tests run against both source and bundle in CI, plus
-dist-freshness gate and shellcheck). Next, in pain-order:
-mobile approvals (Telegram) · MCP adapter for non-Claude runtimes · playbook extraction
-polish · multi-operator sync · client-facing trust console.
+Production-hardened and published on npm: Node ≥ 22, a smoke suite run against both
+the source and the compiled bundle across macOS/Linux and Node 22/24 in CI, plus a
+dist-freshness gate and shellcheck. Open items for this **open-source core**, in
+pain-order: mobile approvals (Telegram) · MCP adapter for non-Claude runtimes ·
+playbook extraction polish.
 
-MIT © Medhat Albsugy
+Building on top of this spec, a separate **hosted platform** for teams and
+organizations — shared context/policies, cross-machine sync, org-wide audit — is in
+the works as a commercial product. This repository is and stays the local-first core.
+
+## License
+
+MIT © Medhat Albsugy. Bundled dependency licenses: [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
