@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 import { addProject } from './registry.js';
 import { projectDir, ensureDir, readJson, writeJson, slugify } from './paths.js';
+import { detectRepo } from './detect.js';
 
 const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 
@@ -32,22 +34,66 @@ function copyDir(src, dest) {
   }
 }
 
-function scaffoldProjectHome(id) {
+// Inject detected contracts into the freshly-scaffolded policy without losing
+// the template's comments. Parsing as a Document keeps everything outside the
+// `contracts:` value, but replacing the `[]` node drops the comment block
+// attached to it — so carry that comment over to the new seq explicitly.
+function injectContracts(policyText, contracts) {
+  const doc = YAML.parseDocument(policyText);
+  // setIn() with a plain JS value stores it raw (no node until stringify), so
+  // build the node first to have something to attach the comment to.
+  const prev = doc.getIn(['verification', 'contracts'], true);
+  const node = doc.createNode(contracts);
+  if (prev?.commentBefore) node.commentBefore = prev.commentBefore;
+  doc.setIn(['verification', 'contracts'], node);
+  return String(doc);
+}
+
+function scaffoldProjectHome(id, repoRoot) {
   const dir = projectDir(id);
   ensureDir(path.join(dir, 'context'));
   ensureDir(path.join(dir, 'runs'));
   ensureDir(path.join(dir, 'playbooks'));
-  const copies = [
-    ['templates/policy.yaml', 'policy.yaml'],
-    ['templates/pack.md', 'context/pack.md'],
+
+  // Best-effort: a repo we can't read just yields the blank templates.
+  let detection = { pack: null, contracts: [], summary: null };
+  try {
+    detection = detectRepo(repoRoot);
+  } catch {
+    detection = { pack: null, contracts: [], summary: null };
+  }
+
+  // Files that only get a static template.
+  for (const [from, to] of [
     ['templates/decisions.md', 'context/decisions.md'],
     ['templates/learnings.md', 'learnings.md'],
-  ];
-  for (const [from, to] of copies) {
+  ]) {
     const dest = path.join(dir, to);
     if (!fs.existsSync(dest)) fs.copyFileSync(path.join(ASSETS, from), dest);
   }
-  return dir;
+
+  // pack.md: a repo-specific draft when we have signal, else the blank template.
+  const packDest = path.join(dir, 'context', 'pack.md');
+  if (!fs.existsSync(packDest)) {
+    if (detection.pack) fs.writeFileSync(packDest, detection.pack);
+    else fs.copyFileSync(path.join(ASSETS, 'templates/pack.md'), packDest);
+  }
+
+  // policy.yaml: template + any detected verification contracts.
+  const policyDest = path.join(dir, 'policy.yaml');
+  if (!fs.existsSync(policyDest)) {
+    let policyText = fs.readFileSync(path.join(ASSETS, 'templates/policy.yaml'), 'utf8');
+    if (detection.contracts.length) {
+      try {
+        policyText = injectContracts(policyText, detection.contracts);
+      } catch {
+        // fall back to the untouched template — contracts stay empty
+      }
+    }
+    fs.writeFileSync(policyDest, policyText);
+  }
+
+  return { dir, detection };
 }
 
 function installSkills(repoRoot) {
@@ -98,8 +144,8 @@ export function init(repoRoot, { name } = {}) {
   const resolved = path.resolve(repoRoot);
   const id = slugify(name || path.basename(resolved));
   const project = addProject({ id, name: name || path.basename(resolved), repo: resolved });
-  const home = scaffoldProjectHome(id);
+  const { dir, detection } = scaffoldProjectHome(id, resolved);
   installSkills(resolved);
   installHooks(resolved);
-  return { project, home };
+  return { project, home: dir, detection };
 }

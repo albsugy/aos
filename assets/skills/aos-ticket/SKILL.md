@@ -38,7 +38,9 @@ files live in the run folder printed by `aos run start`.
    work against the acceptance criteria in <run>/ticket.md. Hunt for: criteria not actually
    met, edge cases, silent failures, tests that don't test the change. Report findings with
    file:line. Finding nothing is an acceptable answer only after a genuine hunt."
-   Append its findings and your dispositions to `verification.md`.
+   Append its findings and your dispositions to `verification.md` under a heading titled
+   exactly `## Adversarial review` — `aos run finish` looks for that heading to record whether
+   the review actually happened.
 8. Fix anything confirmed. Re-verify. Loop until clean or genuinely blocked
    (if blocked: `aos run state blocked`, tell the user why, and stop).
 

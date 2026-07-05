@@ -72,7 +72,13 @@ export function printStatus() {
     console.log(`  tokens: ${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out${cache}`);
     const awaiting = p.runs.filter((r) => r.state === 'awaiting-review');
     for (const r of awaiting) {
-      console.log(`  ⏳ awaiting review: ${r.run}${r.ticket ? ` — ${r.ticket}` : ''}`);
+      const adv =
+        r.adversarial_review === 'absent'
+          ? '  ⚠ no adversarial review'
+          : r.adversarial_review === 'present'
+            ? '  ✓ adversarial review'
+            : '';
+      console.log(`  ⏳ awaiting review: ${r.run}${r.ticket ? ` — ${r.ticket}` : ''}${adv}`);
     }
   }
   console.log('');

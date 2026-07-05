@@ -12,6 +12,7 @@ import {
   nowIso,
   withLock,
 } from './paths.js';
+import { loadPolicy } from './policy.js';
 
 export function statePath(projectId) {
   return path.join(projectDir(projectId), 'state.json');
@@ -76,6 +77,9 @@ export function startRun(projectId, { ticket, title, planGate }) {
     state: 'in-progress',
     verification: 'pending',
     verification_attempts: 0,
+    // present | absent | not-required | pending — computed at finish from
+    // verification.md (see adversarialReviewState). "Don't self-certify."
+    adversarial_review: 'pending',
     // The session that started this run, bound by the post-tool hook. Audit
     // and tokens from other concurrent sessions stay out of this run.
     session: null,
@@ -124,8 +128,28 @@ export function approvePlan(projectId, runId) {
   return meta;
 }
 
+// Evidence-of-process, not proof-of-quality: we can't judge whether an
+// adversarial review was any good, but we can record whether one was actually
+// written into verification.md. `not-required` when policy opts out.
+export function adversarialReviewState(projectId, runId) {
+  const policy = loadPolicy(projectId);
+  if (policy.verification?.adversarial_review === false) return 'not-required';
+  const md = readIfExists(path.join(runDir(projectId, runId), 'verification.md')) || '';
+  const heading = md.match(/^#{1,6}\s*.*(adversarial|skeptic|refut)/im);
+  if (!heading) return 'absent';
+  // A bare heading with nothing under it doesn't count as a review.
+  const body = md.slice(heading.index + heading[0].length).trim();
+  return body.length > 20 ? 'present' : 'absent';
+}
+
 export function finishRun(projectId, runId, state = 'awaiting-review') {
-  const meta = setRunState(projectId, runId, state);
+  const adversarial_review = adversarialReviewState(projectId, runId);
+  const meta = mutateRunMeta(projectId, runId, (m) => {
+    m.state = state;
+    m.adversarial_review = adversarial_review;
+  });
+  if (!meta) throw new Error(`Unknown run: ${runId}`);
+  appendAudit(projectId, { event: 'run-state', run: runId, state, adversarial_review });
   if (getActiveRun(projectId) === runId) setActiveRun(projectId, null);
   return meta;
 }
