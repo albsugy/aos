@@ -6,14 +6,10 @@ way are the most welcome.
 
 ## Scope — what this repo is
 
-This repository is the **open-source, local-first core**: the file spec, the
-`aos` CLI, the Claude Code skills and hooks, and the local console. It is
-MIT-licensed and runs entirely on your machine.
-
-The hosted, team/organization knowledge-sharing platform that builds *on top of*
-this spec (shared workspaces, sync, org-wide audit) is a separate, closed-source
-product. Please keep PRs within the local-first core; proposals that assume a
-server or multi-tenant backend are out of scope here.
+AOS is a local-first tool: the file spec under `~/.aos`, the `aos` CLI, the
+Claude Code skills and hooks, and the local console. It is MIT-licensed and runs
+entirely on your machine. Contributions should keep to that shape — files over
+platforms, and local-only.
 
 ## Development setup
 

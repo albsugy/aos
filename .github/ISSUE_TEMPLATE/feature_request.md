@@ -1,13 +1,12 @@
 ---
 name: Feature request
-about: Suggest an improvement to the local-first core
+about: Suggest an improvement to AOS
 title: ''
 labels: enhancement
 assignees: ''
 ---
 
-<!-- This repo is the open-source, local-first core. Ideas that need a server or
-     multi-tenant backend belong to the separate hosted platform — see CONTRIBUTING.md. -->
+<!-- AOS is a local-first tool — files over platforms, local-only. -->
 
 **The problem**
 What operational pain are you hitting? What are you trying to do?
