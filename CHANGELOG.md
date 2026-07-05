@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+Open-sourcing the repository (the local-first core stays MIT; the hosted team
+platform remains a separate product).
+
+- **Source-install URL is HTTPS**, not SSH — `AOS_FROM_SOURCE=1` and the
+  documented `git clone` now work for everyone, not just those with push access.
+- **npm provenance enabled** (`publishConfig.provenance: true`). Releases from
+  this version onward carry a signed attestation tracing the bundle back to this
+  repo's CI. Requires the repo to be public — release only after flipping it.
+- **Bundled-dependency licenses attributed.** Added `THIRD-PARTY-LICENSES.md`
+  crediting the inlined `yaml` (ISC) — proper attribution for the redistributed
+  bundle — and switched the build to esbuild `legalComments: external` so any
+  dependency license banners are preserved rather than stripped.
+- **Package metadata:** added `homepage` and `bugs` fields.
+- **Governance & docs:** added `SECURITY.md`, `CONTRIBUTING.md`,
+  `CODE_OF_CONDUCT.md`, issue/PR templates, Dependabot config, and README badges;
+  rewrote the README/landing/manual "private source" framing to reflect the open
+  repository.
+- **Doc accuracy sweep:** `aos update` help/manual text no longer claims
+  `git pull` for release installs (stale since 0.7.1); the landing-page roadmap
+  uses phase labels instead of version numbers that had drifted from the actual
+  npm releases.
+
 ## 0.7.2 — 2026-07-05
 
 Packaging + a cleaner network-access surface.

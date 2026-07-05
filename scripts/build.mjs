@@ -23,7 +23,11 @@ await build({
     js: '#!/usr/bin/env node\nimport { createRequire as __aosCreateRequire } from "node:module";\nconst require = __aosCreateRequire(import.meta.url);',
   },
   define: { 'process.env.AOS_BUNDLED': '"1"' },
-  legalComments: 'none',
+  // Preserve any dependency license banners (emitted to dist/aos.mjs.LEGAL.txt
+  // when present) instead of stripping them. The bundled `yaml` ships no inline
+  // banner, so its ISC notice is reproduced in THIRD-PARTY-LICENSES.md — the
+  // canonical attribution for everything inlined into the bundle.
+  legalComments: 'external',
 });
 
 // The console reads ui.html as a sibling file at runtime.
@@ -31,4 +35,5 @@ fs.copyFileSync(path.join(root, 'src', 'console', 'ui.html'), path.join(dist, 'u
 fs.chmodSync(path.join(dist, 'aos.mjs'), 0o755);
 
 const size = (fs.statSync(path.join(dist, 'aos.mjs')).size / 1024).toFixed(0);
-console.log(`✔ dist/aos.mjs (${size} KB) + dist/ui.html`);
+const legal = fs.existsSync(path.join(dist, 'aos.mjs.LEGAL.txt')) ? ' + dist/aos.mjs.LEGAL.txt' : '';
+console.log(`✔ dist/aos.mjs (${size} KB) + dist/ui.html${legal}`);

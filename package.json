@@ -30,15 +30,20 @@
     "dist",
     "assets",
     "install.sh",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "THIRD-PARTY-LICENSES.md"
   ],
   "publishConfig": {
     "access": "public",
-    "provenance": false
+    "provenance": true
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/albsugy/aos.git"
+  },
+  "homepage": "https://github.com/albsugy/aos#readme",
+  "bugs": {
+    "url": "https://github.com/albsugy/aos/issues"
   },
   "keywords": [
     "ai-agents",

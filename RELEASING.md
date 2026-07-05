@@ -8,6 +8,9 @@ Maintainer-only. This file is not shipped in the npm package.
 - Trusted publisher configured on npmjs.com (package → Settings → Trusted Publisher):
   GitHub Actions · owner `albsugy` · repo `aos` · workflow `release.yml` · allowed action `npm publish`
 - Publishing access set to "Require two-factor authentication and disallow tokens"
+- **Repo is public.** `publishConfig.provenance` is `true`, and npm provenance
+  requires a public source repo. Publishing from a private repo fails — flip the
+  repo to public before the first provenance release.
 
 ## Ship a release
 
@@ -32,7 +35,7 @@ No tokens exist anywhere in the chain.
 - `package.json` version == git tag (CI enforces)
 - source changes travel with their rebuilt `dist/` in the same commit (CI enforces)
 - every released version has a CHANGELOG entry (release script enforces)
-- users are affected only by npm publishes; GitHub releases on the private repo are internal
+- users install from npm publishes; the GitHub release carries the same tarball + sha256 as a mirror
 
 ## If something goes wrong
 

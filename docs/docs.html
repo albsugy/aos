@@ -86,6 +86,7 @@
     <span class="t">The Operator's Manual</span>
     <nav class="links">
       <a href="index.html">← Landing</a>
+      <a href="https://github.com/albsugy/aos">GitHub ↗</a>
       <a href="https://www.npmjs.com/package/@albsugy/aos">npm ↗</a>
     </nav>
     <button id="menu-btn" onclick="document.querySelector('nav.side').classList.toggle('open')">CONTENTS</button>
@@ -149,13 +150,15 @@
 
 <span class="c"># or without an npm client:</span>
 <span class="c">$</span> curl -fsSL https://cdn.jsdelivr.net/npm/@albsugy/aos/install.sh | bash</code></pre>
-  <p>Both channels deliver the same artifact: the <b>compiled package published on the npm registry</b> —
-  only the runtime (<code>dist/aos.mjs</code> with all dependencies inlined, the skills and templates in
-  <code>assets/</code>, and version metadata). The curl installer resolves the version from the registry,
-  <b>verifies the registry's sha-512 integrity hash</b>, unpacks to <code>~/.local/share/aos</code>, links
-  <code>~/.local/bin/aos</code>, and adds that directory to your PATH (zsh, bash, or fish) if needed.
-  No source code and no git history land on your machine — the source repository is private; what ships
-  is the compiled bundle. If anything seems off afterwards: <code>aos doctor</code>.</p>
+  <p>Both channels deliver the same artifact from the npm registry: the runtime
+  (<code>dist/aos.mjs</code> with all dependencies inlined, the skills and templates in
+  <code>assets/</code>, and version metadata) — a small, fast install. The curl installer resolves the
+  version from the registry, <b>verifies the registry's sha-512 integrity hash</b>, unpacks to
+  <code>~/.local/share/aos</code>, links <code>~/.local/bin/aos</code>, and adds that directory to your
+  PATH (zsh, bash, or fish) if needed. AOS is <a href="https://github.com/albsugy/aos">open source</a>,
+  and new releases carry npm provenance attestations, so you can verify the bundle was built from that
+  repo by CI — or build it yourself (see below). If anything seems off afterwards:
+  <code>aos doctor</code>.</p>
   <h3>OVERRIDES</h3>
   <div class="table-scroll"><table>
     <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
@@ -164,7 +167,7 @@
     <tr><td><code>AOS_BIN_DIR</code></td><td><code>~/.local/bin</code></td><td>Where the <code>aos</code> symlink goes</td></tr>
     <tr><td><code>AOS_NPM_REGISTRY</code></td><td><code>registry.npmjs.org</code></td><td>Alternate registry (mirrors, corporate proxies)</td></tr>
     <tr><td><code>AOS_TARBALL_URL</code></td><td>—</td><td>Direct tarball URL (testing); sha-256 checksum fetched from <code>&lt;url&gt;.sha256</code></td></tr>
-    <tr><td><code>AOS_FROM_SOURCE</code></td><td><code>0</code></td><td><code>=1</code> clones and builds from source (requires access to the private repo, git + npm). <code>AOS_REPO_URL</code>/<code>AOS_REF</code> pick the repo and branch</td></tr>
+    <tr><td><code>AOS_FROM_SOURCE</code></td><td><code>0</code></td><td><code>=1</code> clones and builds from source (needs git + npm). <code>AOS_REPO_URL</code>/<code>AOS_REF</code> pick the repo and branch</td></tr>
     <tr><td><code>AOS_HOME</code></td><td><code>~/.aos</code></td><td>Where all <em>data</em> lives (runtime, not install-time)</td></tr>
   </table></div>
   <h3>MANUAL INSTALL</h3>
@@ -173,8 +176,8 @@
 <span class="c">$</span> mkdir -p ~/.local/share/aos &amp;&amp; tar -xzf aos-*.tgz -C ~/.local/share/aos --strip-components=1
 <span class="c">$</span> ln -sf ~/.local/share/aos/dist/aos.mjs ~/.local/bin/aos
 
-<span class="c"># contributors with repo access — build from source:</span>
-<span class="c">$</span> git clone git@github.com:albsugy/aos.git &amp;&amp; cd aos
+<span class="c"># build from source (it's open source):</span>
+<span class="c">$</span> git clone https://github.com/albsugy/aos.git &amp;&amp; cd aos
 <span class="c">$</span> npm ci &amp;&amp; npm run build &amp;&amp; ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos</code></pre>
 </section>
 
@@ -371,7 +374,7 @@ verification:
     <tr><td><code>aos projects</code></td><td>List registered projects and their memory homes.</td></tr>
     <tr><td><code>aos doctor</code></td><td>Diagnose everything: node version, app install, dependencies, <code>AOS_HOME</code>, registry integrity, dangling repo paths, and this repo's hook wiring (flags old-format hooks). Exit 0 = all clear.</td></tr>
     <tr><td><code>aos version</code></td><td>Print the installed version.</td></tr>
-    <tr><td><code>aos update</code></td><td>Update in place: <code>git pull --ff-only</code> + reinstall dependencies.</td></tr>
+    <tr><td><code>aos update</code></td><td>Update in place. Release installs: re-runs the bundled installer (registry-verified, no-op when current). Dev checkouts: <code>git pull --ff-only</code>.</td></tr>
     <tr><td><code>aos hook &lt;name&gt;</code></td><td class="dim">Internal — the entry points Claude Code hooks call (<code>pre-tool</code>, <code>post-tool</code>, <code>session-start</code>, <code>session-end</code>).</td></tr>
   </table></div>
   <p class="dim">Most commands resolve the project from your working directory; pass <code>--project &lt;id&gt;</code> to override.</p>
@@ -393,7 +396,7 @@ verification:
   <div class="callout"><b>LOCAL ONLY</b>
   The server binds to <code>127.0.0.1</code> — it is not reachable from your network — and additionally
   refuses requests whose <code>Host</code> header isn't localhost, which blocks DNS-rebinding attacks from
-  malicious websites. Remote/mobile access arrives with the v0.2 Telegram approvals and the v0.5 sync server.</div>
+  malicious websites. Remote/mobile access arrives later on the roadmap — Telegram approvals, then the team sync server.</div>
 </section>
 
 <section id="privacy">
@@ -410,7 +413,7 @@ verification:
 
 <section id="teams">
   <span class="secnum">§11 · TEAMS &amp; ORGANIZATIONS</span>
-  <h2>Teams &amp; organizations <span class="chip amber" style="vertical-align:middle">PLANNED — v0.5+</span></h2>
+  <h2>Teams &amp; organizations <span class="chip amber" style="vertical-align:middle">PLANNED</span></h2>
   <p>The solo stack is free forever. The paid tier extends the same files across people:</p>
   <ul>
     <li><b>Team workspaces</b> — shared context packs, policies, and playbooks; every teammate's agents brief from one source of truth, and one teammate's learning compounds for everyone.</li>
@@ -419,7 +422,7 @@ verification:
     <li><b>Org-wide audit &amp; policy baselines</b> — one exportable trail of every agent action in the company, and guardrail floors no project can drop below. Built with regulatory oversight requirements (EU AI Act, Aug 2026) in mind.</li>
     <li><b>Cross-organization sharing</b> — agencies and their clients on the same trail: the client sees, approves, and trusts what agents do in their business.</li>
   </ul>
-  <p class="dim">Interested in the team tier? Reach out via the <a href="https://www.npmjs.com/package/@albsugy/aos">npm package page</a> — early design partners shape the spec.</p>
+  <p class="dim">Interested in the team tier? Open an issue on <a href="https://github.com/albsugy/aos">GitHub</a> — early design partners shape the spec.</p>
 </section>
 
 <section id="troubleshooting">

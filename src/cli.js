@@ -78,7 +78,7 @@ Usage:
   aos doctor                        Diagnose the install, registry, and current repo's wiring
   aos hook <name>                   (internal) Claude Code hook entry points
   aos version                       Print version
-  aos update                        Update aos in place (git pull + install deps)
+  aos update                        Update in place (release installs: verified reinstall; dev checkouts: git pull)
   aos help                          This help
 `;
 

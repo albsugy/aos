@@ -1,0 +1,15 @@
+# Keep the two devDependencies (esbuild, yaml) and the GitHub Actions pins fresh.
+# Note for reviewers: a yaml bump lands in dist/aos.mjs too — Dependabot PRs that
+# touch package.json need `npm run build` before merge (CI's dist-freshness gate
+# will flag it).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
