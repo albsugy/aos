@@ -2,8 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { aosHome, projectDir, appendLine, nowIso } from './paths.js';
 import { findProjectByCwd } from './registry.js';
-import { loadPolicy, evaluateCommand, evaluateFileWrite } from './policy.js';
-import { appendAudit, getActiveRun, addRunTokens, bindRunSession, runDir, runMeta } from './run.js';
+import {
+  loadPolicy,
+  evaluateCommand,
+  evaluateFileWrite,
+  evaluateBashProtected,
+  commandWritesFiles,
+} from './policy.js';
+import {
+  appendAudit,
+  getActiveRun,
+  addRunTokens,
+  bindRunSession,
+  findRunBySession,
+  runDir,
+  runMeta,
+} from './run.js';
 import { buildContext } from './context.js';
 
 async function readStdin() {
@@ -29,22 +43,41 @@ function resolveProject(input) {
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 // plan_gate: ask — enforced, not remembered: until the human approves the
-// plan (aos run approve), file writes outside the run's own folder are gated.
+// plan (aos run approve), writes outside the run's own folder are gated.
 // Writes to the run folder and project memory stay open so the agent can
 // still produce ticket.md and plan.md.
-function planGateVerdict(projectId, absPath, sessionId) {
+function unapprovedPlanRun(projectId, sessionId) {
   const active = getActiveRun(projectId);
   if (!active) return null;
   const meta = runMeta(projectId, active);
   if (!meta || meta.plan_gate !== 'ask' || meta.plan_approved) return null;
   if (meta.session && sessionId && meta.session !== sessionId) return null; // another session's run
+  return active;
+}
+
+function planGateReason(runId) {
+  return `Plan for run ${runId} is not approved yet — review plan.md, then run \`aos run approve\` (or approve this prompt to allow this single write)`;
+}
+
+function planGateVerdict(projectId, absPath, sessionId) {
+  const active = unapprovedPlanRun(projectId, sessionId);
+  if (!active) return null;
   if (absPath.startsWith(runDir(projectId, active) + path.sep)) return null;
   if (absPath.startsWith(projectDir(projectId) + path.sep)) return null;
-  return {
-    decision: 'ask',
-    action: 'plan-gate',
-    reason: `Plan for run ${active} is not approved yet — review plan.md, then run \`aos run approve\` (or approve this prompt to allow this single write)`,
-  };
+  return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
+}
+
+// The Bash side of the plan gate: `tee`, `> file`, `sed -i`, `git apply`
+// would otherwise implement the whole change while the plan sits unapproved.
+// Commands that name the run folder or project memory stay open (writing
+// plan.md via shell is fine); everything else with write intent gets an ask.
+function planGateBashVerdict(projectId, command, sessionId) {
+  const active = unapprovedPlanRun(projectId, sessionId);
+  if (!active) return null;
+  if (!commandWritesFiles(command)) return null;
+  const cmd = String(command || '');
+  if (cmd.includes(runDir(projectId, active)) || cmd.includes(projectDir(projectId))) return null;
+  return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
 }
 
 export async function hookPreTool() {
@@ -57,8 +90,15 @@ export async function hookPreTool() {
   let target;
 
   if (input.tool_name === 'Bash') {
-    target = String(input.tool_input?.command || '').slice(0, 300);
-    verdict = evaluateCommand(policy, input.tool_input?.command || '');
+    const command = String(input.tool_input?.command || '');
+    target = command.slice(0, 300);
+    verdict = evaluateCommand(policy, command);
+    if (verdict.decision === 'allow') {
+      verdict =
+        evaluateBashProtected(command, { home: aosHome() }) ||
+        planGateBashVerdict(project.id, command, input.session_id || null);
+      if (!verdict) return;
+    }
   } else if (FILE_TOOLS.has(input.tool_name)) {
     const filePath = input.tool_input?.file_path || input.tool_input?.notebook_path || '';
     if (!filePath) return;
@@ -180,26 +220,40 @@ export async function hookSessionEnd() {
       cache_read_tokens: usage.cache_read,
     })
   );
+  // Attribute tokens to the run this session belongs to. The active run wins
+  // when it's ours (or unbound); otherwise fall back to the run bound to this
+  // session — the standard pipeline ends with `aos run finish` INSIDE the
+  // session, which clears the active pointer before SessionEnd fires, and
+  // without the fallback every normally-completed run would report 0 tokens.
+  let target = null;
   const active = getActiveRun(project.id);
   if (active) {
-    // Only attribute this session's tokens to the run it is bound to.
     const bound = runMeta(project.id, active)?.session;
-    if (!bound || !input.session_id || bound === input.session_id) {
-      addRunTokens(project.id, active, usage);
-    }
+    if (!bound || !input.session_id || bound === input.session_id) target = active;
   }
+  if (!target) target = findRunBySession(project.id, input.session_id)?.run || null;
+  if (target) addRunTokens(project.id, target, usage);
   appendAudit(project.id, { event: 'session-end', session: input.session_id || null });
 }
 
 export async function runHook(name) {
   // A broken hook must never break the user's session: swallow everything.
+  // But a swallowed pre-tool error means the gate failed OPEN — so leave a
+  // trace. `aos doctor` surfaces the log; the cap keeps it from growing forever.
   try {
     if (name === 'pre-tool') await hookPreTool();
     else if (name === 'post-tool') await hookPostTool();
     else if (name === 'session-start') await hookSessionStart();
     else if (name === 'session-end') await hookSessionEnd();
-  } catch {
-    // intentionally silent
+  } catch (e) {
+    try {
+      const log = path.join(aosHome(), 'hook-errors.log');
+      if (!fs.existsSync(log) || fs.statSync(log).size < 1_000_000) {
+        appendLine(log, JSON.stringify({ ts: nowIso(), hook: name, error: String((e && e.stack) || e) }));
+      }
+    } catch {
+      // logging must never throw either
+    }
   }
   process.exit(0);
 }

@@ -10,8 +10,10 @@ import { loadPolicy } from '../policy.js';
 
 const UI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html');
 
+const BASE_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
+
 function json(res, code, body) {
-  res.writeHead(code, { 'Content-Type': 'application/json' });
+  res.writeHead(code, { 'Content-Type': 'application/json', ...BASE_HEADERS });
   res.end(JSON.stringify(body));
 }
 
@@ -83,9 +85,8 @@ function runDetail(projectId, runId) {
   if (!meta) return null;
   const dir = runDir(projectId, runId);
   const auditRaw = readIfExists(path.join(dir, 'audit.jsonl')) || '';
-  const audit = auditRaw
-    .split('\n')
-    .filter(Boolean)
+  const auditLines = auditRaw.split('\n').filter(Boolean);
+  const audit = auditLines
     .slice(-60)
     .map((l) => {
       try {
@@ -99,6 +100,7 @@ function runDetail(projectId, runId) {
     meta,
     dir,
     audit,
+    audit_total: auditLines.length,
     ticket: readIfExists(path.join(dir, 'ticket.md')),
     plan: readIfExists(path.join(dir, 'plan.md')),
     outcome: readIfExists(path.join(dir, 'outcome.md')),
@@ -112,7 +114,7 @@ export function serveConsole(port = 4560) {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
     try {
       if (url.pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.writeHead(200, { 'Content-Type': 'text/html', ...BASE_HEADERS });
         res.end(fs.readFileSync(UI_PATH));
       } else if (url.pathname === '/api/state') {
         json(res, 200, fullState());

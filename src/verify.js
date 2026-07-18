@@ -32,6 +32,17 @@ function tail(s, n = 1500) {
 export function verifyContracts(projectId, cwd) {
   const policy = loadPolicy(projectId);
   const contracts = policy.verification?.contracts || [];
+  // No contracts → nothing was verified. Recording a "pass" here would count
+  // the run as clean-first-pass in the leverage ratio without a single check
+  // having run — the run's verification stays as it was.
+  if (!contracts.length) {
+    appendAudit(projectId, { event: 'verify', verdict: 'none', contracts: [] });
+    return {
+      verdict: 'none',
+      results: [],
+      adversarial_review: policy.verification?.adversarial_review !== false,
+    };
+  }
   const results = contracts.map((c) => runContract(c, cwd));
   const requiredFailed = results.filter((r) => r.required && !r.pass);
   const verdict = requiredFailed.length === 0 ? 'pass' : 'fail';

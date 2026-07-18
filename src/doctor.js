@@ -80,6 +80,18 @@ export function runDoctor({ appRoot, version, bundled = false }) {
     })
   );
 
+  checks.push(
+    check('hooks failing silently', () => {
+      // Hooks swallow their own errors so a broken AOS can never break a
+      // session — this is where those swallowed errors surface.
+      const log = path.join(aosHome(), 'hook-errors.log');
+      if (!fs.existsSync(log)) return 'none logged';
+      const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+      if (!lines.length) return 'none logged';
+      throw new Error(`${lines.length} hook failure(s) logged — inspect, then clear: ${log}`);
+    })
+  );
+
   const project = findProjectByCwd(process.cwd());
   checks.push(
     check('current directory', () => {

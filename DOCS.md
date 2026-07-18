@@ -177,9 +177,11 @@ two already knows what session one learned. Repeated procedures become
 `playbooks/`.
 
 **Metrics.** `aos status` and the console show a **leverage ratio** (share of
-finished runs that passed verification on the first attempt) and **token
-economics** (input, output, and cache-read tracked separately, since cache reads
-cost a fraction of fresh tokens).
+finished runs that passed verification on the first attempt — runs with no
+contracts configured are never counted as passing, since nothing was verified)
+and **token economics** (input, output, and cache-read tracked separately, since
+cache reads cost a fraction of fresh tokens). Token numbers are best-effort:
+they're recorded when a session ends, so sessions that crash aren't counted.
 
 ## Directory layout
 
@@ -286,7 +288,7 @@ automatically — no skill invocation needed.
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session. |
-| `PreToolUse` | Gates **Bash and file writes** (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Enforces `plan_gate: ask` until `aos run approve`. |
+| `PreToolUse` | Gates **Bash and file writes** (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected paths are enforced on the shell path too (`tee`, `> file`, `sed -i` naming a protected target get the same ask), and evasive git-push forms (`git -C . push`) are caught structurally. Enforces `plan_gate: ask` — including write-intent Bash — until `aos run approve`. |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl`, and binds a run to the session that started it (so concurrent sessions don't pollute its trail). |
 | `SessionEnd` | Records token usage — fresh input, output, and cache reads separately — per session and per run. |
 

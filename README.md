@@ -84,7 +84,7 @@ aos console             # http://127.0.0.1:4560
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session |
-| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails). Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes stay gated until you run `aos run approve` |
+| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve` |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl` — each run is bound to the session that started it, so concurrent sessions don't pollute its trail |
 | `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run |
 

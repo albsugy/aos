@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+Accuracy and hardening: the console's numbers now hold up to scrutiny, and the
+gates cover the shell path they previously missed.
+
+- **Fixed: finished runs no longer report 0 tokens.** The standard pipeline ends
+  with `aos run finish` *inside* the session, which cleared the active-run
+  pointer before `SessionEnd` fired — so token usage never reached the run.
+  Attribution now falls back to the run bound to the session, active or not.
+- **Fixed: no free verification pass.** `aos verify` with zero contracts
+  configured used to record `verification: pass`, letting unverified runs count
+  as clean-first-pass in the leverage ratio. It now records nothing, says
+  "nothing was verified", and still exits 0.
+- **Plan gate covers Bash.** With `plan_gate: ask`, write-intent shell commands
+  (`tee`, `> file`, `sed -i`, `git apply`, `cp`/`mv`/…) are gated until
+  `aos run approve`, closing the path that let an agent implement the whole
+  change via redirection while the plan sat unapproved. Writes into the run
+  folder and project memory stay open.
+- **Protected paths cover Bash.** Shell commands that write to
+  `.claude/settings.json`, `.git/hooks/`, or AOS policy/audit state get the
+  same "ask" the file tools would.
+- **Evasive git-push forms caught structurally.** `git -C . push` and other
+  global-option forms the regex tiers missed now resolve to the push gate
+  (forced pushes → denied); `git stash push` stays clean.
+- **Hook failures are no longer invisible.** Hooks still fail open by design
+  (a broken AOS must never break a session), but swallowed errors now land in
+  `~/.aos/hook-errors.log` and `aos doctor` flags them.
+- **Console accuracy.** Audit tab shows the true entry count (tail-of-60 is
+  labeled); the Implement stage lights only on write/Bash activity, not reads;
+  "Active runs" became "In progress" and counts what it says; the attempts
+  column tooltip says "total attempts"; project cards date by latest update,
+  not latest-created run; the sync indicator says "offline" when polling fails;
+  token tooltips note the numbers are best-effort. Plus `nosniff`/`no-store`
+  headers and apostrophe-safe HTML escaping.
+
 ## 0.8.1 — 2026-07-05
 
 The open-source release: public repository, provenance-attested publishes, and

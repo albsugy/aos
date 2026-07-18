@@ -99,6 +99,13 @@ verification:
 EOF
 if $AOS verify >/dev/null 2>&1; then fail "verify should exit 1 on required failure"; else pass "verify: required failure → exit 1"; fi
 
+# zero contracts → nothing verified: exit 0, but the run's verdict must NOT flip to pass
+cat > "$AOS_HOME/projects/demo/policy.yaml" <<'EOF'
+version: 1
+EOF
+$AOS verify 2>/dev/null | grep -q "nothing was verified" && pass "verify: no contracts → says so" || fail "no-contract wording"
+grep -q '"verification": "fail"' "$RUN_DIR/meta.json" && pass "verify: no contracts → no free pass recorded" || fail "zero-contract verify granted a pass"
+
 # --- finish + status + find ---
 $AOS run finish >/dev/null
 $AOS status | grep -q "awaiting-review" && pass "status shows awaiting-review" || fail "status"
@@ -115,6 +122,26 @@ hook_out "$IN_RMSTAR" | grep -q '"permissionDecision":"deny"' && pass "gate: rm 
 hook_out "$IN_FWL"    | grep -q '"permissionDecision":"ask"'  && pass "gate: force-with-lease → ask, not deny" || fail "force-with-lease verdict"
 [ -z "$(hook_out "$IN_DOCDEPLOY")" ] && pass "gate: cat docs/deploy.md → allow (no false positive)" || fail "deploy false positive"
 hook_out "$IN_RUNDEPLOY" | grep -q '"permissionDecision":"ask"' && pass "gate: ./deploy → ask" || fail "deploy invocation not gated"
+
+# evasive git-push forms: global options between git and the subcommand.
+# (FORCE_FLAG indirection keeps this script itself clean under the script-content scan.)
+FORCE_FLAG="--""force"
+IN_GITC='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"git -C . push origin main"},"session_id":"s1"}'
+IN_GITCF='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"git -C . push '$FORCE_FLAG' origin main"},"session_id":"s1"}'
+IN_STASH='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"git stash push"},"session_id":"s1"}'
+hook_out "$IN_GITC"  | grep -q '"permissionDecision":"ask"'  && pass "gate: git -C . push → ask (evasive form)" || fail "git -C push bypass"
+hook_out "$IN_GITCF" | grep -q '"permissionDecision":"deny"' && pass "gate: git -C . push -force → deny" || fail "git -C forced push bypass"
+[ -z "$(hook_out "$IN_STASH")" ] && pass "gate: git stash push → allow (no false positive)" || fail "git stash push gated"
+
+# Bash writes to protected targets get the same ask the file tools would
+IN_BASHSET='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"echo {} > .claude/settings.json"},"session_id":"s1"}'
+IN_BASHHOOKS='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"cp x .git/hooks/pre-commit"},"session_id":"s1"}'
+IN_BASHPOLICY='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"echo x > '$AOS_HOME'/projects/demo/policy.yaml"},"session_id":"s1"}'
+IN_BASHSCRATCH='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"echo hello > scratch.txt"},"session_id":"s1"}'
+hook_out "$IN_BASHSET"    | grep -q '"permissionDecision":"ask"' && pass "gate: bash write to .claude/settings.json → ask" || fail "bash settings write bypass"
+hook_out "$IN_BASHHOOKS"  | grep -q '"permissionDecision":"ask"' && pass "gate: bash write to .git/hooks → ask" || fail "bash git-hook write bypass"
+hook_out "$IN_BASHPOLICY" | grep -q '"permissionDecision":"ask"' && pass "gate: bash write to policy.yaml → ask" || fail "bash policy write bypass"
+[ -z "$(hook_out "$IN_BASHSCRATCH")" ] && pass "gate: ordinary bash write → allow (no plan gate active)" || fail "ordinary bash write gated"
 
 # --- file-write gates: self-protection + script laundering ---
 IN_SETTINGS='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/.claude/settings.json","content":"{}"},"session_id":"s1"}'
@@ -138,10 +165,18 @@ IN_IMPL='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'
 IN_PLANFILE='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$RUN2_DIR'/plan.md","content":"# Plan"},"session_id":"sA"}'
 hook_out "$IN_IMPL" | grep -q '"permissionDecision":"ask"' && pass "plan gate: repo write before approval → ask" || fail "plan gate not enforced"
 [ -z "$(hook_out "$IN_PLANFILE")" ] && pass "plan gate: writing plan.md itself → allow" || fail "plan gate blocks plan.md"
+# Bash write-intent is plan-gated too — tee/redirect/sed -i can't sidestep the file gate
+IN_BASHW='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"echo hack > src/feature.js"},"session_id":"sA"}'
+IN_BASHRO='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"grep -r todo src"},"session_id":"sA"}'
+IN_BASHRUNDIR='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"echo notes >> '$RUN2_DIR'/plan.md"},"session_id":"sA"}'
+hook_out "$IN_BASHW" | grep -q '"permissionDecision":"ask"' && pass "plan gate: bash write before approval → ask" || fail "bash write not plan-gated"
+[ -z "$(hook_out "$IN_BASHRO")" ] && pass "plan gate: read-only bash → allow" || fail "read-only bash plan-gated"
+[ -z "$(hook_out "$IN_BASHRUNDIR")" ] && pass "plan gate: bash write into run folder → allow" || fail "plan gate blocks run-folder bash write"
 hook_out '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sA"}' \
   | grep -q '"permissionDecision":"ask"' && pass "plan gate: agent self-approval → ask (human decides)" || fail "self-approval not gated"
 $AOS run approve >/dev/null
 [ -z "$(hook_out "$IN_IMPL")" ] && pass "plan gate: repo write after approval → allow" || fail "plan gate stuck after approval"
+[ -z "$(hook_out "$IN_BASHW")" ] && pass "plan gate: bash write after approval → allow" || fail "bash plan gate stuck after approval"
 
 # --- session binding: concurrent sessions don't pollute the run ---
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-2"},"session_id":"sA"}' | $AOS hook post-tool
@@ -159,6 +194,10 @@ grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: cache reads a
 printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"}' | $AOS hook session-end
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
 $AOS run finish >/dev/null
+# The standard pipeline finishes the run INSIDE the session — tokens recorded at
+# SessionEnd must still land on the (now inactive) run this session is bound to.
+printf '%s' '{"cwd":"'"$REPO"'","session_id":"sA","transcript_path":"'"$TRANS"'"}' | $AOS hook session-end
+grep -q '"input": 30' "$RUN2_DIR/meta.json" && pass "tokens: finished run still credited via session binding" || fail "tokens lost after run finish"
 
 # --- adversarial review: evidence-of-process recorded at finish ---
 $AOS run start --ticket "LIN-3" >/dev/null

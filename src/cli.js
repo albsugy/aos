@@ -187,12 +187,17 @@ async function main() {
         console.log(`${r.pass ? '✅' : '❌'} ${r.name}${r.required ? ' (required)' : ''} — ${r.ms}ms`);
         if (!r.pass) console.log(r.output.split('\n').slice(-15).join('\n'));
       }
-      if (!results.length) console.log('No contracts configured in policy.yaml (verification.contracts).');
-      console.log(`\nContract verdict: ${verdict.toUpperCase()}`);
+      if (verdict === 'none') {
+        console.log(
+          'No contracts configured in policy.yaml (verification.contracts) — nothing was verified.'
+        );
+      } else {
+        console.log(`\nContract verdict: ${verdict.toUpperCase()}`);
+      }
       if (adversarial_review) {
         console.log('Adversarial review required: spawn a skeptic subagent per /aos-verify.');
       }
-      process.exit(verdict === 'pass' ? 0 : 1);
+      process.exit(verdict === 'fail' ? 1 : 0);
       break;
     }
     case 'find': {

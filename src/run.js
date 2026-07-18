@@ -118,6 +118,13 @@ export function bindRunSession(projectId, runId, sessionId) {
   });
 }
 
+// The most recent run bound to this session, active or not — SessionEnd uses
+// this so a run finished mid-session still receives its tokens.
+export function findRunBySession(projectId, sessionId) {
+  if (!sessionId) return null;
+  return listRuns(projectId).find((r) => r.session === sessionId) || null;
+}
+
 export function approvePlan(projectId, runId) {
   const meta = mutateRunMeta(projectId, runId, (m) => {
     if (m.plan_approved) return false;

@@ -274,10 +274,13 @@ let state = null;                    // /api/state payload
 const projCache = new Map();         // id -> /api/project payload
 const runCache = new Map();          // id/run -> /api/run payload
 const ui = { runFilter: 'open', runSearch: '', runTab: null, auditFilter: 'all' };
-let lastSync = 0, lastKey = '', drawnNav = '';
+let lastSync = 0, lastKey = '', drawnNav = '', syncErr = false;
 
 /* ── helpers ─────────────────────────────────────────────── */
-function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* For ids interpolated into inline onclick JS strings: encodeURIComponent leaves
+   apostrophes alone, which would terminate the string after HTML decoding. */
+function encU(s) { return encodeURIComponent(s).replace(/'/g, '%27'); }
 function fmtTok(n) { n = n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(n); }
 function shortRun(id) { return String(id).replace(/^\d{4}-\d{2}-\d{2}-/, ''); }
 function rel(ts) {
@@ -299,7 +302,8 @@ function leverage(v) {
   return `<span class="lev" title="Share of finished runs that passed verification on the first attempt"><span class="bar"><i style="width:${v}%"></i></span><span class="n">${v}%</span></span>`;
 }
 function needsYou(p) { return p.runs.filter(r => r.state === 'awaiting-review' || r.state === 'blocked').length; }
-function lastActivity(p) { return p.runs.length ? p.runs[0].updated : null; }
+/* runs are sorted by created — an older run touched later must still win */
+function lastActivity(p) { return p.runs.reduce((m, r) => (!m || r.updated > m ? r.updated : m), null); }
 
 /* Minimal, safe markdown: escape first, then transform. No raw HTML passes through. */
 function md(src) {
@@ -396,11 +400,14 @@ async function refresh() {
   try {
     state = await getJSON('/api/state');
     lastSync = Date.now();
+    syncErr = false;
     $('#sync').classList.remove('err');
     await loadDetails(false);
     draw();
   } catch (e) {
+    syncErr = true;
     $('#sync').classList.add('err');
+    $('#synct').textContent = 'offline';
     const err = $('#error');
     if (err) { err.textContent = 'Console cannot reach the AOS API: ' + e.message; err.style.display = 'block'; }
   }
@@ -428,7 +435,7 @@ function draw() {
   const r = route();
   drawSide(r);
   drawCrumbs(r);
-  $('#synct').textContent = lastSync ? 'live' : '…';
+  $('#synct').textContent = syncErr ? 'offline' : lastSync ? 'live' : '…';
   // Don't yank the DOM out from under someone typing in a filter box.
   if (document.activeElement && document.activeElement.tagName === 'INPUT' && $('#screen').contains(document.activeElement)) return;
   const html = r.screen === 'project' ? renderProject(r) : r.screen === 'run' ? renderRun(r) : renderOverview();
@@ -483,19 +490,19 @@ function renderOverview() {
     .filter(x => x.state === 'awaiting-review' || x.state === 'blocked')
     .map(x => ({ ...x, project: p })));
   queue.sort((a, b) => (a.updated < b.updated ? 1 : -1));
-  const active = projects.filter(p => p.activeRun).length;
+  const inProgress = projects.reduce((a, p) => a + p.runs.filter(x => x.state === 'in-progress').length, 0);
   const tok = projects.reduce((a, p) => ({ i: a.i + p.tokens.input, o: a.o + p.tokens.output, c: a.c + (p.tokens.cache_read || 0) }), { i: 0, o: 0, c: 0 });
 
   let html = `<div class="kpis">
     <div class="kpi"><div class="l">Projects</div><div class="v">${projects.length}</div></div>
     <div class="kpi" title="Runs blocked or awaiting your review"><div class="l">Need you</div><div class="v" style="color:${queue.length ? 'var(--s-await)' : 'var(--s-good)'}">${queue.length}</div></div>
-    <div class="kpi" title="Projects with a run in progress"><div class="l">Active runs</div><div class="v">${active}</div></div>
-    <div class="kpi" title="Fresh input + output across all sessions (cache reads shown separately — they cost ~10% of fresh tokens)"><div class="l">Tokens</div><div class="v">${fmtTok(tok.i + tok.o)}</div><div class="sub">${fmtTok(tok.i)} in · ${fmtTok(tok.o)} out${tok.c ? ` · ${fmtTok(tok.c)} cached` : ''}</div></div>
+    <div class="kpi" title="Runs in state in-progress across all projects"><div class="l">In progress</div><div class="v">${inProgress}</div></div>
+    <div class="kpi" title="Fresh input + output across all sessions (cache reads shown separately — they cost ~10% of fresh tokens). Best-effort: recorded when a session ends, so crashed sessions aren't counted"><div class="l">Tokens</div><div class="v">${fmtTok(tok.i + tok.o)}</div><div class="sub">${fmtTok(tok.i)} in · ${fmtTok(tok.o)} out${tok.c ? ` · ${fmtTok(tok.c)} cached` : ''}</div></div>
   </div>`;
 
   html += `<section><h2 title="Everything blocked on a human decision, newest first">Decision queue</h2><div class="card">`;
   html += queue.length
-    ? queue.map(q => `<div class="qrow" onclick="go('#/p/${encodeURIComponent(q.project.id)}/r/${encodeURIComponent(q.run)}')">
+    ? queue.map(q => `<div class="qrow" onclick="go('#/p/${encU(q.project.id)}/r/${encU(q.run)}')">
         ${chip(q.state, STATE_TIP[q.state])}
         <span class="ticket">${esc(q.ticket || q.run)}</span>
         <span class="proj">${esc(q.project.name)}</span>
@@ -558,12 +565,12 @@ function renderProject(r) {
   } else {
     html += `<div class="tscroll"><table><thead><tr>
       <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
-      <th class="num" title="Verification attempts before pass">Att.</th>
+      <th class="num" title="Total verification attempts (aos verify invocations)">Att.</th>
       <th class="num" title="Fresh input + output tokens attributed to this run">Tokens</th><th class="num">Updated</th>
     </tr></thead><tbody>`;
     for (const x of runs) {
       const dim = ['done', 'shipped'].includes(x.state) ? ' dim' : '';
-      html += `<tr class="rowlink${dim}" onclick="go('#/p/${encodeURIComponent(p.id)}/r/${encodeURIComponent(x.run)}')">
+      html += `<tr class="rowlink${dim}" onclick="go('#/p/${encU(p.id)}/r/${encU(x.run)}')">
         <td class="mono" title="${esc(x.run)}">${esc(shortRun(x.run))}</td>
         <td class="trunc" title="${esc(x.title || x.ticket || '')}">${esc(x.title || x.ticket || '—')}</td>
         <td>${chip(x.state, STATE_TIP[x.state])}</td>
@@ -613,7 +620,7 @@ function stageStrip(d) {
   const st = [
     ['Intake', !!d.ticket, false],
     ['Plan', !!d.plan, false],
-    ['Implement', (d.audit || []).some(a => a.event === 'tool') || finished, false],
+    ['Implement', (d.audit || []).some(a => a.event === 'tool' && /^(Bash|Write|Edit|MultiEdit|NotebookEdit)$/.test(a.tool || '')) || finished, false],
     ['Verify', m.verification === 'pass', m.verification === 'fail'],
     ['Package', !!d.outcome || finished, false],
   ];
@@ -652,12 +659,12 @@ function renderRun(r) {
     <span title="Fresh input · output tokens attributed to this run${m.tokens?.cache_read ? `, plus ${fmtTok(m.tokens.cache_read)} cache reads` : ''}">tokens <b>${fmtTok(m.tokens?.input || 0)} in · ${fmtTok(m.tokens?.output || 0)} out</b></span>
     <span title="${esc(m.created || '')}">started <b>${rel(m.created)}</b></span>
     <span title="${esc(m.updated || '')}">updated <b>${rel(m.updated)}</b></span>
-    ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(dir)}</span><button onclick="navigator.clipboard.writeText('${esc(dir)}');this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy run folder path">copy</button></span>` : ''}
+    ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(dir)}</span><button data-path="${esc(dir)}" onclick="navigator.clipboard.writeText(this.dataset.path);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy run folder path">copy</button></span>` : ''}
   </div>`;
   html += stageStrip(d);
 
   html += `<div class="tabs">` + tabs.map(([k, label, has]) =>
-    `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="ui.runTab='${k}';lastKey='';draw()">${label}${k === 'audit' ? `<span class="n">${(d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
+    `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="ui.runTab='${k}';lastKey='';draw()">${label}${k === 'audit' ? `<span class="n">${d.audit_total ?? (d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
   ).join('') + `</div>`;
 
   if (ui.runTab === 'audit') {
@@ -670,6 +677,10 @@ function renderRun(r) {
       `<button class="fchip ${ui.auditFilter === k ? 'on' : ''}" onclick="ui.auditFilter='${k}';lastKey='';draw()">${l}</button>`).join('') + `</div>`;
     if (!audit.length) html += `<div class="empty">No audit entries${ui.auditFilter !== 'all' ? ' for this filter' : ' yet'}.</div>`;
     else {
+      const total = d.audit_total ?? (d.audit || []).length;
+      if (total > (d.audit || []).length) {
+        html += `<div class="skel" style="text-align:left;padding:0 0 10px">showing the last ${(d.audit || []).length} of ${total} entries — full trail in audit.jsonl</div>`;
+      }
       html += `<div class="timeline">`;
       for (const a of audit) {
         const cls = a.event === 'gate' ? `gate-${a.decision || 'ask'}`
