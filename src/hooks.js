@@ -2,17 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { aosHome, projectDir, appendLine, nowIso } from './paths.js';
 import { findProjectByCwd } from './registry.js';
+import os from 'node:os';
 import {
   loadPolicy,
   evaluateCommand,
   evaluateFileWrite,
   evaluateBashProtected,
   commandWritesFiles,
+  commandSegments,
+  stripQuoted,
 } from './policy.js';
 import {
   appendAudit,
   getActiveRun,
-  addRunTokens,
+  settleRunTokens,
   bindRunSession,
   findRunBySession,
   runDir,
@@ -69,15 +72,42 @@ function planGateVerdict(projectId, absPath, sessionId) {
 
 // The Bash side of the plan gate: `tee`, `> file`, `sed -i`, `git apply`
 // would otherwise implement the whole change while the plan sits unapproved.
-// Commands that name the run folder or project memory stay open (writing
-// plan.md via shell is fine); everything else with write intent gets an ask.
+// Writes aimed at the run folder or project memory stay open (writing plan.md
+// via shell is fine) — checked per pipeline segment, so chaining a repo write
+// with a run-folder note doesn't exempt the repo write.
+function exemptDirVariants(dir) {
+  const home = os.homedir();
+  const variants = [dir];
+  if (dir.startsWith(home + path.sep)) {
+    variants.push('~' + dir.slice(home.length), '$HOME' + dir.slice(home.length));
+  }
+  return variants;
+}
+
 function planGateBashVerdict(projectId, command, sessionId) {
   const active = unapprovedPlanRun(projectId, sessionId);
   if (!active) return null;
-  if (!commandWritesFiles(command)) return null;
-  const cmd = String(command || '');
-  if (cmd.includes(runDir(projectId, active)) || cmd.includes(projectDir(projectId))) return null;
-  return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
+  const exempt = [
+    ...exemptDirVariants(runDir(projectId, active)),
+    ...exemptDirVariants(projectDir(projectId)),
+  ];
+  // Segment over quote-stripped text — splitting on `(` inside a quoted
+  // string would otherwise strand things like "x => x*2" in their own
+  // segment, where the > reads as a redirect.
+  let sawSegmentWrite = false;
+  for (const segment of commandSegments(stripQuoted(command))) {
+    if (!commandWritesFiles(segment)) continue;
+    sawSegmentWrite = true;
+    if (exempt.some((d) => segment.includes(d))) continue;
+    return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
+  }
+  // Interpreter one-liners span segment splits (the `(` in `open(…)` is a
+  // split point), so re-check the whole command; exemption then falls back to
+  // a whole-command dir mention.
+  if (!sawSegmentWrite && commandWritesFiles(command) && !exempt.some((d) => command.includes(d))) {
+    return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
+  }
+  return null;
 }
 
 export async function hookPreTool() {
@@ -144,13 +174,24 @@ export async function hookPostTool() {
   const project = resolveProject(input);
   if (!project) return;
   // The Bash call that ran `aos run start` just completed inside this session:
-  // bind the new active run to it, so concurrent sessions' audit and tokens
-  // stay out of this run from here on.
+  // bind the new active run to it (with the session's usage so far as its
+  // token baseline), so concurrent sessions' audit and tokens stay out of this
+  // run — and the run isn't charged for tokens spent before it started.
   if (input.tool_name === 'Bash' && input.session_id) {
     const command = String(input.tool_input?.command || '');
     if (command.includes('aos') && /\brun\s+start\b/.test(command)) {
       const active = getActiveRun(project.id);
-      if (active) bindRunSession(project.id, active, input.session_id);
+      if (active) {
+        const baseline = input.transcript_path ? sumTranscriptUsage(input.transcript_path) : null;
+        bindRunSession(project.id, active, input.session_id, baseline);
+      }
+    } else if (command.includes('aos') && /\brun\s+finish\b/.test(command)) {
+      // Settle the finished run's tokens now, at its actual end — not at
+      // SessionEnd, when later runs' spend would be lumped in.
+      const bound = findRunBySession(project.id, input.session_id);
+      if (bound && input.transcript_path) {
+        settleRunTokens(project.id, bound.run, sumTranscriptUsage(input.transcript_path));
+      }
     }
   }
   appendAudit(project.id, {
@@ -179,8 +220,12 @@ export async function hookSessionStart() {
 // Best-effort token accounting from the session transcript. Cache reads are
 // tracked separately from fresh input: they cost ~10% of a fresh token, so
 // folding them into `input` would wildly overstate spend.
+//
+// The legacy totals (input incl. cache writes) stay for continuity; the
+// per-model `models` buckets split cache writes out (they bill at 1.25x/2x
+// input, not 1x) so dollar estimates can be honest.
 function sumTranscriptUsage(transcriptPath) {
-  const usage = { input: 0, output: 0, cache_read: 0 };
+  const usage = { input: 0, output: 0, cache_read: 0, models: {} };
   try {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
     for (const line of raw.split('\n')) {
@@ -188,10 +233,24 @@ function sumTranscriptUsage(transcriptPath) {
       try {
         const entry = JSON.parse(line);
         const u = entry?.message?.usage;
-        if (u) {
-          usage.input += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-          usage.output += u.output_tokens || 0;
-          usage.cache_read += u.cache_read_input_tokens || 0;
+        if (!u) continue;
+        usage.input += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+        usage.output += u.output_tokens || 0;
+        usage.cache_read += u.cache_read_input_tokens || 0;
+        const model = entry?.message?.model;
+        if (!model) continue;
+        const b = (usage.models[model] = usage.models[model] || {
+          input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0,
+        });
+        b.input += u.input_tokens || 0;
+        b.output += u.output_tokens || 0;
+        b.cache_read += u.cache_read_input_tokens || 0;
+        const cc = u.cache_creation;
+        if (cc && (cc.ephemeral_5m_input_tokens != null || cc.ephemeral_1h_input_tokens != null)) {
+          b.cache_write_5m += cc.ephemeral_5m_input_tokens || 0;
+          b.cache_write_1h += cc.ephemeral_1h_input_tokens || 0;
+        } else {
+          b.cache_write_5m += u.cache_creation_input_tokens || 0; // no TTL breakdown — assume 5m
         }
       } catch {
         // skip malformed lines
@@ -218,6 +277,8 @@ export async function hookSessionEnd() {
       input_tokens: usage.input,
       output_tokens: usage.output,
       cache_read_tokens: usage.cache_read,
+      // per-model buckets — what the $ estimates are computed from
+      models: Object.keys(usage.models).length ? usage.models : undefined,
     })
   );
   // Attribute tokens to the run this session belongs to. The active run wins
@@ -225,6 +286,8 @@ export async function hookSessionEnd() {
   // session — the standard pipeline ends with `aos run finish` INSIDE the
   // session, which clears the active pointer before SessionEnd fires, and
   // without the fallback every normally-completed run would report 0 tokens.
+  // settleRunTokens subtracts the run's bind-time baseline and is once-only,
+  // so a run already settled at finish is not double-counted here.
   let target = null;
   const active = getActiveRun(project.id);
   if (active) {
@@ -232,7 +295,7 @@ export async function hookSessionEnd() {
     if (!bound || !input.session_id || bound === input.session_id) target = active;
   }
   if (!target) target = findRunBySession(project.id, input.session_id)?.run || null;
-  if (target) addRunTokens(project.id, target, usage);
+  if (target) settleRunTokens(project.id, target, usage);
   appendAudit(project.id, { event: 'session-end', session: input.session_id || null });
 }
 

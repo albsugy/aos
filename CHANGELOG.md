@@ -1,9 +1,63 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-07-19
+
+New in this cycle — cost visibility, operator metrics, and portability:
+
+- **Estimated dollar cost, honestly labeled.** Token usage is now recorded
+  per model (cache writes split from fresh input — they bill at 1.25×/2×, not
+  1×), and `aos status` plus the console show **≈ $ estimated at API list
+  prices** for projects and per run. Subscription usage is flagged as
+  API-equivalent value; unknown models stay unpriced rather than guessed;
+  rates are overridable in `~/.aos/pricing.yaml` and applied at display time,
+  so updating the table corrects history.
+- **Operator metrics from data AOS already has.** Runs record when they enter
+  each state (`state_times`); the console shows **cycle time** per run, median
+  cycle per project, the **oldest-waiting** age on the decision queue with
+  stale (>48h) items flagged, **adversarial-review coverage** (% of finished
+  runs with a review actually recorded), and per-contract failure counts from
+  each run's latest verify attempt.
+- **`aos export` — the context pack as AGENTS.md.** Writes the project's pack,
+  recent decisions, and learnings to the repo's `AGENTS.md`, which Codex CLI,
+  Cursor, Copilot, and Claude Code (as fallback) read natively. Context only —
+  gates and audit remain Claude Code-side. Refuses to overwrite a hand-written
+  AGENTS.md; re-exports over its own marker.
 
 Accuracy and hardening: the console's numbers now hold up to scrutiny, and the
 gates cover the shell path they previously missed.
+
+Round two (adversarial review of the gates + supply-chain pipeline):
+
+- **Precise per-run token attribution.** Runs now record a token *baseline* at
+  bind time and settle exactly once — at `aos run finish` (via the post-tool
+  hook) or at SessionEnd, whichever comes first. A session that executes two
+  runs back-to-back credits each with its own spend instead of dumping the
+  whole session onto the last one; tokens spent before `run start` are no
+  longer charged to the run.
+- **Write-intent heuristic covers interpreters and more tools.** `python -c`/
+  `node -e`/`perl`/`ruby` one-liners that plausibly write (open(…,'w'),
+  writeFileSync, shutil, …), `sed -Ei`/`-ri` combined flags, `perl -pi`,
+  `sort -o`, `curl -o`, `wget`, `tar` extract/create, `unzip`, `git am`.
+- **Fewer false positives.** Quoted text no longer trips the gates: `git grep
+  "a > b"` and arrow functions aren't "writes", a command merely *mentioning* a
+  forbidden string is asked about rather than hard-denied (real invocations are
+  caught structurally), heredoc bodies aren't parsed as commands.
+- **Gate coverage:** `rm -rf /` inside `$(…)`, backticks, and loop bodies is
+  now caught; `git config core.hooksPath` (hook rewiring without a file write)
+  requires approval; quoted force flags (`'-f'`) and combined ones (`-uf`)
+  count as force; `node dist/aos.mjs run approve` hits the approval gate;
+  plan-gate exemption is per pipeline segment (chaining a repo write with a
+  run-folder note no longer exempts the repo write) and understands `~`/`$HOME`
+  forms of the run folder.
+- **Installer/pipeline hardening:** all installer downloads are https-only
+  (including redirects); integrity verification requires sha-512 exactly, as
+  documented; `AOS_TARBALL_SHA256` allows out-of-band pinning for mirror
+  installs (the same-origin `.sha256` sidecar is documented as
+  corruption-only); the old install is kept as a backup until the new one
+  verifies, then swapped; the release workflow now re-checks that committed
+  `dist/` matches the source at the tag before publishing; GitHub Actions are
+  pinned to commit SHAs; CI runs with read-only permissions; the release
+  script stages only release files.
 
 - **Fixed: finished runs no longer report 0 tokens.** The standard pipeline ends
   with `aos run finish` *inside* the session, which cleared the active-run

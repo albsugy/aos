@@ -7,6 +7,7 @@ import { runDir, runMeta } from '../run.js';
 import { projectDir, readIfExists, tailLines } from '../paths.js';
 import { getProject } from '../registry.js';
 import { loadPolicy } from '../policy.js';
+import { costOf } from '../pricing.js';
 
 const UI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html');
 
@@ -101,6 +102,7 @@ function runDetail(projectId, runId) {
     dir,
     audit,
     audit_total: auditLines.length,
+    cost_usd: costOf(meta.tokens?.models).usd,
     ticket: readIfExists(path.join(dir, 'ticket.md')),
     plan: readIfExists(path.join(dir, 'plan.md')),
     outcome: readIfExists(path.join(dir, 'outcome.md')),

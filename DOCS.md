@@ -183,6 +183,15 @@ and **token economics** (input, output, and cache-read tracked separately, since
 cache reads cost a fraction of fresh tokens). Token numbers are best-effort:
 they're recorded when a session ends, so sessions that crash aren't counted.
 
+**Cost estimates.** Usage is recorded per model, and the console and
+`aos status` derive an **estimated dollar cost at Anthropic API list prices**
+(cache reads at 0.1× input, cache writes at 1.25×/2×). Two honesty caveats:
+subscription (Max/Pro) usage isn't billed per token, so read the number as
+API-equivalent value; and models without a pricing rule are shown as tokens,
+never guessed. Override or extend the rates in `~/.aos/pricing.yaml`
+(`- match: "claude-opus-*"` globs with `input`/`output` in $ per MTok) — prices
+are applied at display time, so a table update corrects history retroactively.
+
 ## Directory layout
 
 ```
@@ -330,6 +339,7 @@ aos run state <state>             Set active run state (in-progress|blocked|awai
 aos run list                      List runs for this project
 aos verify                        Run the verification contracts from policy.yaml
 aos find <query>                  Search project memory (runs, decisions, learnings, audit)
+aos export                        Write the context pack as AGENTS.md (Codex/Cursor/other runtimes)
 aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
 aos projects                      List registered projects and their memory homes
 aos doctor                        Diagnose the install, registry, and this repo's wiring
@@ -359,12 +369,15 @@ aos console --port 4599     # pick another port
 
 A **read-only** dashboard with three screens:
 
-- **Overview** — fleet KPIs (projects, runs needing you, active runs, tokens),
-  the decision queue (everything blocked or awaiting review), and a card per
-  project with its leverage ratio and run-state counts.
-- **Project** — leverage/runs/tokens KPIs and a tokens-per-session sparkline, a
-  filterable + searchable runs table, the project's memory (context pack,
-  decisions, learnings — rendered), and a policy digest.
+- **Overview** — fleet KPIs (projects, runs needing you with the oldest wait,
+  runs in progress, tokens, estimated cost), the decision queue (everything
+  blocked or awaiting review, stale items flagged), and a card per project
+  with its leverage ratio and run-state counts.
+- **Project** — leverage/runs/tokens KPIs (median cycle time, estimated cost)
+  and a tokens-per-session sparkline, a filterable + searchable runs table
+  with per-run cost, the project's memory (context pack, decisions,
+  learnings — rendered), and a policy digest with adversarial-review coverage
+  and per-contract failure counts.
 - **Run** — a pipeline stage strip, plan-approval status, and tabs for Outcome /
   Verification / Audit / Ticket / Plan, with the audit timeline filterable by
   event type.

@@ -8,8 +8,9 @@ export const DEFAULT_POLICY = {
   tiers: {
     forbidden: [
       // --force-with-lease falls through to the gated `git push` rule instead.
+      // (?<=[\s'"]) also catches quoted flags; -\w*f catches combined ones (-uf).
       {
-        pattern: 'push\\s+[^|;&]*(--force(?!-with-lease)\\b|(?<=\\s)-f\\b)',
+        pattern: 'push\\s+[^|;&]*(--force(?!-with-lease)\\b|(?<=[\\s\'"])-\\w*f\\b)',
         reason: 'Force-push is forbidden by policy (--force-with-lease is gated instead)',
       },
       {
@@ -25,9 +26,10 @@ export const DEFAULT_POLICY = {
       { pattern: '(^|[;&|]\\s*)(sudo\\s+)?(\\S*/)?deploy\\b', action: 'deploy' },
       { pattern: '\\b(npm|pnpm|yarn|make)\\s+(run\\s+)?deploy\\b', action: 'deploy' },
       // Plan approval is the human's call: an agent running it hits this gate,
-      // and the permission prompt *is* the approval.
+      // and the permission prompt *is* the approval. (aos\.mjs also covers
+      // `node dist/aos.mjs run approve` in dev checkouts.)
       {
-        pattern: '\\baos\\s+run\\s+approve\\b',
+        pattern: '\\baos(\\.mjs)?\\s+run\\s+approve\\b',
         action: 'plan-approve',
         reason: 'Plan approval is reserved for the human — approve only after reviewing plan.md',
       },
@@ -87,13 +89,32 @@ const DANGEROUS_RM_TARGETS = new Set([
 ]);
 const WRAPPER_BINS = /^(sudo|command|env|nohup|time|xargs)$/i;
 
-function commandSegments(command) {
-  return String(command).split(/\|\||&&|[;|\n]/);
+// Heredoc bodies are data, not commands — parsing their lines as segments
+// produced false denies (a heredoc containing the *string* "rm -rf /" is not
+// an rm invocation).
+function stripHeredocs(command) {
+  return String(command).replace(/<<-?\s*(["']?)(\w+)\1[\s\S]*?\n\2\b/g, ' ');
 }
+
+// Quoted regions are data too: `git grep "a > b"` redirects nothing and
+// `node -e "console.log('git push --force')"` pushes nothing.
+export function stripQuoted(command) {
+  return String(command).replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+}
+
+// Split into simple-command segments. Subshells, command substitution, and
+// backticks open a new command position — `echo $(rm -rf /)` runs rm.
+export function commandSegments(command) {
+  return stripHeredocs(command).split(/\|\||&&|\$\(|[;|\n()`]/);
+}
+
+// Shell keywords that precede a command in compound statements: after `do` or
+// `then`, the next token is a fresh command position (`if rm -rf / ; then`).
+const COMMAND_PREFIX = /^(do|then|else|elif|if|until|while)$/i;
 
 function segmentTokens(segment) {
   const tokens = segment.trim().split(/\s+/).filter(Boolean);
-  while (tokens.length && WRAPPER_BINS.test(tokens[0])) tokens.shift();
+  while (tokens.length && (WRAPPER_BINS.test(tokens[0]) || COMMAND_PREFIX.test(tokens[0]))) tokens.shift();
   return tokens;
 }
 
@@ -144,12 +165,10 @@ function gitPushCheck(command) {
     if (!tokens.length || tokens[0].split('/').pop() !== 'git') continue;
     const { sub, rest } = gitSubcommand(tokens);
     if (sub !== 'push') continue;
-    const force = rest.some(
-      (t) =>
-        t === '--force' ||
-        (/^-[A-Za-z]+$/.test(t) && t.includes('f')) ||
-        t.startsWith('+')
-    );
+    const force = rest.some((raw) => {
+      const t = raw.replace(/^["']|["']$/g, ''); // quoted flags ('-f') still force
+      return t === '--force' || (/^-[A-Za-z]+$/.test(t) && t.includes('f')) || t.startsWith('+');
+    });
     return { force };
   }
   return null;
@@ -160,7 +179,12 @@ export function evaluateCommand(policy, command) {
   const cmd = String(command || '');
   const rm = dangerousRm(cmd);
   if (rm) return { decision: 'deny', action: 'forbidden', reason: rm.reason };
-  const forbidden = matchRule(policy.tiers?.forbidden, cmd);
+  // Forbidden (deny-level) regexes run against quote-stripped text so that a
+  // command merely *mentioning* a forbidden string ("echo 'git push --force'")
+  // isn't hard-blocked. The real invocations are caught structurally above and
+  // below; anything hiding in quotes (bash -c "git push …") still lands in the
+  // gated tier, which scans the raw string — a human sees it either way.
+  const forbidden = matchRule(policy.tiers?.forbidden, stripQuoted(cmd));
   if (forbidden) {
     return {
       decision: 'deny',
@@ -201,13 +225,26 @@ export function evaluateCommand(policy, command) {
 // so lean toward asking.
 const WRITE_BINS = new Set([
   'tee', 'cp', 'mv', 'install', 'rsync', 'ln', 'mkdir', 'touch',
-  'truncate', 'dd', 'patch', 'rm', 'chmod', 'chown',
+  'truncate', 'dd', 'patch', 'rm', 'chmod', 'chown', 'wget', 'unzip',
 ]);
+
+// Interpreter one-liners are the most common bulk-edit fallback when a
+// simpler write is gated — only flag them when the code plausibly writes.
+const INTERPRETER_BINS = /^(python\d*|node|ruby|perl|deno|bun|php)$/;
+const WRITE_HINTS =
+  /writeFileSync|appendFileSync|createWriteStream|\bopen\s*\([^)]*['"](w|a|r\+)|write_text|write_bytes|to_csv|savefig|shutil\.|os\.(remove|rename|unlink|makedirs|replace)|File\.(write|open)|IO\.write|file_put_contents/;
+
+// In-place-edit flags may be combined (-ri, -Ei, -pi), so match any short
+// cluster containing i.
+function inPlaceFlag(tokens) {
+  return tokens.slice(1).some((t) => /^-[A-Za-z]*i/.test(t) || t.startsWith('--in-place'));
+}
 
 export function commandWritesFiles(command) {
   const cmd = String(command || '');
-  // Redirections, minus the harmless ones: fd duplication (2>&1) and null sinks.
-  const stripped = cmd
+  // Redirections, minus quoted text ("a > b" redirects nothing) and the
+  // harmless forms: fd duplication (2>&1) and null sinks.
+  const stripped = stripQuoted(cmd)
     .replace(/[0-9]*>&[0-9]+/g, ' ')
     .replace(/&?[0-9]*>>?\s*\/dev\/null\b/g, ' ');
   if (/>>?/.test(stripped)) return true;
@@ -216,8 +253,13 @@ export function commandWritesFiles(command) {
     if (!tokens.length) continue;
     const bin = tokens[0].split('/').pop().toLowerCase();
     if (WRITE_BINS.has(bin)) return true;
-    if (bin === 'sed' && tokens.slice(1).some((t) => /^-i/.test(t) || t.startsWith('--in-place'))) return true;
-    if (bin === 'git' && gitSubcommand(tokens).sub === 'apply') return true;
+    if ((bin === 'sed' || bin === 'perl' || bin === 'awk') && inPlaceFlag(tokens)) return true;
+    if (bin === 'sort' && tokens.some((t) => t === '-o' || t.startsWith('--output'))) return true;
+    if (bin === 'curl' && tokens.some((t) => /^-[A-Za-z]*[oO]/.test(t) || t.startsWith('--output') || t.startsWith('--remote-name'))) return true;
+    // Extract and create both write; both flag styles (`-xzf` / old-style `xzf`).
+    if (bin === 'tar' && tokens[1] && (/^-?[A-Za-z]*[xc][A-Za-z]*$/.test(tokens[1]) || tokens.includes('--extract'))) return true;
+    if (bin === 'git' && ['apply', 'am'].includes(gitSubcommand(tokens).sub)) return true;
+    if (INTERPRETER_BINS.test(bin) && WRITE_HINTS.test(cmd)) return true;
   }
   return false;
 }
@@ -227,6 +269,15 @@ export function commandWritesFiles(command) {
 // hooks, AOS policy/audit state) gets the same "ask" the file tools would.
 export function evaluateBashProtected(command, { home } = {}) {
   const cmd = String(command || '');
+  // git config core.hooksPath re-points hooks at an arbitrary directory — same
+  // effect as writing .git/hooks/, with no file write for the heuristic to see.
+  if (/\bgit\b[^|;&]*\bconfig\b[^|;&]*hooksPath/i.test(cmd)) {
+    return {
+      decision: 'ask',
+      action: 'protected-path',
+      reason: 'Re-pointing core.hooksPath plants hooks that run on future git commands — requires human approval',
+    };
+  }
   if (!commandWritesFiles(cmd)) return null;
   if (/\.claude[\\/]settings(\.local)?\.json/.test(cmd)) {
     return {
@@ -243,7 +294,9 @@ export function evaluateBashProtected(command, { home } = {}) {
     };
   }
   const aosRoot = home || aosHome();
-  const namesAosHome = cmd.includes(aosRoot) || /(^|[\s"'=])(~|\$HOME|\$\{HOME\})\/\.aos\//.test(cmd);
+  // /\.aos\b catches ~/.aos, $HOME/.aos, and interpreter strings like
+  // HOME + "/.aos/…" — with or without a trailing slash (`cd ~/.aos && …`).
+  const namesAosHome = cmd.includes(aosRoot) || /\/\.aos\b/.test(cmd);
   if (namesAosHome && [...PROTECTED_AOS_BASENAMES].some((b) => cmd.includes(b))) {
     return {
       decision: 'ask',

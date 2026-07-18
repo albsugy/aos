@@ -52,6 +52,9 @@ export function verifyContracts(projectId, cwd) {
     mutateRunMeta(projectId, active, (meta) => {
       meta.verification = verdict;
       meta.verification_attempts = (meta.verification_attempts || 0) + 1;
+      // Latest per-contract outcome — the console aggregates these across
+      // runs to show which contracts fail most.
+      meta.contracts = results.map((r) => ({ name: r.name, pass: r.pass, required: r.required }));
     });
     writeVerificationReport(projectId, active, results, verdict);
   }

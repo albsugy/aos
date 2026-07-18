@@ -282,6 +282,22 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
    apostrophes alone, which would terminate the string after HTML decoding. */
 function encU(s) { return encodeURIComponent(s).replace(/'/g, '%27'); }
 function fmtTok(n) { n = n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(n); }
+function fmtUsd(v) { if (v === null || v === undefined) return null; if (v > 0 && v < 0.01) return '<$0.01'; return v >= 100 ? '$' + Math.round(v) : '$' + v.toFixed(2); }
+function fmtDur(ms) {
+  if (!(ms > 0)) return null;
+  const m = ms / 60000;
+  if (m < 60) return Math.max(1, Math.round(m)) + 'm';
+  if (m < 60 * 24) return (m / 60).toFixed(1).replace(/\.0$/, '') + 'h';
+  return (m / 1440).toFixed(1).replace(/\.0$/, '') + 'd';
+}
+/* created → first time the run reached awaiting-review (or done/shipped for old runs) */
+function cycleMs(r) {
+  const end = r.state_times?.['awaiting-review'] || r.state_times?.done || r.state_times?.shipped;
+  if (!end || !r.created) return null;
+  const ms = new Date(end) - new Date(r.created);
+  return ms > 0 ? ms : null;
+}
+const STALE_MS = 48 * 3600 * 1000;
 function shortRun(id) { return String(id).replace(/^\d{4}-\d{2}-\d{2}-/, ''); }
 function rel(ts) {
   const s = (Date.now() - new Date(ts).getTime()) / 1000;
@@ -492,22 +508,29 @@ function renderOverview() {
   queue.sort((a, b) => (a.updated < b.updated ? 1 : -1));
   const inProgress = projects.reduce((a, p) => a + p.runs.filter(x => x.state === 'in-progress').length, 0);
   const tok = projects.reduce((a, p) => ({ i: a.i + p.tokens.input, o: a.o + p.tokens.output, c: a.c + (p.tokens.cache_read || 0) }), { i: 0, o: 0, c: 0 });
+  const totalCost = projects.reduce((a, p) => (p.cost_usd !== null && p.cost_usd !== undefined ? (a || 0) + p.cost_usd : a), null);
+  const oldestWait = queue.length ? Math.max(...queue.map(q => Date.now() - new Date(q.updated).getTime())) : null;
 
   let html = `<div class="kpis">
     <div class="kpi"><div class="l">Projects</div><div class="v">${projects.length}</div></div>
-    <div class="kpi" title="Runs blocked or awaiting your review"><div class="l">Need you</div><div class="v" style="color:${queue.length ? 'var(--s-await)' : 'var(--s-good)'}">${queue.length}</div></div>
+    <div class="kpi" title="Runs blocked or awaiting your review — you are the bottleneck here"><div class="l">Need you</div><div class="v" style="color:${queue.length ? 'var(--s-await)' : 'var(--s-good)'}">${queue.length}</div>${oldestWait ? `<div class="sub"${oldestWait > STALE_MS ? ' style="color:var(--s-block)"' : ''}>oldest waiting ${fmtDur(oldestWait)}</div>` : ''}</div>
     <div class="kpi" title="Runs in state in-progress across all projects"><div class="l">In progress</div><div class="v">${inProgress}</div></div>
     <div class="kpi" title="Fresh input + output across all sessions (cache reads shown separately — they cost ~10% of fresh tokens). Best-effort: recorded when a session ends, so crashed sessions aren't counted"><div class="l">Tokens</div><div class="v">${fmtTok(tok.i + tok.o)}</div><div class="sub">${fmtTok(tok.i)} in · ${fmtTok(tok.o)} out${tok.c ? ` · ${fmtTok(tok.c)} cached` : ''}</div></div>
+    ${totalCost !== null ? `<div class="kpi" title="Estimated from per-model usage at Anthropic API list prices. Subscription (Max/Pro) usage isn't billed per token — read this as API-equivalent value. Override rates in ~/.aos/pricing.yaml"><div class="l">Est. cost</div><div class="v">${fmtUsd(totalCost)}</div><div class="sub">at API rates</div></div>` : ''}
   </div>`;
 
   html += `<section><h2 title="Everything blocked on a human decision, newest first">Decision queue</h2><div class="card">`;
   html += queue.length
-    ? queue.map(q => `<div class="qrow" onclick="go('#/p/${encU(q.project.id)}/r/${encU(q.run)}')">
+    ? queue.map(q => {
+        const waited = Date.now() - new Date(q.updated).getTime();
+        const stale = waited > STALE_MS;
+        return `<div class="qrow" onclick="go('#/p/${encU(q.project.id)}/r/${encU(q.run)}')">
         ${chip(q.state, STATE_TIP[q.state])}
         <span class="ticket">${esc(q.ticket || q.run)}</span>
         <span class="proj">${esc(q.project.name)}</span>
-        <span class="age" title="${esc(q.updated)}">${rel(q.updated)}</span>
-      </div>`).join('')
+        <span class="age" title="${esc(q.updated)}${stale ? ' — waiting a long time' : ''}"${stale ? ' style="color:var(--s-block);font-weight:600"' : ''}>${stale ? '⚠ ' : ''}${rel(q.updated)}</span>
+      </div>`;
+      }).join('')
     : `<div class="empty">Nothing needs you.</div>`;
   html += `</div></section>`;
 
@@ -537,10 +560,12 @@ function renderProject(r) {
     ${p.activeRun ? `<a class="active" href="#/p/${encodeURIComponent(p.id)}/r/${encodeURIComponent(p.activeRun)}">● active: ${esc(p.activeRun)}</a>` : ''}
   </div>`;
 
+  const cycles = p.runs.map(cycleMs).filter(Boolean).sort((a, b) => a - b);
+  const medianCycle = cycles.length ? cycles[Math.floor(cycles.length / 2)] : null;
   html += `<div class="kpis">
     <div class="kpi"><div class="l">Leverage</div><div class="v">${p.leverage === null ? '<small>no finished runs</small>' : p.leverage + '<small>%</small>'}</div><div class="sub">clean-first-pass rate</div></div>
-    <div class="kpi"><div class="l">Runs</div><div class="v">${p.runs.length}</div><div class="sub">${open.length} open</div></div>
-    <div class="kpi" title="Fresh input + output; cache reads listed separately"><div class="l">Tokens</div><div class="v">${fmtTok(p.tokens.input + p.tokens.output)}</div><div class="sub">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out${p.tokens.cache_read ? ` · ${fmtTok(p.tokens.cache_read)} cached` : ''}</div></div>
+    <div class="kpi" title="${medianCycle ? 'Median time from run start to awaiting-review' : ''}"><div class="l">Runs</div><div class="v">${p.runs.length}</div><div class="sub">${open.length} open${medianCycle ? ` · median cycle ${fmtDur(medianCycle)}` : ''}</div></div>
+    <div class="kpi" title="Fresh input + output; cache reads listed separately${p.cost_usd !== null ? '. Cost estimated at API list prices from per-model usage (subscription users: API-equivalent value)' : ''}"><div class="l">Tokens</div><div class="v">${fmtTok(p.tokens.input + p.tokens.output)}</div><div class="sub">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out${p.tokens.cache_read ? ` · ${fmtTok(p.tokens.cache_read)} cached` : ''}${p.cost_usd !== null ? ` · ≈${fmtUsd(p.cost_usd)} est.` : ''}</div></div>
     <div class="kpi"><div class="l">Tokens / session</div>${spark(d && d.sessions)}</div>
   </div>`;
 
@@ -576,7 +601,7 @@ function renderProject(r) {
         <td>${chip(x.state, STATE_TIP[x.state])}</td>
         <td>${chip(x.verification, VERIFY_TIP[x.verification])}</td>
         <td class="num">${x.verification_attempts || 0}</td>
-        <td class="num">${fmtTok((x.tokens?.input || 0) + (x.tokens?.output || 0))}</td>
+        <td class="num" title="${x.cost_usd !== null && x.cost_usd !== undefined ? 'Estimated ' + fmtUsd(x.cost_usd) + ' at API rates' : ''}">${fmtTok((x.tokens?.input || 0) + (x.tokens?.output || 0))}${x.cost_usd !== null && x.cost_usd !== undefined ? ` <span style="color:var(--ink-4)">·</span> ${fmtUsd(x.cost_usd)}` : ''}</td>
         <td class="num" title="${esc(x.updated)}">${rel(x.updated)}</td>
       </tr>`;
     }
@@ -604,10 +629,17 @@ function renderProject(r) {
   if (!d) html += `<div class="skel">Loading…</div>`;
   else {
     const pol = d.policy;
+    // Coverage: share of finished runs where a review was actually recorded
+    // (not-required and pre-tracking runs excluded).
+    const reviewed = p.runs.filter(x => x.adversarial_review === 'present').length;
+    const reviewable = reviewed + p.runs.filter(x => x.adversarial_review === 'absent').length;
+    // Per-contract failure counts from each run's last verify attempt.
+    const contractFails = {};
+    for (const x of p.runs) for (const c of x.contracts || []) if (!c.pass) contractFails[c.name] = (contractFails[c.name] || 0) + 1;
     html += `<div class="kv"><span class="k" title="ask: implementation writes stay gated until aos run approve">plan gate</span><span class="v">${chip(pol.plan_gate === 'ask' ? 'ask' : 'auto')}</span></div>`;
-    html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v">${pol.adversarial_review ? '✓ required' : 'off'}</span></div>`;
+    html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v">${pol.adversarial_review ? '✓ required' : 'off'}${reviewable ? ` · <span title="Recorded in ${reviewed} of ${reviewable} finished runs">${Math.round(reviewed / reviewable * 100)}% coverage</span>` : ''}</span></div>`;
     html += `<div class="kv"><span class="k">rules</span><span class="v">${pol.forbidden} forbidden · ${pol.gated} gated · ${pol.protected_paths} protected</span></div>`;
-    html += `<div class="kv"><span class="k">contracts</span><span class="v">${pol.contracts.length ? pol.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''}`).join(' · ') : 'none configured'}</span></div>`;
+    html += `<div class="kv"><span class="k" title="✗ counts: runs whose latest verify attempt failed this contract">contracts</span><span class="v">${pol.contracts.length ? pol.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''}${contractFails[c.name] ? ` <span style="color:var(--s-block)">(${contractFails[c.name]}✗)</span>` : ''}`).join(' · ') : 'none configured'}</span></div>`;
     if (pol.contracts.some(c => c.required)) html += `<div class="kv"><span class="k"></span><span class="v" style="color:var(--ink-4)">* required to pass</span></div>`;
   }
   html += `</div></section></div>`;
@@ -657,6 +689,8 @@ function renderRun(r) {
     ${m.title ? `<span>${esc(m.title)}</span>` : ''}
     <span title="Verification attempts">attempts <b>${m.verification_attempts || 0}</b></span>
     <span title="Fresh input · output tokens attributed to this run${m.tokens?.cache_read ? `, plus ${fmtTok(m.tokens.cache_read)} cache reads` : ''}">tokens <b>${fmtTok(m.tokens?.input || 0)} in · ${fmtTok(m.tokens?.output || 0)} out</b></span>
+    ${d.cost_usd !== null && d.cost_usd !== undefined ? `<span title="Estimated at API list prices from this run's per-model usage">est. cost <b>${fmtUsd(d.cost_usd)}</b></span>` : ''}
+    ${cycleMs(m) ? `<span title="From run start to awaiting-review">cycle <b>${fmtDur(cycleMs(m))}</b></span>` : ''}
     <span title="${esc(m.created || '')}">started <b>${rel(m.created)}</b></span>
     <span title="${esc(m.updated || '')}">updated <b>${rel(m.updated)}</b></span>
     ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(dir)}</span><button data-path="${esc(dir)}" onclick="navigator.clipboard.writeText(this.dataset.path);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy run folder path">copy</button></span>` : ''}
@@ -684,7 +718,7 @@ function renderRun(r) {
       html += `<div class="timeline">`;
       for (const a of audit) {
         const cls = a.event === 'gate' ? `gate-${a.decision || 'ask'}`
-          : a.event === 'verify' ? (a.verdict === 'pass' ? 'verify-pass' : 'verify-fail')
+          : a.event === 'verify' ? (a.verdict === 'pass' ? 'verify-pass' : a.verdict === 'fail' ? 'verify-fail' : '')
           : ['run-start', 'run-state', 'plan-approved'].includes(a.event) ? 'lifecycle' : '';
         const label = a.event === 'tool'
           ? esc(a.tool)

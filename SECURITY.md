@@ -14,7 +14,7 @@ release (`aos version`; update with `aos update`) before reporting.
 
 | Version | Supported |
 |---|---|
-| latest `0.7.x` | ✅ |
+| latest published minor | ✅ |
 | older | ❌ (please update) |
 
 ## Reporting a vulnerability

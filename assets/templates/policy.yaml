@@ -10,7 +10,9 @@ plan_gate: auto
 tiers:
   forbidden:
     # --force-with-lease is not matched here; it falls through to the gated git-push rule.
-    - pattern: 'push\s+[^|;&]*(--force(?!-with-lease)\b|(?<=\s)-f\b)'
+    # (?<=[\s'"]) also catches quoted flags ('-f') and -\w*f catches combined
+    # short flags (-uf); the CLI additionally parses git invocations structurally.
+    - pattern: 'push\s+[^|;&]*(--force(?!-with-lease)\b|(?<=[\s''"])-\w*f\b)'
       reason: Force-push is forbidden by policy (--force-with-lease is gated instead)
     - pattern: 'push\s+[^|;&]*\s\+\S'
       reason: Force-push via +refspec is forbidden by policy
@@ -30,7 +32,8 @@ tiers:
       action: deploy
     # Plan approval is the human's call: an agent running it hits this gate,
     # and approving the prompt IS the approval.
-    - pattern: '\baos\s+run\s+approve\b'
+    # aos\.mjs also covers `node dist/aos.mjs run approve` in dev checkouts.
+    - pattern: '\baos(\.mjs)?\s+run\s+approve\b'
       action: plan-approve
       reason: Plan approval is reserved for the human — approve only after reviewing plan.md
   # File writes are gated too. Built-in (always on): .claude/settings.json,

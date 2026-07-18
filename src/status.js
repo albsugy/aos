@@ -3,10 +3,11 @@ import path from 'node:path';
 import { loadRegistry } from './registry.js';
 import { listRuns, getActiveRun } from './run.js';
 import { projectDir, readIfExists } from './paths.js';
+import { costOf, fmtUsd } from './pricing.js';
 
 function sumSessions(projectId) {
   const raw = readIfExists(path.join(projectDir(projectId), 'sessions.jsonl'));
-  const total = { input: 0, output: 0, cache_read: 0 };
+  const total = { input: 0, output: 0, cache_read: 0, models: {} };
   if (!raw) return total;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -15,6 +16,12 @@ function sumSessions(projectId) {
       total.input += s.input_tokens || 0;
       total.output += s.output_tokens || 0;
       total.cache_read += s.cache_read_tokens || 0;
+      for (const [id, u] of Object.entries(s.models || {})) {
+        const t = (total.models[id] = total.models[id] || {
+          input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0,
+        });
+        for (const k of Object.keys(t)) t[k] += u[k] || 0;
+      }
     } catch {
       /* skip */
     }
@@ -29,7 +36,10 @@ function fmtTokens(n) {
 }
 
 export function projectSummary(p) {
-  const runs = listRuns(p.id);
+  const runs = listRuns(p.id).map((r) => ({
+    ...r,
+    cost_usd: costOf(r.tokens?.models).usd,
+  }));
   const byState = {};
   for (const r of runs) byState[r.state] = (byState[r.state] || 0) + 1;
   const finished = runs.filter((r) => ['awaiting-review', 'done', 'shipped'].includes(r.state));
@@ -37,6 +47,7 @@ export function projectSummary(p) {
     (r) => r.verification === 'pass' && (r.verification_attempts || 0) <= 1
   );
   const tokens = sumSessions(p.id);
+  const cost = costOf(tokens.models);
   return {
     id: p.id,
     name: p.name,
@@ -46,6 +57,10 @@ export function projectSummary(p) {
     activeRun: getActiveRun(p.id),
     leverage: finished.length ? Math.round((cleanFirstPass.length / finished.length) * 100) : null,
     tokens,
+    // Estimated at API list prices from per-model usage; null when no model
+    // data exists yet (sessions recorded before v0.9 have no buckets).
+    cost_usd: cost.usd,
+    cost_unpriced_tokens: cost.unpriced,
   };
 }
 
@@ -69,7 +84,8 @@ export function printStatus() {
     if (p.activeRun) console.log(`  active: ${p.activeRun}`);
     if (p.leverage !== null) console.log(`  leverage ratio: ${p.leverage}% clean-first-pass`);
     const cache = p.tokens.cache_read ? ` (+${fmtTokens(p.tokens.cache_read)} cache-read)` : '';
-    console.log(`  tokens: ${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out${cache}`);
+    const cost = p.cost_usd !== null ? `  ≈ ${fmtUsd(p.cost_usd)} est. at API rates` : '';
+    console.log(`  tokens: ${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out${cache}${cost}`);
     const awaiting = p.runs.filter((r) => r.state === 'awaiting-review');
     for (const r of awaiting) {
       const adv =

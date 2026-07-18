@@ -15,6 +15,10 @@
 #   AOS_NPM_PKG      package name                              (default: @albsugy/aos)
 #   AOS_NPM_REGISTRY registry base URL                         (default: https://registry.npmjs.org)
 #   AOS_TARBALL_URL  direct tarball URL (mirrors / testing); checksum fetched from <url>.sha256
+#                    NOTE: the sidecar comes from the same origin as the tarball, so it
+#                    protects against corruption, not tampering — pass AOS_TARBALL_SHA256
+#                    (hex) from an out-of-band source for real verification
+#   AOS_TARBALL_SHA256  expected sha256 (hex) of the AOS_TARBALL_URL tarball
 #   AOS_FROM_SOURCE  =1 to clone and build from source (needs git + npm)
 #   AOS_REPO_URL     source-mode repo URL   (default: https://github.com/albsugy/aos.git)
 #   AOS_REF          source-mode branch/tag (default: main)
@@ -34,6 +38,11 @@ info()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 ok()    { printf '\033[1;32m✔\033[0m %s\n' "$*"; }
 fail()  { printf '\033[1;31m✖\033[0m %s\n' "$*" >&2; exit 1; }
 
+# All downloads are https-only, including redirects: the registry response
+# carries the integrity hash, so a protocol-downgrade MITM on any hop would
+# make verification circular.
+fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
+
 # --- prerequisites -----------------------------------------------------------
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar  >/dev/null 2>&1 || fail "tar is required."
@@ -51,7 +60,9 @@ unpack_tarball() {
   # npm tarballs nest everything under package/ — strip it; plain tarballs pass through.
   local tarball="$1" dest="$2" first
   mkdir -p "$dest"
-  first="$(tar -tzf "$tarball" | head -1)"
+  # `|| true`: under pipefail, `head -1` closing the pipe can kill tar with
+  # SIGPIPE (exit 141) on a large listing — we already have the line we need.
+  first="$(tar -tzf "$tarball" 2>/dev/null | head -1)" || true
   case "$first" in
     package/*) tar -xzf "$tarball" -C "$dest" --strip-components=1 ;;
     *)         tar -xzf "$tarball" -C "$dest" ;;
@@ -77,21 +88,27 @@ else
   trap 'rm -rf "$TMP"' EXIT
 
   if [ -n "${AOS_TARBALL_URL:-}" ]; then
-    # --- direct tarball (mirrors / testing): sha256 sidecar verification -----
+    # --- direct tarball (mirrors / testing) ----------------------------------
+    # AOS_TARBALL_SHA256 (out-of-band) is real verification; the .sha256
+    # sidecar is same-origin as the tarball and only guards against corruption.
     info "Downloading $AOS_TARBALL_URL"
-    curl -fsSL -o "$TMP/aos.tgz" "$AOS_TARBALL_URL" || fail "Download failed."
-    curl -fsSL -o "$TMP/aos.tgz.sha256" "$AOS_TARBALL_URL.sha256" || fail "Checksum download failed."
-    EXPECTED="$(awk '{print $1}' "$TMP/aos.tgz.sha256")"
+    fetch -o "$TMP/aos.tgz" "$AOS_TARBALL_URL" || fail "Download failed."
+    if [ -n "${AOS_TARBALL_SHA256:-}" ]; then
+      EXPECTED="$AOS_TARBALL_SHA256"
+    else
+      fetch -o "$TMP/aos.tgz.sha256" "$AOS_TARBALL_URL.sha256" || fail "Checksum download failed."
+      EXPECTED="$(awk '{print $1}' "$TMP/aos.tgz.sha256")"
+    fi
     ACTUAL="$(node -e 'const c=require("crypto"),f=require("fs");console.log(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$TMP/aos.tgz")"
     if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
       fail "Checksum verification FAILED — refusing to install."
     fi
-    ok "Checksum verified (sha256)"
+    ok "Checksum verified (sha256${AOS_TARBALL_SHA256:+, pinned})"
   else
     # --- standard path: the npm registry --------------------------------------
     META_URL="$REG/$PKG/$VERSION"
     info "Resolving $PKG@$VERSION from $REG"
-    META="$(curl -fsSL "$META_URL")" || fail "Could not resolve $PKG@$VERSION — is it published?"
+    META="$(fetch "$META_URL")" || fail "Could not resolve $PKG@$VERSION — is it published?"
     RESOLVED="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(m.version||"")')"
     TARBALL="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.tarball)||"")')"
     INTEGRITY="$(printf '%s' "$META" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((m.dist&&m.dist.integrity)||"")')"
@@ -108,18 +125,22 @@ else
     fi
 
     info "Downloading $PKG@$RESOLVED"
-    curl -fsSL -o "$TMP/aos.tgz" "$TARBALL" || fail "Download failed."
+    fetch -o "$TMP/aos.tgz" "$TARBALL" || fail "Download failed."
 
     if [ -n "$INTEGRITY" ]; then
+      # sha-512 only, as documented — a weaker registry-chosen algorithm is not
+      # accepted. SRI strings may hold several space-separated entries; use the
+      # sha512 one.
       node -e '
         const crypto = require("crypto"), fs = require("fs");
         const [file, integrity] = process.argv.slice(1);
-        const dash = integrity.indexOf("-");
-        const algo = integrity.slice(0, dash), expected = integrity.slice(dash + 1);
-        const actual = crypto.createHash(algo).update(fs.readFileSync(file)).digest("base64");
+        const entry = integrity.split(/\s+/).find((e) => e.startsWith("sha512-"));
+        if (!entry) { console.error("no sha512 entry in registry integrity string"); process.exit(1); }
+        const expected = entry.slice("sha512-".length);
+        const actual = crypto.createHash("sha512").update(fs.readFileSync(file)).digest("base64");
         process.exit(actual === expected ? 0 : 1);
       ' "$TMP/aos.tgz" "$INTEGRITY" || fail "Integrity verification FAILED — refusing to install."
-      ok "Integrity verified (${INTEGRITY%%-*}, from registry)"
+      ok "Integrity verified (sha512, from registry)"
     else
       fail "Registry provided no integrity hash — refusing to install."
     fi
@@ -129,7 +150,17 @@ else
   [ -f "$TMP/unpack/dist/aos.mjs" ] || fail "Artifact is malformed (dist/aos.mjs missing)."
   [ -d "$TMP/unpack/assets" ]      || fail "Artifact is malformed (assets/ missing)."
 
-  rm -rf "$INSTALL_DIR"
+  # Sanity-check a user-supplied install dir before we ever move or delete it.
+  case "$INSTALL_DIR" in
+    ""|"/"|"$HOME") fail "Refusing to install to '$INSTALL_DIR'." ;;
+  esac
+  # Swap, don't clobber: keep the old install as a backup until the new one is
+  # verified working at the end of this script.
+  BACKUP=""
+  if [ -e "$INSTALL_DIR" ]; then
+    BACKUP="$INSTALL_DIR.old.$$"
+    mv "$INSTALL_DIR" "$BACKUP"
+  fi
   mkdir -p "$(dirname "$INSTALL_DIR")"
   mv "$TMP/unpack" "$INSTALL_DIR"
   ok "Installed to $INSTALL_DIR"
@@ -174,8 +205,17 @@ ensure_path
 # --- verify ------------------------------------------------------------------
 VERSION_OUT="$("$BIN_DIR/aos" version 2>/dev/null || true)"
 case "$VERSION_OUT" in
-  aos*) ok "Installed: $VERSION_OUT" ;;
-  *) fail "Install verification failed — try running: node $INSTALL_DIR/dist/aos.mjs version" ;;
+  aos*)
+    ok "Installed: $VERSION_OUT"
+    [ -n "${BACKUP:-}" ] && rm -rf "$BACKUP"
+    ;;
+  *)
+    if [ -n "${BACKUP:-}" ] && [ -d "$BACKUP" ]; then
+      rm -rf "$INSTALL_DIR" && mv "$BACKUP" "$INSTALL_DIR"
+      info "Restored the previous install."
+    fi
+    fail "Install verification failed — try running: node $INSTALL_DIR/dist/aos.mjs version"
+    ;;
 esac
 
 cat <<'EOF'

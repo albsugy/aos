@@ -14,6 +14,7 @@ import { buildContext } from './context.js';
 import { loadPolicy } from './policy.js';
 import { serveConsole } from './console/server.js';
 import { runDoctor } from './doctor.js';
+import { exportAgentsMd } from './export.js';
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -74,6 +75,7 @@ Usage:
   aos run list                      List runs for this project
   aos verify                        Run verification contracts from policy.yaml
   aos find <query>                  Search project memory (runs, decisions, learnings)
+  aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
   aos doctor                        Diagnose the install, registry, and current repo's wiring
   aos hook <name>                   (internal) Claude Code hook entry points
@@ -208,6 +210,18 @@ async function main() {
         break;
       }
       printFind(p.id, positional.join(' '));
+      break;
+    }
+    case 'export': {
+      const p = requireProject(flags);
+      try {
+        const dest = exportAgentsMd(p.id, p.name, process.cwd());
+        console.log(`✔ Exported project context to ${dest}`);
+        console.log('  Context only — gates and audit remain Claude Code-side. Re-run after editing the pack.');
+      } catch (e) {
+        console.error(String(e.message || e));
+        process.exitCode = 1;
+      }
       break;
     }
     case 'console': {

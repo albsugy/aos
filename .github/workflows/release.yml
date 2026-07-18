@@ -12,8 +12,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14 — node 24 bundles both.
           node-version: '24'
@@ -28,6 +28,14 @@ jobs:
         run: npm run test:source
       - name: verify — compiled bundle
         run: npm run test:bundle
+      # A tag can land on a commit that never went through CI on main — the
+      # published bundle must provably match the source at this tag, so the
+      # dist-freshness gate runs here too, not just in ci.yml.
+      - name: committed dist must match source
+        run: |
+          npm run build
+          git diff --exit-code -- dist
+          test -z "$(git status --porcelain -- dist)" || { git status -- dist; exit 1; }
       - name: build release artifact (npm pack layout)
         run: |
           npm pack

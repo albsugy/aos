@@ -86,6 +86,9 @@ export function startRun(projectId, { ticket, title, planGate }) {
     plan_gate: planGate || 'auto',
     plan_approved: false,
     tokens: { input: 0, output: 0, cache_read: 0 },
+    // When each state was first entered — cycle time and queue latency
+    // derive from these.
+    state_times: { 'in-progress': nowIso() },
     created: nowIso(),
     updated: nowIso(),
   };
@@ -102,6 +105,8 @@ export function startRun(projectId, { ticket, title, planGate }) {
 export function setRunState(projectId, runId, state) {
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
+    m.state_times = m.state_times || {};
+    if (!m.state_times[state]) m.state_times[state] = nowIso();
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
   appendAudit(projectId, { event: 'run-state', run: runId, state });
@@ -109,12 +114,58 @@ export function setRunState(projectId, runId, state) {
 }
 
 // Bind a run to the session that started it (first bind wins). Called by the
-// post-tool hook when it sees the `aos run start` command complete.
-export function bindRunSession(projectId, runId, sessionId) {
+// post-tool hook when it sees the `aos run start` command complete. `baseline`
+// is the session's transcript usage at bind time — the run is only charged
+// for what the session spends *after* it started.
+export function bindRunSession(projectId, runId, sessionId, baseline = null) {
   if (!sessionId) return null;
   return mutateRunMeta(projectId, runId, (m) => {
     if (m.session) return false;
     m.session = sessionId;
+    if (baseline) m.tokens_baseline = baseline;
+  });
+}
+
+// Credit a run with (usage so far − its baseline), exactly once. Called when
+// the run finishes (post-tool hook) or at SessionEnd, whichever comes first —
+// the settled flag makes the second caller a no-op, so a session that runs
+// several runs back-to-back can't dump its whole total onto the last one.
+const MODEL_BUCKET_KEYS = ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'];
+
+function addModelBuckets(target, nowModels, baseModels = {}) {
+  for (const [id, u] of Object.entries(nowModels || {})) {
+    const base = baseModels[id] || {};
+    const t = (target[id] = target[id] || { input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0 });
+    for (const k of MODEL_BUCKET_KEYS) t[k] += Math.max(0, (u[k] || 0) - (base[k] || 0));
+  }
+}
+
+export function settleRunTokens(projectId, runId, usageNow) {
+  return mutateRunMeta(projectId, runId, (meta) => {
+    meta.tokens = meta.tokens || { input: 0, output: 0, cache_read: 0 }; // legacy runs
+    // Unbound runs (started from a terminal, not a session) keep the old
+    // accumulate-per-session behavior — every session's usage is theirs.
+    if (!meta.session) {
+      meta.tokens.input += usageNow.input || 0;
+      meta.tokens.output += usageNow.output || 0;
+      meta.tokens.cache_read = (meta.tokens.cache_read || 0) + (usageNow.cache_read || 0);
+      if (usageNow.models) {
+        meta.tokens.models = meta.tokens.models || {};
+        addModelBuckets(meta.tokens.models, usageNow.models);
+      }
+      return;
+    }
+    if (meta.tokens_settled) return false;
+    const base = meta.tokens_baseline || { input: 0, output: 0, cache_read: 0 };
+    meta.tokens.input += Math.max(0, (usageNow.input || 0) - (base.input || 0));
+    meta.tokens.output += Math.max(0, (usageNow.output || 0) - (base.output || 0));
+    meta.tokens.cache_read =
+      (meta.tokens.cache_read || 0) + Math.max(0, (usageNow.cache_read || 0) - (base.cache_read || 0));
+    if (usageNow.models) {
+      meta.tokens.models = meta.tokens.models || {};
+      addModelBuckets(meta.tokens.models, usageNow.models, base.models);
+    }
+    meta.tokens_settled = true;
   });
 }
 
@@ -154,6 +205,8 @@ export function finishRun(projectId, runId, state = 'awaiting-review') {
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
     m.adversarial_review = adversarial_review;
+    m.state_times = m.state_times || {};
+    if (!m.state_times[state]) m.state_times[state] = nowIso();
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
   appendAudit(projectId, { event: 'run-state', run: runId, state, adversarial_review });
@@ -189,14 +242,6 @@ export function appendAudit(projectId, entry) {
     }
   }
   appendLine(path.join(projectDir(projectId), 'audit.jsonl'), line);
-}
-
-export function addRunTokens(projectId, runId, usage) {
-  mutateRunMeta(projectId, runId, (meta) => {
-    meta.tokens.input += usage.input || 0;
-    meta.tokens.output += usage.output || 0;
-    meta.tokens.cache_read = (meta.tokens.cache_read || 0) + (usage.cache_read || 0);
-  });
 }
 
 export function readRunFile(projectId, runId, file) {

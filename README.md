@@ -17,8 +17,9 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
 2. **The Skills + Hooks** — Claude Code integration: a ticket pipeline that runs work
    through intake → plan → implement → verify → package → learn, with hooks that enforce
    policy and write audit *automatically*.
-3. **The Console** — a local, read-only dashboard: decision queue, run states,
-   verification verdicts, token economics, leverage ratio.
+3. **The Console** — a local, read-only dashboard: decision queue (with queue
+   latency), run states, verification verdicts, token economics with estimated
+   cost at API rates, cycle times, leverage ratio.
 
 The design bet: frontier labs keep making agent *execution* better and cheaper; AOS owns
 what they never will — **your** context, **your** policies, **your** audit trail, portable
@@ -75,7 +76,8 @@ aos init                # registers the project, scaffolds ~/.aos/projects/<id>/
 # then, inside a Claude Code session in that repo:
 /aos-ticket LIN-482     # runs the full pipeline; ends awaiting your review
 
-aos status              # all projects: runs, states, leverage ratio, tokens
+aos status              # all projects: runs, states, leverage ratio, tokens, est. cost
+aos export              # write the context pack as AGENTS.md for Codex/Cursor/etc.
 aos console             # http://127.0.0.1:4560
 ```
 

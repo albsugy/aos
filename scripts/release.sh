@@ -19,7 +19,7 @@ NEW="$(npm version "$ARG" --no-git-tag-version)"   # updates package.json + lock
 NEW="${NEW#v}"
 
 # Changelog discipline: refuse to release undocumented versions.
-if ! grep -q "^## ${NEW} " CHANGELOG.md; then
+if ! grep -qF "## ${NEW} " CHANGELOG.md; then
   git checkout -- package.json package-lock.json
   echo "✖ CHANGELOG.md has no \"## ${NEW}\" entry — write it first"
   exit 1
@@ -28,7 +28,9 @@ fi
 npm run build
 npm test
 
-git add -A
+# Stage only what a release legitimately changes — test/build leftovers must
+# not ride along into the release commit.
+git add package.json package-lock.json dist CHANGELOG.md
 git commit -m "release: v${NEW}"
 git tag "v${NEW}"
 
