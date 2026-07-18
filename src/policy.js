@@ -33,6 +33,13 @@ export const DEFAULT_POLICY = {
         action: 'plan-approve',
         reason: 'Plan approval is reserved for the human — approve only after reviewing plan.md',
       },
+      // Same pattern for closing a review: an agent may review the run and
+      // PROPOSE done/shipped, but the permission prompt is the human sign-off.
+      {
+        pattern: '\\baos(\\.mjs)?\\s+run\\s+state\\s+(done|shipped)\\b',
+        action: 'review-close',
+        reason: 'Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off',
+      },
     ],
     // Extra write-protected paths (globs matched against absolute and
     // repo-relative paths), e.g. { pattern: '.env*', decision: 'ask' }.

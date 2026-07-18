@@ -36,6 +36,12 @@ tiers:
     - pattern: '\baos(\.mjs)?\s+run\s+approve\b'
       action: plan-approve
       reason: Plan approval is reserved for the human — approve only after reviewing plan.md
+    # Closing a review works the same way: an agent (e.g. /aos-approve) reviews
+    # the awaiting-review run and proposes the close; approving the prompt IS
+    # your sign-off.
+    - pattern: '\baos(\.mjs)?\s+run\s+state\s+(done|shipped)\b'
+      action: review-close
+      reason: Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off
   # File writes are gated too. Built-in (always on): .claude/settings.json,
   # .git/hooks/, and AOS's own policy/audit/state files require approval, and
   # shell scripts being written are scanned for forbidden/gated commands.

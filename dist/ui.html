@@ -285,8 +285,9 @@ function fmtTok(n) { n = n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >=
 function fmtUsd(v) { if (v === null || v === undefined) return null; if (v > 0 && v < 0.01) return '<$0.01'; return v >= 100 ? '$' + Math.round(v) : '$' + v.toFixed(2); }
 function fmtDur(ms) {
   if (!(ms > 0)) return null;
+  if (ms < 60000) return Math.max(1, Math.round(ms / 1000)) + 's';
   const m = ms / 60000;
-  if (m < 60) return Math.max(1, Math.round(m)) + 'm';
+  if (m < 60) return Math.round(m) + 'm';
   if (m < 60 * 24) return (m / 60).toFixed(1).replace(/\.0$/, '') + 'h';
   return (m / 1440).toFixed(1).replace(/\.0$/, '') + 'd';
 }
@@ -297,6 +298,22 @@ function cycleMs(r) {
   const ms = new Date(end) - new Date(r.created);
   return ms > 0 ? ms : null;
 }
+/* How long the run took (finished) or has been running (open) — the
+   best-effort DISPLAY metric. cycleMs above is the strict ANALYTICS metric
+   (null when untracked, feeds the median-cycle stat); this one falls back to
+   `updated` for runs that predate state tracking, flagged `approx`. */
+function runDuration(r) {
+  if (!r.created) return null;
+  if (['awaiting-review', 'done', 'shipped'].includes(r.state)) {
+    const strict = cycleMs(r);
+    if (strict !== null) return { ms: strict, ongoing: false };
+    const ms = new Date(r.updated) - new Date(r.created);
+    return ms > 0 ? { ms, ongoing: false, approx: true } : null;
+  }
+  const ms = Date.now() - new Date(r.created).getTime();
+  return ms > 0 ? { ms, ongoing: true } : null;
+}
+const APPROX_TIP = 'Start to last update — run predates duration tracking';
 const STALE_MS = 48 * 3600 * 1000;
 function shortRun(id) { return String(id).replace(/^\d{4}-\d{2}-\d{2}-/, ''); }
 function rel(ts) {
@@ -440,6 +457,9 @@ async function loadDetails(force) {
     if (r.screen === 'run') {
       const d = await getJSON(`/api/run?project=${encodeURIComponent(r.id)}&run=${encodeURIComponent(r.run)}`);
       runCache.set(`${r.id}/${r.run}`, d || { error: true });
+      // Run payloads can carry megabytes of docs — don't retain every run
+      // ever visited. Map preserves insertion order, so first key = oldest.
+      while (runCache.size > 20) runCache.delete(runCache.keys().next().value);
     }
   } catch { /* screen renders its own not-found state */ }
   draw();
@@ -455,13 +475,19 @@ function draw() {
   // Don't yank the DOM out from under someone typing in a filter box.
   if (document.activeElement && document.activeElement.tagName === 'INPUT' && $('#screen').contains(document.activeElement)) return;
   const html = r.screen === 'project' ? renderProject(r) : r.screen === 'run' ? renderRun(r) : renderOverview();
-  const key = r.screen + '|' + JSON.stringify([html.length, ui]);
-  if (key === lastKey && $('#screen').dataset.drawn) return; // cheap change guard: same route, same content size, same ui state
-  lastKey = key;
+  // Change guard on the FULL string, not its length: same-length changes
+  // ("12m"→"13m") must redraw, and identical content must not (a no-op
+  // innerHTML swap destroys keyboard focus and screen-reader position).
+  if (html === lastKey && $('#screen').dataset.drawn) return;
+  lastKey = html;
+  const navKey = r.screen + '|' + (r.id || '') + '|' + (r.run || '');
+  // Same route → this is a refresh or ui-state change, not navigation: keep
+  // the scroll position so a redraw never reads as a page reload.
+  const keepScroll = navKey === drawnNav ? $('#screen').scrollTop : null;
   $('#screen').innerHTML = `<div id="error"></div><div class="page">` + html + `</div>`;
   $('#screen').dataset.drawn = '1';
+  if (keepScroll !== null) $('#screen').scrollTop = keepScroll;
   // Play the entrance reveal only on navigation, not on live data refresh.
-  const navKey = r.screen + '|' + (r.id || '') + '|' + (r.run || '');
   if (navKey !== drawnNav) {
     const el = $('#screen');
     el.classList.remove('enter'); void el.offsetWidth; el.classList.add('enter');
@@ -591,16 +617,19 @@ function renderProject(r) {
     html += `<div class="tscroll"><table><thead><tr>
       <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
       <th class="num" title="Total verification attempts (aos verify invocations)">Att.</th>
+      <th class="num" title="Finished runs: start → review-ready. Open runs: elapsed so far (…)">Took</th>
       <th class="num" title="Fresh input + output tokens attributed to this run">Tokens</th><th class="num">Updated</th>
     </tr></thead><tbody>`;
     for (const x of runs) {
       const dim = ['done', 'shipped'].includes(x.state) ? ' dim' : '';
+      const dur = runDuration(x);
       html += `<tr class="rowlink${dim}" onclick="go('#/p/${encU(p.id)}/r/${encU(x.run)}')">
         <td class="mono" title="${esc(x.run)}">${esc(shortRun(x.run))}</td>
         <td class="trunc" title="${esc(x.title || x.ticket || '')}">${esc(x.title || x.ticket || '—')}</td>
         <td>${chip(x.state, STATE_TIP[x.state])}</td>
         <td>${chip(x.verification, VERIFY_TIP[x.verification])}</td>
         <td class="num">${x.verification_attempts || 0}</td>
+        <td class="num" title="${dur ? (dur.ongoing ? 'Running for ' + fmtDur(dur.ms) + ' so far' : dur.approx ? APPROX_TIP : 'Start to review-ready') : ''}">${dur ? (dur.ongoing ? `<span style="color:var(--ink-3)">${fmtDur(dur.ms)}…</span>` : fmtDur(dur.ms) + (dur.approx ? '~' : '')) : '—'}</td>
         <td class="num" title="${x.cost_usd !== null && x.cost_usd !== undefined ? 'Estimated ' + fmtUsd(x.cost_usd) + ' at API rates' : ''}">${fmtTok((x.tokens?.input || 0) + (x.tokens?.output || 0))}${x.cost_usd !== null && x.cost_usd !== undefined ? ` <span style="color:var(--ink-4)">·</span> ${fmtUsd(x.cost_usd)}` : ''}</td>
         <td class="num" title="${esc(x.updated)}">${rel(x.updated)}</td>
       </tr>`;
@@ -670,17 +699,6 @@ function renderRun(r) {
   const m = d.meta;
   const dir = d.dir || '';
 
-  const tabs = [
-    ['outcome', 'Outcome', d.outcome],
-    ['verification', 'Verification', d.verification],
-    ['audit', 'Audit', (d.audit || []).length ? 'y' : ''],
-    ['ticket', 'Ticket', d.ticket],
-    ['plan', 'Plan', d.plan],
-  ];
-  if (!ui.runTab || !tabs.find(([k]) => k === ui.runTab)) {
-    ui.runTab = (tabs.find(([, , has]) => has) || tabs[0])[0];
-  }
-
   let html = `<div class="rhead"><h1>${esc(m.run)}</h1>${chip(m.state, STATE_TIP[m.state])}${chip(m.verification, VERIFY_TIP[m.verification])}`;
   if (m.plan_gate === 'ask') html += `<span class="tag ${m.plan_approved ? 'pass' : 'ask'}" title="${m.plan_approved ? 'Human approved the plan' : 'Implementation writes are gated until: aos run approve'}"><i></i>plan ${m.plan_approved ? 'approved' : 'awaiting approval'}</span>`;
   html += `</div>`;
@@ -690,15 +708,41 @@ function renderRun(r) {
     <span title="Verification attempts">attempts <b>${m.verification_attempts || 0}</b></span>
     <span title="Fresh input · output tokens attributed to this run${m.tokens?.cache_read ? `, plus ${fmtTok(m.tokens.cache_read)} cache reads` : ''}">tokens <b>${fmtTok(m.tokens?.input || 0)} in · ${fmtTok(m.tokens?.output || 0)} out</b></span>
     ${d.cost_usd !== null && d.cost_usd !== undefined ? `<span title="Estimated at API list prices from this run's per-model usage">est. cost <b>${fmtUsd(d.cost_usd)}</b></span>` : ''}
-    ${cycleMs(m) ? `<span title="From run start to awaiting-review">cycle <b>${fmtDur(cycleMs(m))}</b></span>` : ''}
+    ${(() => { const dur = runDuration(m); return dur ? `<span title="${dur.ongoing ? 'Running since the run started' : dur.approx ? APPROX_TIP : 'From run start to review-ready'}">${dur.ongoing ? 'elapsed' : 'took'} <b>${fmtDur(dur.ms)}${dur.ongoing ? ' so far' : dur.approx ? '~' : ''}</b></span>` : ''; })()}
     <span title="${esc(m.created || '')}">started <b>${rel(m.created)}</b></span>
     <span title="${esc(m.updated || '')}">updated <b>${rel(m.updated)}</b></span>
-    ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(dir)}</span><button data-path="${esc(dir)}" onclick="navigator.clipboard.writeText(this.dataset.path);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy run folder path">copy</button></span>` : ''}
+    ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(d.dir_display || dir)}</span><button data-path="${esc(dir)}" onclick="navigator.clipboard.writeText(this.dataset.path);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy full run folder path">copy</button></span>` : ''}
   </div>`;
   html += stageStrip(d);
 
-  html += `<div class="tabs">` + tabs.map(([k, label, has]) =>
-    `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="ui.runTab='${k}';lastKey='';draw()">${label}${k === 'audit' ? `<span class="n">${d.audit_total ?? (d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
+  html += `<div id="tabzone">` + renderTabZone(d) + `</div>`;
+  return html;
+}
+
+/* ── run tabs: targeted pane rendering ───────────────────── */
+function runTabs(d) {
+  const tabs = [
+    ['outcome', 'Outcome', d.outcome],
+    ['verification', 'Verification', d.verification],
+    ['audit', 'Audit', (d.audit || []).length ? 'y' : ''],
+    ['ticket', 'Ticket', d.ticket],
+    ['plan', 'Plan', d.plan],
+  ];
+  // Every other markdown file in the run folder (findings.md, intake.md,
+  // tasks.md, reviews/*.md) gets its own tab.
+  for (const rel of Object.keys(d.docs || {}).sort()) {
+    tabs.push(['doc:' + rel, rel.replace(/\.md$/, ''), 'y']);
+  }
+  return tabs;
+}
+
+function renderTabZone(d) {
+  const tabs = runTabs(d);
+  if (!ui.runTab || !tabs.find(([k]) => k === ui.runTab)) {
+    ui.runTab = (tabs.find(([, , has]) => has) || tabs[0])[0];
+  }
+  let html = `<div class="tabs">` + tabs.map(([k, label, has]) =>
+    `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="switchTab('${encU(k)}')">${esc(label)}${k === 'audit' ? `<span class="n">${d.audit_total ?? (d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
   ).join('') + `</div>`;
 
   if (ui.runTab === 'audit') {
@@ -708,7 +752,7 @@ function renderRun(r) {
     else if (ui.auditFilter === 'verify') audit = audit.filter(a => a.event === 'verify');
     else if (ui.auditFilter === 'lifecycle') audit = audit.filter(a => ['run-start', 'run-state', 'plan-approved', 'session-start', 'session-end'].includes(a.event));
     html += `<div class="filters" style="border:none;padding:0 0 14px">` + kinds.map(([k, l]) =>
-      `<button class="fchip ${ui.auditFilter === k ? 'on' : ''}" onclick="ui.auditFilter='${k}';lastKey='';draw()">${l}</button>`).join('') + `</div>`;
+      `<button class="fchip ${ui.auditFilter === k ? 'on' : ''}" onclick="setAuditFilter('${k}')">${l}</button>`).join('') + `</div>`;
     if (!audit.length) html += `<div class="empty">No audit entries${ui.auditFilter !== 'all' ? ' for this filter' : ' yet'}.</div>`;
     else {
       const total = d.audit_total ?? (d.audit || []).length;
@@ -729,7 +773,7 @@ function renderRun(r) {
       html += `</div>`;
     }
   } else {
-    const body = d[ui.runTab];
+    const body = ui.runTab.startsWith('doc:') ? (d.docs || {})[ui.runTab.slice(4)] : d[ui.runTab];
     const hint = {
       outcome: 'The agent writes outcome.md at the Package stage — summary, changes, risks, PR draft.',
       verification: 'aos verify writes contract verdicts here; the skeptic subagent appends its findings.',
@@ -741,7 +785,33 @@ function renderRun(r) {
   return html;
 }
 
+/* Switch tabs by re-rendering only the tab zone — no full-screen redraw, no
+   scroll jump. Falls back to a full draw if the zone isn't mounted. */
+function switchTab(k) {
+  ui.runTab = decodeURIComponent(k);
+  const r = route();
+  const d = r.screen === 'run' ? runCache.get(`${r.id}/${r.run}`) : null;
+  const zone = document.getElementById('tabzone');
+  if (d && !d.error && zone) {
+    zone.innerHTML = renderTabZone(d);
+    // Re-prime the guard to what a full render now produces — otherwise the
+    // next 5s poll sees a stale key and does a needless full-screen swap,
+    // destroying focus for keyboard/screen-reader users.
+    lastKey = renderRun(r);
+  } else {
+    lastKey = '';
+    draw();
+  }
+}
+function setAuditFilter(k) { ui.auditFilter = k; switchTab(encodeURIComponent(ui.runTab)); }
+
 /* ── boot ────────────────────────────────────────────────── */
+// The entrance animation targets `.enter .page`; without this, every later
+// full redraw's fresh .page re-matched the rule and replayed the 340ms rise —
+// the "whole page reloads" feel. Clear the class once the reveal finishes.
+$('#screen').addEventListener('animationend', (e) => {
+  if (e.animationName === 'rise') $('#screen').classList.remove('enter');
+});
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.1 — 2026-07-19
+
+- **The review action now exists.** `aos run state <state> --run <id>` targets
+  any run — previously a finished run in `awaiting-review` had no supported way
+  out (the command only touched the active run). Closing states (`done`/
+  `shipped`) are **gated** like plan approval: an agent may review and propose
+  the close, and the permission prompt is the human sign-off. Reopening
+  (`in-progress`) is not gated.
+- **New `/aos-approve` skill** — agent-assisted review of awaiting-review runs:
+  verifies outcome.md's claims against the actual diff and acceptance criteria,
+  recommends approve/send-back, then closes through the sign-off gate.
+- **Console UX** (from the CONSOLE-1 review fleet): run-screen tabs switch via
+  targeted rendering (no full-page redraw, no scroll jump, no entrance-
+  animation replay); redraw guard compares full content so same-length changes
+  ("12m"→"13m") update and identical content never destroys focus; runs show
+  how long they took ("Took" column + run-screen duration, elapsed-so-far for
+  open runs, `~` marker for pre-tracking runs); every markdown file in a run
+  folder (findings.md, intake.md, reviews/*.md) is viewable as a tab, served
+  with symlink AND hardlink guards, O_NOFOLLOW reads, and size caps; run paths
+  display home-relative (`~/.aos/...`) so screenshots don't leak usernames
+  (copy button still copies the full path); client run cache capped.
+
 ## 0.9.0 — 2026-07-19
 
 New in this cycle — cost visibility, operator metrics, and portability:

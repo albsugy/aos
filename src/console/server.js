@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fullState, projectSummary } from '../status.js';
@@ -81,6 +82,64 @@ function projectDetail(projectId) {
   };
 }
 
+// The four canonical docs have their own response fields; everything else
+// markdown in the run folder (findings.md, intake.md, tasks.md, reviews/*.md)
+// is returned in a `docs` map so the console can render it too. Filenames come
+// from readdir only — never from the request — so this stays traversal-safe.
+const CANONICAL_DOCS = new Set(['ticket.md', 'plan.md', 'outcome.md', 'verification.md']);
+const MAX_DOCS = 30;
+const MAX_DOC_CHARS = 200_000;
+
+function extraDocs(dir) {
+  const docs = {};
+  // Links must not smuggle content from outside the run folder: lstat skips
+  // symlinks, nlink > 1 skips hardlinks, and the read itself uses O_NOFOLLOW
+  // on a single handle so a symlink swapped in after the check (TOCTOU)
+  // fails the open instead of being followed.
+  const realFile = (p) => {
+    try {
+      const st = fs.lstatSync(p);
+      return st.isFile() && st.nlink === 1;
+    } catch {
+      return false;
+    }
+  };
+  const readNoFollow = (p) => {
+    let fd;
+    try {
+      fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      return fs.readFileSync(fd, 'utf8');
+    } catch {
+      return null;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  };
+  const mdIn = (sub) => {
+    try {
+      const base = path.join(dir, sub);
+      if (sub && fs.lstatSync(base).isSymbolicLink()) return [];
+      return fs
+        .readdirSync(base)
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => (sub ? `${sub}/${f}` : f));
+    } catch {
+      return [];
+    }
+  };
+  // Sorted so which files survive the MAX_DOCS cap doesn't depend on
+  // platform readdir order.
+  for (const rel of [...mdIn(''), ...mdIn('reviews')].sort()) {
+    if (CANONICAL_DOCS.has(rel)) continue;
+    if (Object.keys(docs).length >= MAX_DOCS) break;
+    if (!realFile(path.join(dir, rel))) continue;
+    const body = readNoFollow(path.join(dir, rel));
+    if (body === null) continue;
+    docs[rel] = body.length > MAX_DOC_CHARS ? '…' + body.slice(-MAX_DOC_CHARS) : body;
+  }
+  return docs;
+}
+
 function runDetail(projectId, runId) {
   const meta = runMeta(projectId, runId);
   if (!meta) return null;
@@ -97,9 +156,14 @@ function runDetail(projectId, runId) {
       }
     })
     .filter(Boolean);
+  // Home-relative form for display: keeps usernames out of screenshots.
+  // The absolute `dir` stays for the copy button.
+  const home = os.homedir();
+  const dirDisplay = dir.startsWith(home + path.sep) ? '~' + dir.slice(home.length) : dir;
   return {
     meta,
     dir,
+    dir_display: dirDisplay,
     audit,
     audit_total: auditLines.length,
     cost_usd: costOf(meta.tokens?.models).usd,
@@ -107,6 +171,7 @@ function runDetail(projectId, runId) {
     plan: readIfExists(path.join(dir, 'plan.md')),
     outcome: readIfExists(path.join(dir, 'outcome.md')),
     verification: readIfExists(path.join(dir, 'verification.md')),
+    docs: extraDocs(dir),
   };
 }
 

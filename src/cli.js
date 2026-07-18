@@ -71,7 +71,7 @@ Usage:
   aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
   aos run approve                   Approve the active run's plan (human step when plan_gate: ask)
   aos run finish [--state <s>]      Finish active run (default state: awaiting-review)
-  aos run state <state>             Set active run state (in-progress|blocked|awaiting-review|done|shipped)
+  aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
   aos run list                      List runs for this project
   aos verify                        Run verification contracts from policy.yaml
   aos find <query>                  Search project memory (runs, decisions, learnings)
@@ -101,7 +101,7 @@ async function main() {
       if (detection?.contracts?.length) {
         console.log(`✔ Seeded ${detection.contracts.length} verification contract(s): ${detection.contracts.map((c) => c.name).join(', ')}`);
       }
-      console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-learn, aos-ask)`);
+      console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask)`);
       console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens)`);
       console.log(`\nNext: review ${path.join(home, 'context', 'pack.md')} and policy.yaml,`);
       console.log(`then start a Claude Code session here and run /aos-ticket <ticket>.`);
@@ -159,14 +159,22 @@ async function main() {
           console.log('✔ Adversarial review recorded in verification.md');
         }
       } else if (sub === 'state') {
-        const active = getActiveRun(p.id);
-        if (!active) {
-          console.error('No active run.');
+        // --run <id> targets any run — the review action (done/shipped) is
+        // taken AFTER finish clears the active pointer, so "active only"
+        // would make awaiting-review a state with no way out.
+        const target = flags.run || getActiveRun(p.id);
+        if (!target) {
+          console.error('No active run. Target a finished one with: aos run state <state> --run <id>');
           process.exitCode = 1;
           break;
         }
-        const meta = setRunState(p.id, active, positional[1] || 'in-progress');
-        console.log(`✔ Run ${active} → ${meta.state}`);
+        try {
+          const meta = setRunState(p.id, target, positional[1] || 'in-progress');
+          console.log(`✔ Run ${target} → ${meta.state}`);
+        } catch (e) {
+          console.error(String(e.message || e));
+          process.exitCode = 1;
+        }
       } else if (sub === 'list') {
         for (const r of listRuns(p.id)) {
           const adv =

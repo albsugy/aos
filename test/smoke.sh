@@ -110,6 +110,11 @@ grep -q '"verification": "fail"' "$RUN_DIR/meta.json" && pass "verify: no contra
 # --- finish + status + find ---
 $AOS run finish >/dev/null
 $AOS status | grep -q "awaiting-review" && pass "status shows awaiting-review" || fail "status"
+# the review action: a FINISHED run (no active pointer) must be closable via --run
+RUN1_ID=$(basename "$RUN_DIR")
+$AOS run state "done" --run "$RUN1_ID" | grep -q "→ done" && pass "run state --run closes a finished run" || fail "state --run failed"
+$AOS run state awaiting-review --run "$RUN1_ID" >/dev/null   # restore for later console tests
+$AOS run state "done" --run "no-such-run" 2>/dev/null && fail "state --run accepted unknown run" || pass "run state --run rejects unknown run"
 $AOS find "LIN-1" | grep -q "ticket.md" && pass "find searches project memory" || fail "find"
 
 # --- export: context pack → AGENTS.md for other runtimes ---
@@ -204,6 +209,11 @@ hook_out "$IN_PYW"   | grep -q '"permissionDecision":"ask"' && pass "plan gate: 
 hook_out "$IN_CHAIN" | grep -q '"permissionDecision":"ask"' && pass "plan gate: repo write chained with run-dir note → ask (per-segment)" || fail "chained write exempted by run-dir mention"
 hook_out '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sA"}' \
   | grep -q '"permissionDecision":"ask"' && pass "plan gate: agent self-approval → ask (human decides)" || fail "self-approval not gated"
+# closing a review is gated the same way; reopening is not
+hook_out '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state done --run some-run"},"session_id":"sA"}' \
+  | grep -q '"permissionDecision":"ask"' && pass "review gate: agent closing a review → ask (human sign-off)" || fail "review close not gated"
+[ -z "$(hook_out '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state in-progress --run some-run"},"session_id":"sA"}')" ] \
+  && pass "review gate: reopening a run → allow" || fail "reopen wrongly gated"
 $AOS run approve >/dev/null
 [ -z "$(hook_out "$IN_IMPL")" ] && pass "plan gate: repo write after approval → allow" || fail "plan gate stuck after approval"
 [ -z "$(hook_out "$IN_BASHW")" ] && pass "plan gate: bash write after approval → allow" || fail "bash plan gate stuck after approval"
@@ -336,6 +346,14 @@ $AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "
 $AOS doctor 2>/dev/null | grep -q "All clear" && pass "doctor: reports all clear" || fail "doctor output"
 
 # --- console API + security ---
+# extra run docs (findings.md, reviews/*.md) must be served alongside the canonical four
+printf '# Findings\n\nRoot cause: flux capacitor.\n' > "$RUN_DIR/findings.md"
+mkdir -p "$RUN_DIR/reviews"
+printf '# Arch review\n\nLooks sound.\n' > "$RUN_DIR/reviews/arch.md"
+# a symlink planted in the run folder must NOT be served (file disclosure guard)
+ln -s /etc/hosts "$RUN_DIR/leak.md"
+# neither must a hardlink (same filesystem — link to AOS state)
+ln "$AOS_HOME/registry.yaml" "$RUN_DIR/hardleak.md" 2>/dev/null || true
 PORT=45997
 $AOS console --port $PORT >/dev/null 2>&1 &
 CONSOLE_PID=$!
@@ -348,6 +366,12 @@ case "$STATE" in *'"id":"demo"'*) pass "console API: state";; *) kill $CONSOLE_P
 RUN_ID=$(basename "$RUN_DIR")
 DETAIL=$(curl -s "http://127.0.0.1:$PORT/api/run?project=demo&run=$RUN_ID")
 case "$DETAIL" in *'"audit"'*) pass "console API: run detail";; *) kill $CONSOLE_PID; fail "console run detail";; esac
+case "$DETAIL" in *'"findings.md"'*) pass "console API: extra run docs enumerated" ;; *) kill $CONSOLE_PID; fail "findings.md not served";; esac
+case "$DETAIL" in *'flux capacitor'*) pass "console API: extra doc content served" ;; *) kill $CONSOLE_PID; fail "doc content missing";; esac
+case "$DETAIL" in *'"reviews/arch.md"'*) pass "console API: reviews/ docs enumerated" ;; *) kill $CONSOLE_PID; fail "reviews doc not served";; esac
+case "$DETAIL" in *'"leak.md"'*) kill $CONSOLE_PID; fail "symlinked doc was served (file disclosure)" ;; *) pass "console security: symlinked docs skipped";; esac
+case "$DETAIL" in *'"hardleak.md"'*) kill $CONSOLE_PID; fail "hardlinked doc was served (file disclosure)" ;; *) pass "console security: hardlinked docs skipped";; esac
+case "$DETAIL" in *'"dir_display"'*) pass "console API: home-relative display path present" ;; *) kill $CONSOLE_PID; fail "dir_display missing";; esac
 PROJ=$(curl -s "http://127.0.0.1:$PORT/api/project?project=demo")
 case "$PROJ" in *'"policy"'*) pass "console API: project detail";; *) kill $CONSOLE_PID; fail "console project detail";; esac
 PMISS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/project?project=nope")

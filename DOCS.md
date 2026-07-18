@@ -335,7 +335,7 @@ aos context [--project <id>]      Print the project context that agents load
 aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
 aos run approve                   Approve the active run's plan (when plan_gate: ask)
 aos run finish [--state <s>]      Finish the active run (default state: awaiting-review)
-aos run state <state>             Set active run state (in-progress|blocked|awaiting-review|done|shipped)
+aos run state <state> [--run <id>]  Set run state; --run targets a finished run. done/shipped are gated: the approval prompt is the human sign-off (see /aos-approve)
 aos run list                      List runs for this project
 aos verify                        Run the verification contracts from policy.yaml
 aos find <query>                  Search project memory (runs, decisions, learnings, audit)
