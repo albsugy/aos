@@ -34,8 +34,12 @@ const DECISIONS_WINDOW = 40;
 // absorbs whatever budget remains instead of amputating everything after it.
 const SECTION_CAP = 2500;
 
-function capChars(text, cap, note) {
+// keepEnd for append-only memory (decisions/learnings): tailLines puts the
+// newest entries at the bottom, so a head-keeping cap would drop exactly the
+// entries most worth keeping.
+function capChars(text, cap, note, { keepEnd = false } = {}) {
   if (text.length <= cap) return text;
+  if (keepEnd) return `[truncated — ${note}]\n` + text.slice(-cap);
   return text.slice(0, cap) + `\n[truncated — ${note}]`;
 }
 
@@ -74,12 +78,12 @@ export function buildContext(projectId, projectName) {
   const tailSections = [];
   if (decisions) {
     tailSections.push(
-      `## Recent decisions\n${capChars(tailLines(decisions, DECISIONS_WINDOW), SECTION_CAP, 'read context/decisions.md')}`
+      `## Recent decisions\n${capChars(tailLines(decisions, DECISIONS_WINDOW), SECTION_CAP, 'read context/decisions.md', { keepEnd: true })}`
     );
   }
   if (learnings) {
     const lineCount = learnings.split('\n').filter((l) => l.trim()).length;
-    let section = `## Learnings\n${capChars(tailLines(learnings, LEARNINGS_WINDOW), SECTION_CAP, 'read learnings.md')}`;
+    let section = `## Learnings\n${capChars(tailLines(learnings, LEARNINGS_WINDOW), SECTION_CAP, 'read learnings.md', { keepEnd: true })}`;
     if (lineCount > LEARNINGS_WINDOW) {
       section +=
         `\n⚠ learnings.md has ${lineCount} lines; only the last ${LEARNINGS_WINDOW} auto-load — ` +
