@@ -161,6 +161,14 @@ async function main() {
         } else if (meta.adversarial_review === 'present') {
           console.log('✔ Adversarial review recorded in verification.md');
         }
+        // FYI, not a gate: the standard pipeline writes learnings AFTER
+        // finish (learn stage), and the Stop hook backstops the session end.
+        if (meta.learnings_recorded === 'absent') {
+          console.log(
+            'ℹ No learnings recorded for this run yet — append 1-3 bullets to learnings.md ' +
+              'before the session ends (the Stop hook will remind you).'
+          );
+        }
       } else if (sub === 'state') {
         // --run <id> targets any run — the review action (done/shipped) is
         // taken AFTER finish clears the active pointer, so "active only"

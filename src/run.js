@@ -200,16 +200,88 @@ export function adversarialReviewState(projectId, runId) {
   return body.length > 20 ? 'present' : 'absent';
 }
 
+// A memory write is any audited tool call that touched learnings.md or
+// decisions.md — file-tool paths and Bash commands both surface the filename
+// in the audit summary (post-tool hook), so a substring check covers `Edit`
+// as well as `cat >> learnings.md` appends.
+const MEMORY_FILES = ['learnings.md', 'decisions.md'];
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+function auditLines(file) {
+  const raw = readIfExists(file);
+  if (!raw) return [];
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return out;
+}
+
+function isMemoryWrite(entry) {
+  if (entry.event !== 'tool') return false;
+  const s = String(entry.summary || '');
+  if (!MEMORY_FILES.some((f) => s.includes(f))) return false;
+  if (WRITE_TOOLS.has(entry.tool)) return true;
+  // Bash summaries are the command text: only count commands that actually
+  // write (redirect/tee/in-place edit) — `cat`/`grep` reads of learnings.md
+  // must not satisfy the capture check.
+  if (entry.tool === 'Bash') return /(>|\btee\b|\bsed\s+-\w*i)/.test(s);
+  return false;
+}
+
+// Same evidence-of-process bar as adversarialReviewState: we can't judge
+// whether a learning was any good, but we can record whether one was written.
+export function learningsState(projectId, runId) {
+  const lines = auditLines(path.join(runDir(projectId, runId), 'audit.jsonl'));
+  return lines.some(isMemoryWrite) ? 'present' : 'absent';
+}
+
+// What a session did, seen through its audit lines. A session's lines land in
+// the run bound to it or in the project log (see appendAudit), so scan both.
+// `substantive` = enough file-tool writes to plausibly owe a learning, or any
+// bound run; `memoryWrite` = learnings/decisions were touched; `nudged` =
+// the Stop hook already blocked once for this session.
+export function sessionMemoryActivity(projectId, sessionId) {
+  if (!sessionId) return { substantive: false, memoryWrite: false, nudged: false };
+  const files = [path.join(projectDir(projectId), 'audit.jsonl')];
+  const bound = findRunBySession(projectId, sessionId);
+  if (bound) files.push(path.join(runDir(projectId, bound.run), 'audit.jsonl'));
+  const active = getActiveRun(projectId);
+  if (active && (!bound || active !== bound.run)) {
+    files.push(path.join(runDir(projectId, active), 'audit.jsonl'));
+  }
+  let writes = 0;
+  let memoryWrite = false;
+  let nudged = false;
+  for (const file of files) {
+    for (const entry of auditLines(file)) {
+      if (entry.session !== sessionId) continue;
+      if (entry.event === 'learnings-nudge') nudged = true;
+      if (entry.event !== 'tool') continue;
+      if (isMemoryWrite(entry)) memoryWrite = true;
+      if (WRITE_TOOLS.has(entry.tool)) writes++;
+    }
+  }
+  return { substantive: Boolean(bound) || writes >= 3, memoryWrite, nudged, bound };
+}
+
 export function finishRun(projectId, runId, state = 'awaiting-review') {
   const adversarial_review = adversarialReviewState(projectId, runId);
+  const learnings_recorded = learningsState(projectId, runId);
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
     m.adversarial_review = adversarial_review;
+    m.learnings_recorded = learnings_recorded;
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  appendAudit(projectId, { event: 'run-state', run: runId, state, adversarial_review });
+  appendAudit(projectId, { event: 'run-state', run: runId, state, adversarial_review, learnings_recorded });
   if (getActiveRun(projectId) === runId) setActiveRun(projectId, null);
   return meta;
 }

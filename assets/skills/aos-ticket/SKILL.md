@@ -58,6 +58,9 @@ files live in the run folder printed by `aos run start`.
 
 ## 6. Learn
 
+Do this in the SAME session, before ending it — a session that finishes a run without
+writing learnings gets stopped once by the Stop hook and asked to extract them.
+
 11. Append to the project's `learnings.md` (path: `aos context` shows the project; files live
     under `~/.aos/projects/<id>/`): 1-3 bullets of anything that would help the next agent.
     Append significant choices to `context/decisions.md` in the decision format.

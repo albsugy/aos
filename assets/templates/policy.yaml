@@ -7,6 +7,11 @@ version: 1
 # ask:  file writes outside the run folder stay gated until the human runs `aos run approve`
 plan_gate: auto
 
+# Learnings capture: flags sessions that did substantive work but wrote no
+# learnings, and the Stop hook asks the session to extract them before ending.
+# Set false to turn both off (the `aos run finish` reminder is unaffected).
+learnings_capture: true
+
 tiers:
   forbidden:
     # --force-with-lease is not matched here; it falls through to the gated git-push rule.

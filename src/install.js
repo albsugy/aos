@@ -111,6 +111,10 @@ const HOOK_DEFS = [
   { event: 'PostToolUse', matcher: null, cmd: 'hook post-tool' },
   { event: 'SessionStart', matcher: null, cmd: 'hook session-start' },
   { event: 'SessionEnd', matcher: null, cmd: 'hook session-end' },
+  // Learnings extraction happens in-session: Stop blocks once when a finished
+  // run recorded no learnings, so the model that did the work writes them
+  // while it still has the context.
+  { event: 'Stop', matcher: null, cmd: 'hook stop' },
 ];
 
 function isAosHook(h) {

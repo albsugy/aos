@@ -20,6 +20,7 @@ import {
   findRunBySession,
   runDir,
   runMeta,
+  sessionMemoryActivity,
 } from './run.js';
 import { buildContext } from './context.js';
 
@@ -268,7 +269,20 @@ export async function hookSessionEnd() {
   if (!project) return;
   const usage = input.transcript_path
     ? sumTranscriptUsage(input.transcript_path)
-    : { input: 0, output: 0, cache_read: 0 };
+    : { input: 0, output: 0, cache_read: 0, models: {} };
+  // Learnings debt: a session that did substantive work but never wrote to
+  // learnings.md/decisions.md loses that knowledge silently when it dies.
+  // Flag it here so the next SessionStart can surface the debt (buildContext).
+  // The hook can't author the learning — only the model can — so the most it
+  // can do is make the loss visible instead of silent.
+  const policy = loadPolicy(project.id);
+  let learningsOwed = false;
+  let memoryWrite = false;
+  if (policy.learnings_capture !== false && input.session_id) {
+    const act = sessionMemoryActivity(project.id, input.session_id);
+    learningsOwed = act.substantive && !act.memoryWrite;
+    memoryWrite = act.memoryWrite;
+  }
   appendLine(
     path.join(projectDir(project.id), 'sessions.jsonl'),
     JSON.stringify({
@@ -279,8 +293,15 @@ export async function hookSessionEnd() {
       cache_read_tokens: usage.cache_read,
       // per-model buckets — what the $ estimates are computed from
       models: Object.keys(usage.models).length ? usage.models : undefined,
+      learnings_owed: learningsOwed || undefined,
+      // Lets buildContext treat older owed entries as addressed once a later
+      // session actually wrote memory.
+      memory_write: memoryWrite || undefined,
     })
   );
+  if (learningsOwed) {
+    appendAudit(project.id, { event: 'learnings-owed', session: input.session_id });
+  }
   // Attribute tokens to the run this session belongs to. The active run wins
   // when it's ours (or unbound); otherwise fall back to the run bound to this
   // session — the standard pipeline ends with `aos run finish` INSIDE the
@@ -299,6 +320,42 @@ export async function hookSessionEnd() {
   appendAudit(project.id, { event: 'session-end', session: input.session_id || null });
 }
 
+// Assisted learnings extraction, no separate model call: when the session's
+// run has finished but nothing was written to learnings.md, block the stop
+// ONCE and hand the extraction back to the very model that did the work —
+// it still has the whole session in context. Deliberately narrow trigger
+// (finished run only, once per session) so ordinary mid-conversation stops
+// are never nagged; run-less sessions are covered by the SessionEnd debt
+// marker instead.
+export async function hookStop() {
+  const input = JSON.parse(await readStdin());
+  // stop_hook_active means this stop already follows a blocked stop — never
+  // block again or a stubborn model loops forever.
+  if (input.stop_hook_active) return;
+  const project = resolveProject(input);
+  if (!project) return;
+  if (loadPolicy(project.id).learnings_capture === false) return;
+  const act = sessionMemoryActivity(project.id, input.session_id);
+  const finished = act.bound && !['in-progress', 'blocked'].includes(act.bound.state);
+  if (!finished || act.memoryWrite || act.nudged) return;
+  appendAudit(project.id, {
+    event: 'learnings-nudge',
+    run: act.bound.run,
+    session: input.session_id || null,
+  });
+  process.stdout.write(
+    JSON.stringify({
+      decision: 'block',
+      reason:
+        `Run ${act.bound.run} finished but nothing was recorded to learnings.md this session. ` +
+        `Distill 1-3 concrete, actionable learnings from this session and append them to ` +
+        `${path.join(projectDir(project.id), 'learnings.md')} (significant choices go to ` +
+        `context/decisions.md in the decision format). If genuinely nothing is worth ` +
+        `recording, say so and stop — you won't be asked again.`,
+    })
+  );
+}
+
 export async function runHook(name) {
   // A broken hook must never break the user's session: swallow everything.
   // But a swallowed pre-tool error means the gate failed OPEN — so leave a
@@ -308,6 +365,7 @@ export async function runHook(name) {
     else if (name === 'post-tool') await hookPostTool();
     else if (name === 'session-start') await hookSessionStart();
     else if (name === 'session-end') await hookSessionEnd();
+    else if (name === 'stop') await hookStop();
   } catch (e) {
     try {
       const log = path.join(aosHome(), 'hook-errors.log');

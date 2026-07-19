@@ -5,6 +5,9 @@ import { aosHome, projectDir, readIfExists } from './paths.js';
 export const DEFAULT_POLICY = {
   version: 1,
   plan_gate: 'auto',
+  // Learnings capture: SessionEnd debt marker + Stop-hook extraction nudge.
+  // `false` turns both off; the `run finish` warning stays (it's advice, not a gate).
+  learnings_capture: true,
   tiers: {
     forbidden: [
       // --force-with-lease falls through to the gated `git push` rule instead.
