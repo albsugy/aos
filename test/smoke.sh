@@ -373,7 +373,7 @@ $AOS run state shipped 2>/dev/null && fail "in-progress → shipped accepted" ||
 $AOS run state bogus 2>/dev/null && fail "unknown state accepted" || pass "state: unknown state rejected"
 $AOS run state blocked >/dev/null && $AOS run state in-progress >/dev/null && pass "state: legal transitions still flow" || fail "legal transition rejected"
 # close needs a TTY (stdin forced off the terminal so this also holds when run interactively)
-OUT_NOTTY=$( (env -u AOS_ALLOW_HEADLESS_APPROVE $AOS run state done </dev/null) 2>&1 || true )
+OUT_NOTTY=$( (unset AOS_ALLOW_HEADLESS_APPROVE; $AOS run state "done" </dev/null) 2>&1 || true )
 echo "$OUT_NOTTY" | grep -q "interactive terminal" && pass "state done: refused without a TTY" || fail "headless close not refused"
 # plan approval stays prompt-based: works headless, identity recorded best-effort
 $AOS run approve </dev/null >/dev/null
