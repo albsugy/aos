@@ -88,7 +88,8 @@ aos console             # http://127.0.0.1:4560
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session |
 | `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve` |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl` — each run is bound to the session that started it, so concurrent sessions don't pollute its trail |
-| `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run |
+| `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run, and flags sessions that did substantive work without writing learnings |
+| `Stop` | Blocks the stop once when the session's finished run recorded no learnings, so the model that did the work extracts them while it still has the context |
 
 **Threat model, honestly:** these gates are accident-protection for well-meaning agents —
 the failure mode that actually happens. They cover the tool paths agents really use (Bash,
@@ -133,14 +134,15 @@ backed by CLI queries any agent can run. Cross-project recall is
 `claude --resume $(aos run session --run <id>)` (AOS records the run↔session
 binding automatically). Crewmates inherit context injection, gates, and audit
 the moment they touch a registered repo — orchestration stays in the agent
-layer, governance stays in AOS, and closing any run still ends at your
-sign-off prompt.
+layer, governance stays in AOS, and closing any run still ends with you — a
+command that only runs from your own interactive terminal.
 
 ## Skills
 
+- `/aos-onboard` — extract the repo's real context: fill the pack from the code, mine git history for decisions, author contracts
 - `/aos-ticket <ticket>` — full pipeline, ends `awaiting-review` with a PR draft in `outcome.md`
 - `/aos-verify` — contracts + adversarial skeptic subagent, anytime
-- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; closing it is gated, so the approval prompt is your sign-off
+- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; closing it requires your own terminal (TTY sign-off, recorded with your OS user)
 - `/aos-learn` — distill the session into project memory
 - `/aos-ask <question>` — answer from run history with file:line citations
 

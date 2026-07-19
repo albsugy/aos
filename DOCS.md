@@ -154,9 +154,26 @@ The `/aos-ticket` skill moves it through six stages, each leaving a file behind:
 5. **Package** — `outcome.md`: summary, changes, risks, how-to-test, PR draft.
 6. **Learn** — distil durable notes back into `learnings.md` / `decisions.md` / `playbooks/`.
 
-A run carries a `meta.json` with its state (`in-progress` → `blocked` /
-`awaiting-review` → `done` → `shipped`), verification verdict, attempts, token
-usage, and whether an adversarial review was recorded.
+A run carries a `meta.json` with its state, verification verdict, attempts, token
+usage, and whether an adversarial review was recorded. States form a **real state
+machine**, not free text: `in-progress ↔ blocked`, `in-progress → awaiting-review`
+(via `aos run finish`), `awaiting-review → done | shipped | in-progress` (reopen),
+`done → shipped` (and reopen paths back); `shipped` is terminal. Illegal jumps —
+like `in-progress → shipped`, which would skip review entirely — are rejected;
+`--force` overrides and is recorded in the audit.
+
+**Sign-off identity.** Closing a run — `aos run state done|shipped` — must be run
+from an interactive terminal: an agent's shell tool has no TTY, a human's
+terminal does. Both closing and plan approval (`aos run approve`) record who
+signed off (`closed_by` / `approved_by`: OS user, how — `tty`, `prompt`, or
+`headless-env` — and timestamp) in the run's meta and audit. Plan approval
+itself stays prompt-based (the pipeline has the agent run it; the permission
+prompt is that sign-off) — only closing demands the human's own terminal. CI
+can set `AOS_ALLOW_HEADLESS_APPROVE=1`; the override is recorded as `via:
+headless-env` instead of claiming a terminal. This is accident-protection, not
+cryptographic proof — a deliberately adversarial process can fake a TTY — but it
+upgrades "a permission prompt existed" to "an interactive terminal under this OS
+user ran the command", and it works on headless and non-Claude runtimes too.
 
 **Gates.** Policy (`policy.yaml`) sorts actions into tiers. **Forbidden** actions
 are denied; **gated** actions require your approval; everything else is
@@ -174,7 +191,17 @@ it's missing.
 **Memory that compounds.** The context pack, decisions log, and learnings are
 injected into every new session automatically (see [Hooks](#hooks)), so session
 two already knows what session one learned. Repeated procedures become
-`playbooks/`.
+`playbooks/`. The injected context is budgeted: the pack plus the last ~40
+decision and ~30 learning lines, with the memory sections guaranteed their share
+(a bloated pack gets truncated before it can crowd out learnings). When
+`learnings.md` outgrows its window, the session is told to compact it
+(`/aos-learn` step 6) instead of letting old knowledge silently stop loading;
+`aos find` always searches everything on disk. Learnings are also **captured, not
+just hoped for**: a session that does substantive work without writing memory is
+flagged at SessionEnd, surfaced to the next session, and — when its run finished
+without learnings — stopped once at session end so the model that did the work
+extracts them while it still has the context (`learnings_capture: false` in
+policy.yaml opts out).
 
 **Metrics.** `aos status` and the console show a **leverage ratio** (share of
 finished runs that passed verification on the first attempt — runs with no
@@ -217,7 +244,7 @@ Inside each registered **repo**, `aos init` also writes:
 
 ```
 .claude/
-├── skills/aos-ticket, aos-verify, aos-learn, aos-ask   # the slash-command skills
+├── skills/aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard   # the slash-command skills
 └── settings.json                                       # the four AOS hook entries
 ```
 
@@ -299,7 +326,8 @@ automatically — no skill invocation needed.
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session. |
 | `PreToolUse` | Gates **Bash and file writes** (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected paths are enforced on the shell path too (`tee`, `> file`, `sed -i` naming a protected target get the same ask), and evasive git-push forms (`git -C . push`) are caught structurally. Enforces `plan_gate: ask` — including write-intent Bash — until `aos run approve`. |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl`, and binds a run to the session that started it (so concurrent sessions don't pollute its trail). |
-| `SessionEnd` | Records token usage — fresh input, output, and cache reads separately — per session and per run. |
+| `SessionEnd` | Records token usage — fresh input, output, and cache reads separately — per session and per run. Flags sessions that did substantive work without writing learnings (`learnings_owed`), so the next session sees the debt. |
+| `Stop` | When the session's finished run recorded no learnings, blocks the stop once and asks the in-session model to extract 1-3 learnings while it still has the context. Guarded: once per session, never mid-run, `learnings_capture: false` opts out. |
 
 **Design guarantees.** The hook command calls the stable `aos` launcher with a
 `PATH` fallback and a trailing `|| true`, so a missing or broken AOS can **never**
@@ -309,8 +337,13 @@ CLI and console work without them.
 
 ## Skills
 
-`aos init` installs four slash-command skills into `.claude/skills/`:
+`aos init` installs the slash-command skills into `.claude/skills/`:
 
+- **`/aos-onboard`** — replaces the scaffolded templates with the repo's actual
+  truth: fills the context pack from the code, mines git history for
+  `decisions.md`, seeds learnings from CI configs/TODOs, and authors
+  verification contracts (writing policy.yaml is ask-gated, so you review
+  them). The session-start context nags until the pack stops being a template.
 - **`/aos-ticket <ticket>`** — runs the full six-stage pipeline (intake → plan →
   implement → verify → package → learn) and ends `awaiting-review` with a PR
   draft in `outcome.md`.
@@ -335,7 +368,7 @@ aos context [--project <id>]      Print the project context that agents load
 aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
 aos run approve                   Approve the active run's plan (when plan_gate: ask)
 aos run finish [--state <s>]      Finish the active run (default state: awaiting-review)
-aos run state <state> [--run <id>]  Set run state; --run targets a finished run. done/shipped are gated: the approval prompt is the human sign-off (see /aos-approve)
+aos run state <state> [--run <id>] [--force]  Set run state (validated state machine; --force overrides, audited). done/shipped need a TTY + are gated: prompt = human sign-off (see /aos-approve)
 aos run list                      List runs for this project
 aos run session [--run <id>]      Print the session id bound to a run — resume its crewmate with: claude --resume $(aos run session --run <id>)
 aos verify                        Run the verification contracts from policy.yaml
@@ -513,7 +546,7 @@ Per repo, remove the AOS skills and the four hook entries:
 
 ```bash
 rm -rf .claude/skills/aos-ticket .claude/skills/aos-verify \
-       .claude/skills/aos-learn .claude/skills/aos-ask
+       .claude/skills/aos-learn .claude/skills/aos-ask .claude/skills/aos-onboard
 # then delete the aos hook entries from .claude/settings.json
 ```
 

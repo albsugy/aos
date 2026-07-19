@@ -102,14 +102,51 @@ export function startRun(projectId, { ticket, title, planGate }) {
   return { runId, dir, meta };
 }
 
-export function setRunState(projectId, runId, state) {
+// The run lifecycle is a real state machine, not free-text: skipping straight
+// to `shipped` from `in-progress` defeats the review the pipeline exists for.
+// Reopen paths (awaiting-review/done → in-progress, done → awaiting-review)
+// stay legal because humans do change their minds; `shipped` is terminal.
+export const RUN_STATES = ['in-progress', 'blocked', 'awaiting-review', 'done', 'shipped'];
+const RUN_TRANSITIONS = {
+  'in-progress': ['blocked', 'awaiting-review'],
+  blocked: ['in-progress', 'awaiting-review'],
+  'awaiting-review': ['in-progress', 'done', 'shipped'],
+  done: ['in-progress', 'awaiting-review', 'shipped'],
+  shipped: [],
+};
+
+function assertTransition(from, to, force) {
+  if (!RUN_STATES.includes(to)) {
+    throw new Error(`Unknown state "${to}" — valid states: ${RUN_STATES.join(', ')}`);
+  }
+  if (force || from === to) return;
+  // Legacy runs may predate the state machine; only validate known states.
+  if (RUN_TRANSITIONS[from] && !RUN_TRANSITIONS[from].includes(to)) {
+    const next = RUN_TRANSITIONS[from].length ? RUN_TRANSITIONS[from].join(', ') : '(none — terminal)';
+    throw new Error(
+      `Illegal transition ${from} → ${to}. Allowed from ${from}: ${next}. Override with --force (audited).`
+    );
+  }
+}
+
+export function setRunState(projectId, runId, state, { force = false, by = null } = {}) {
+  const current = runMeta(projectId, runId);
+  if (!current) throw new Error(`Unknown run: ${runId}`);
+  assertTransition(current.state, state, force);
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
+    if (by && (state === 'done' || state === 'shipped')) m.closed_by = { ...by, ts: nowIso() };
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  appendAudit(projectId, { event: 'run-state', run: runId, state });
+  appendAudit(projectId, {
+    event: 'run-state',
+    run: runId,
+    state,
+    forced: force || undefined,
+    by: by || undefined,
+  });
   return meta;
 }
 
@@ -176,13 +213,14 @@ export function findRunBySession(projectId, sessionId) {
   return listRuns(projectId).find((r) => r.session === sessionId) || null;
 }
 
-export function approvePlan(projectId, runId) {
+export function approvePlan(projectId, runId, by = null) {
   const meta = mutateRunMeta(projectId, runId, (m) => {
     if (m.plan_approved) return false;
     m.plan_approved = true;
+    if (by) m.approved_by = { ...by, ts: nowIso() };
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  appendAudit(projectId, { event: 'plan-approved', run: runId });
+  appendAudit(projectId, { event: 'plan-approved', run: runId, by: by || undefined });
   return meta;
 }
 
@@ -271,6 +309,9 @@ export function sessionMemoryActivity(projectId, sessionId) {
 }
 
 export function finishRun(projectId, runId, state = 'awaiting-review') {
+  const current = runMeta(projectId, runId);
+  if (!current) throw new Error(`Unknown run: ${runId}`);
+  assertTransition(current.state, state, false);
   const adversarial_review = adversarialReviewState(projectId, runId);
   const learnings_recorded = learningsState(projectId, runId);
   const meta = mutateRunMeta(projectId, runId, (m) => {

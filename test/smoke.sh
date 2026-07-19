@@ -8,6 +8,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AOS="${AOS_BIN:-node $ROOT/bin/aos.js}"
 WORK="$(mktemp -d)"
 export AOS_HOME="$WORK/aos-home"
+# The suite runs headless; sign-off commands (approve / state done|shipped)
+# require a TTY unless this CI escape hatch is set. The refusal itself is
+# tested explicitly by unsetting it for one call.
+export AOS_ALLOW_HEADLESS_APPROVE=1
 REPO="$WORK/demo-repo"
 mkdir -p "$REPO"
 
@@ -361,6 +365,51 @@ tail -1 "$AOS_HOME/projects/demo/sessions.jsonl" | grep -q '"memory_write":true'
 CTX_CLEAR=$(printf '%s' '{"cwd":"'"$REPO"'","session_id":"sJ"}' | $AOS hook session-start)
 echo "$CTX_CLEAR" | grep -q "recorded no learnings" && fail "retired debt still surfaced" || pass "session-start: memory write retires debt"
 
+# --- run state machine + sign-off identity ---
+$AOS run start --ticket "LIN-8" >/dev/null
+RUN8=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
+RUN8_DIR="$AOS_HOME/projects/demo/runs/$RUN8"
+$AOS run state shipped 2>/dev/null && fail "in-progress → shipped accepted" || pass "state: illegal transition rejected"
+$AOS run state bogus 2>/dev/null && fail "unknown state accepted" || pass "state: unknown state rejected"
+$AOS run state blocked >/dev/null && $AOS run state in-progress >/dev/null && pass "state: legal transitions still flow" || fail "legal transition rejected"
+# close needs a TTY (stdin forced off the terminal so this also holds when run interactively)
+OUT_NOTTY=$( (env -u AOS_ALLOW_HEADLESS_APPROVE $AOS run state done </dev/null) 2>&1 || true )
+echo "$OUT_NOTTY" | grep -q "interactive terminal" && pass "state done: refused without a TTY" || fail "headless close not refused"
+# plan approval stays prompt-based: works headless, identity recorded best-effort
+$AOS run approve </dev/null >/dev/null
+grep -q '"via": "headless-env"' "$RUN8_DIR/meta.json" && pass "approve: sign-off identity recorded in meta" || fail "approved_by not recorded"
+$AOS run state shipped --force >/dev/null
+grep -q '"state": "shipped"' "$RUN8_DIR/meta.json" && pass "state: --force overrides (escape hatch)" || fail "force override failed"
+grep -q '"forced":true' "$RUN8_DIR/audit.jsonl" && pass "state: forced transition audited" || fail "forced transition not audited"
+$AOS run state in-progress --force >/dev/null
+$AOS run finish >/dev/null
+
+# --- context: template nudge, learnings overflow, budgeted pack ---
+CTX_REPO="$WORK/ctx-repo"; mkdir -p "$CTX_REPO"
+( cd "$CTX_REPO" && git init -q -b main && $AOS init --name ctxdemo >/dev/null )
+CTXP="$AOS_HOME/projects/ctxdemo"
+[ -f "$CTX_REPO/.claude/skills/aos-onboard/SKILL.md" ] && pass "init: aos-onboard skill installed" || fail "onboard skill missing"
+( cd "$CTX_REPO" && $AOS context ) | grep -q "aos-onboard" && pass "context: template pack → onboard nudge" || fail "onboard nudge missing"
+printf '# Context pack\n\nA real description of the project.\n' > "$CTXP/context/pack.md"
+( cd "$CTX_REPO" && $AOS context ) | grep -q "aos-onboard" && fail "filled pack still nudges onboard" || pass "context: filled pack → no onboard nudge"
+for i in $(seq 1 40); do echo "- learning $i" >> "$CTXP/learnings.md"; done
+( cd "$CTX_REPO" && $AOS context ) | grep -q "auto-load" && pass "context: learnings overflow warned" || fail "overflow not warned"
+node -e 'console.log("# Context pack\n\n" + "x".repeat(12000))' > "$CTXP/context/pack.md"
+CTXBIG=$( cd "$CTX_REPO" && $AOS context )
+echo "$CTXBIG" | grep -q "## Learnings" && pass "context: huge pack can't amputate learnings" || fail "learnings amputated by big pack"
+echo "$CTXBIG" | grep -q "read context/pack.md" && pass "context: oversized pack truncated with pointer" || fail "pack not truncated"
+
+# --- init: non-JS ecosystems seed required test contracts ---
+GO_REPO="$WORK/go-repo"; mkdir -p "$GO_REPO"; printf 'module example.com/x\n' > "$GO_REPO/go.mod"
+( cd "$GO_REPO" && git init -q -b main && $AOS init --name gox >/dev/null )
+grep -q "command: go test" "$AOS_HOME/projects/gox/policy.yaml" && pass "init: go repo seeds go test contract" || fail "go contract missing"
+PY_REPO="$WORK/py-repo"; mkdir -p "$PY_REPO"; printf '[project]\nname = "pyx"\n' > "$PY_REPO/pyproject.toml"
+( cd "$PY_REPO" && git init -q -b main && $AOS init --name pyx >/dev/null )
+grep -q "command: pytest" "$AOS_HOME/projects/pyx/policy.yaml" && pass "init: python repo seeds pytest contract" || fail "pytest contract missing"
+MK_REPO="$WORK/mk-repo"; mkdir -p "$MK_REPO"; printf 'test:\n\ttrue\n' > "$MK_REPO/Makefile"
+( cd "$MK_REPO" && git init -q -b main && $AOS init --name mkx >/dev/null )
+grep -q "command: make test" "$AOS_HOME/projects/mkx/policy.yaml" && pass "init: Makefile test target seeds contract" || fail "make contract missing"
+
 # --- init: repo-aware context pack + seeded verification contracts ---
 DETECT_REPO="$WORK/detect-repo"
 mkdir -p "$DETECT_REPO/src"
@@ -392,8 +441,9 @@ touch "$BUN_REPO/bun.lock"
 grep -q "command: bun run test" "$AOS_HOME/projects/bunny/policy.yaml" && pass "init: bun repo seeds 'bun run test' (not native runner)" || fail "bun test command wrong"
 # a repo with no signal falls back to the blank template
 BARE_REPO="$WORK/bare-repo"; mkdir -p "$BARE_REPO"
-( cd "$BARE_REPO" && git init -q -b main && $AOS init --name bare >/dev/null )
+BARE_OUT=$( cd "$BARE_REPO" && git init -q -b main && $AOS init --name bare )
 grep -q "one paragraph: purpose" "$AOS_HOME/projects/bare/context/pack.md" && pass "init: no signal → blank template" || fail "blank fallback missing"
+echo "$BARE_OUT" | grep -q "Verification is EMPTY" && pass "init: warns loudly when verification is empty" || fail "empty verification not warned"
 
 # --- supply-chain guard: the compiled CLI accesses the network in no way at all ---
 # All outbound access lives in install.sh (registry resolve + sha-512 verify); the CLI

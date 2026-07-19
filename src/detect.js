@@ -75,6 +75,42 @@ function contractsFromScripts(scripts, pm) {
   return out;
 }
 
+// Non-Node ecosystems get a required test contract too — a Python/Go/Rust
+// repo that verifies nothing out of the box breaks the "real verification"
+// promise. Required-test only, no advisory linters: tool availability varies
+// too much outside package.json scripts to seed commands that may not exist.
+function nonNodeContracts(root) {
+  const test = (command) => [{ name: 'tests', command, required: true }];
+  if (exists(root, 'go.mod')) return test('go test ./...');
+  if (exists(root, 'Cargo.toml')) return test('cargo test');
+  if (
+    exists(root, 'pytest.ini') ||
+    exists(root, 'setup.py') ||
+    exists(root, 'pyproject.toml') ||
+    exists(root, 'requirements.txt')
+  ) {
+    return test('pytest');
+  }
+  if (exists(root, 'Gemfile') && exists(root, 'spec')) return test('bundle exec rspec');
+  if (exists(root, 'pom.xml')) return test('mvn -q test');
+  if (exists(root, 'build.gradle') || exists(root, 'build.gradle.kts')) {
+    return test(exists(root, 'gradlew') ? './gradlew test' : 'gradle test');
+  }
+  for (const [file, runner] of [
+    ['Makefile', 'make test'],
+    ['justfile', 'just test'],
+    ['Justfile', 'just test'],
+  ]) {
+    try {
+      const raw = fs.readFileSync(path.join(root, file), 'utf8');
+      if (/^test\s*:/m.test(raw)) return test(runner);
+    } catch {
+      // no such file
+    }
+  }
+  return [];
+}
+
 function topLevelDirs(root) {
   const skip = new Set([
     'node_modules', 'dist', 'build', '.git', '.github', '.claude',
@@ -147,9 +183,13 @@ export function detectRepo(repoRoot) {
   const dirs = topLevelDirs(root);
 
   const scripts = (pkg && pkg.scripts) || {};
-  const contracts = pkg ? contractsFromScripts(scripts, pm) : [];
+  // package.json scripts win (they encode the repo's own choices). Ecosystem
+  // conventions only apply when there is NO package.json at all — a Node repo
+  // with a placeholder test script and a stray pyproject.toml must not get a
+  // wrong required `pytest` contract.
+  const contracts = pkg ? contractsFromScripts(scripts, pm) : nonNodeContracts(root);
 
-  const hasSignal = !!(pkg || eco.length || readme || dirs.length);
+  const hasSignal = !!(pkg || eco.length || readme || dirs.length || contracts.length);
   if (!hasSignal) return { pack: null, contracts: [], summary: null };
 
   // --- stack section ---
@@ -185,6 +225,7 @@ export function detectRepo(repoRoot) {
     }
   }
   if (scripts.build) convLines.push(`- Build: \`${scriptCmd(pm, 'build')}\``);
+  if (!convLines.length && contracts.length) convLines.push(`- Tests: \`${contracts[0].command}\``);
 
   const whatIsIt = pkg?.description || readme || '(one paragraph: purpose, stage, who uses it)';
 

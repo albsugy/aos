@@ -19,3 +19,8 @@ Distill this session into durable project memory. Focus: $ARGUMENTS (default: wh
 5. If a procedure occurred that has now happened 2+ times across runs (check recent
    `runs/*/outcome.md`), write it as a playbook in `playbooks/<slug>.md`: trigger,
    steps, verification. Tell the user what you extracted.
+6. Compact when over the window: only the last ~30 lines of `learnings.md` auto-load at
+   session start. If the file is past that (the session-start context warns), distill the
+   older bullets: promote still-true ones into `context/pack.md` (conventions/gotchas) or a
+   playbook, merge duplicates, delete anything obsolete — then rewrite the file with what
+   remains. Never let the tail window silently eat knowledge.

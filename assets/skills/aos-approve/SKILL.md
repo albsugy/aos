@@ -6,9 +6,10 @@ argument-hint: [run id — defaults to the awaiting-review run(s)]
 
 # AOS approve — agent-assisted review of an awaiting-review run
 
-Do the review legwork the human would otherwise do by hand, then close the run
-through the gated command. **The permission prompt on the close command is the
-human's sign-off — never work around it.** You recommend; the human approves.
+Do the review legwork the human would otherwise do by hand, then hand the close
+command to the human. **Closing a run requires the human's own interactive
+terminal — the TTY sign-off is the gate; never work around it.** You recommend;
+the human approves.
 
 ## 1. Pick the run
 
@@ -38,10 +39,12 @@ Present a short verdict to the user: **approve as done / approve as shipped /
 send back**, with the two or three observations that drove it (cite files).
 Then act:
 
-- **Approve** → run `aos run state done --run <run>` (or `shipped` if the work
-  is merged AND released). This command is gated by policy — the approval
-  prompt that appears is the human's sign-off. If the human declines the
-  prompt, treat it as "send back" and ask what they want changed.
+- **Approve** → tell the human to run `aos run state done --run <run>` (or
+  `shipped` if the work is merged AND released) **in their own terminal**. The
+  command requires an interactive TTY precisely so the sign-off carries the
+  human's identity — run from your shell tool it will refuse; that refusal is
+  the gate working, not an error to engineer around. If the human declines,
+  treat it as "send back" and ask what they want changed.
 - **Send back** → append your findings to the run's `verification.md` under
   `## Review findings (<date>)`, then `aos run state in-progress --run <run>`
   (not gated — reopening needs no sign-off) and tell the user what needs

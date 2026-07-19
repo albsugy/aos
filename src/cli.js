@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
@@ -18,6 +19,36 @@ import { runDoctor } from './doctor.js';
 import { exportAgentsMd } from './export.js';
 
 const [, , cmd, ...rest] = process.argv;
+
+// Sign-off identity. Closing a run (done|shipped) must come from a human's
+// own interactive terminal — an agent's shell tool has no TTY. Not
+// adversarial-proof (a TTY can be faked), but it upgrades "a prompt existed"
+// to "an interactive terminal under this OS user ran the command", and it
+// works on headless and non-Claude runtimes where no permission prompt
+// exists at all. Plan approval stays prompt-based (`required: false`): the
+// pipeline has the agent run `aos run approve` and the permission prompt IS
+// that sign-off — there we only record who/how, we don't refuse.
+// AOS_ALLOW_HEADLESS_APPROVE=1 is the CI escape hatch; the recorded identity
+// then says so instead of claiming a terminal.
+function signoffIdentity(action, { required = true } = {}) {
+  const headless = process.env.AOS_ALLOW_HEADLESS_APPROVE === '1';
+  if (required && !process.stdin.isTTY && !headless) {
+    console.error(
+      `${action} must be run by a human in an interactive terminal — ask the user to run it themselves.\n` +
+        `(CI can set AOS_ALLOW_HEADLESS_APPROVE=1; the override is recorded in the audit.)`
+    );
+    process.exitCode = 1;
+    return null;
+  }
+  let user = null;
+  try {
+    user = os.userInfo().username;
+  } catch {
+    // identity is best-effort
+  }
+  const via = process.stdin.isTTY ? 'tty' : headless ? 'headless-env' : 'prompt';
+  return { user, via };
+}
 
 // Works for both entry points: bin/aos.js (source) and dist/aos.mjs (bundle)
 // are each one level below the app root.
@@ -103,11 +134,17 @@ async function main() {
       }
       if (detection?.contracts?.length) {
         console.log(`✔ Seeded ${detection.contracts.length} verification contract(s): ${detection.contracts.map((c) => c.name).join(', ')}`);
+      } else {
+        console.log(
+          `⚠ Verification is EMPTY — no test command detected, so \`aos verify\` checks NOTHING.\n` +
+            `  Add contracts to policy.yaml (or run /aos-onboard and let the agent author them).`
+        );
       }
-      console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask)`);
-      console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens)`);
-      console.log(`\nNext: review ${path.join(home, 'context', 'pack.md')} and policy.yaml,`);
-      console.log(`then start a Claude Code session here and run /aos-ticket <ticket>.`);
+      console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard)`);
+      console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens, learnings)`);
+      console.log(`\nNext: start a Claude Code session here and run /aos-onboard — it fills the`);
+      console.log(`context pack from the repo, mines git history for decisions, and reviews policy.yaml.`);
+      console.log(`Then work tickets with /aos-ticket <ticket>.`);
       break;
     }
     case 'status':
@@ -142,7 +179,7 @@ async function main() {
           process.exitCode = 1;
           break;
         }
-        approvePlan(p.id, active);
+        approvePlan(p.id, active, signoffIdentity('aos run approve', { required: false }));
         console.log(`✔ Plan approved for ${active} — implementation writes are no longer plan-gated`);
       } else if (sub === 'finish') {
         const active = getActiveRun(p.id);
@@ -179,9 +216,18 @@ async function main() {
           process.exitCode = 1;
           break;
         }
+        const nextState = positional[1] || 'in-progress';
+        let signer = null;
+        if (nextState === 'done' || nextState === 'shipped') {
+          signer = signoffIdentity(`aos run state ${nextState}`);
+          if (!signer) break;
+        }
         try {
-          const meta = setRunState(p.id, target, positional[1] || 'in-progress');
-          console.log(`✔ Run ${target} → ${meta.state}`);
+          const meta = setRunState(p.id, target, nextState, {
+            force: Boolean(flags.force),
+            by: signer,
+          });
+          console.log(`✔ Run ${target} → ${meta.state}${flags.force ? ' (forced)' : ''}`);
         } catch (e) {
           console.error(String(e.message || e));
           process.exitCode = 1;

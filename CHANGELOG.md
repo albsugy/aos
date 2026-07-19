@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.0 — 2026-07-19
+
+Hardening: the pipeline's promises get teeth — captured learnings, a real state
+machine, sign-off identity, verification for non-JS repos, and memory that
+curates itself instead of silently forgetting.
+
+- **Learnings capture** — a session that does substantive work without writing
+  `learnings.md`/`decisions.md` is flagged at SessionEnd (`learnings_owed`),
+  surfaced to the next session, reminded at `aos run finish`
+  (`learnings_recorded` in meta), and backstopped by a new **Stop hook** that
+  blocks the stop once so the in-session model extracts 1-3 learnings while it
+  still has the context. No separate model call. Opt out with
+  `learnings_capture: false`.
+- **Run state machine** — `aos run state` validates transitions instead of
+  writing free text: `in-progress → shipped` (skipping review) is now an error.
+  Reopen paths stay legal; `--force` overrides and is audited.
+- **Sign-off identity** — closing a run (`aos run state done|shipped`) now
+  requires an interactive TTY (an agent's shell has none); plan approval stays
+  prompt-based. Both record who signed off (`closed_by` / `approved_by`: OS
+  user, via `tty`/`prompt`/`headless-env`, timestamp) in meta + audit. CI
+  escape: `AOS_ALLOW_HEADLESS_APPROVE=1`, itself recorded.
+- **Non-JS verification contracts** — `aos init` now seeds a required test
+  contract for Go (`go test ./...`), Rust (`cargo test`), Python (`pytest`),
+  Ruby (rspec), JVM (mvn/gradle), and Makefile/justfile `test` targets — and
+  warns loudly when verification is empty instead of staying silent.
+- **Budgeted session context** — the memory sections (decisions, learnings,
+  open runs) are guaranteed their share of the 9k-char context; a bloated pack
+  is truncated instead of amputating them. When `learnings.md` outgrows its
+  ~30-line window the session is told to compact it (`/aos-learn` step 6).
+- **`/aos-onboard`** — new skill: replace the scaffolded templates with the
+  repo's actual truth — fill the pack from the code, mine git history for
+  `decisions.md`, seed learnings from CI/TODOs, author contracts (policy writes
+  stay ask-gated). Session start nags while the pack is still a template.
+- Fixed a latent SessionEnd crash when the hook payload had no
+  `transcript_path` (missing `models` bucket in the fallback usage object).
+
 ## 0.9.2 — 2026-07-19
 
 The fleet: one primary agent, aware of everything, governed by AOS.
