@@ -337,9 +337,11 @@ aos run approve                   Approve the active run's plan (when plan_gate:
 aos run finish [--state <s>]      Finish the active run (default state: awaiting-review)
 aos run state <state> [--run <id>]  Set run state; --run targets a finished run. done/shipped are gated: the approval prompt is the human sign-off (see /aos-approve)
 aos run list                      List runs for this project
+aos run session [--run <id>]      Print the session id bound to a run — resume its crewmate with: claude --resume $(aos run session --run <id>)
 aos verify                        Run the verification contracts from policy.yaml
-aos find <query>                  Search project memory (runs, decisions, learnings, audit)
+aos find <query> [--all]          Search project memory; --all sweeps every registered project
 aos export                        Write the context pack as AGENTS.md (Codex/Cursor/other runtimes)
+aos fleet [--launch [runtime]]    Scaffold the primary-agent hub at ~/.aos/fleet; --launch opens it (claude|codex|opencode|droid; bare = first installed)
 aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
 aos projects                      List registered projects and their memory homes
 aos doctor                        Diagnose the install, registry, and this repo's wiring
@@ -359,6 +361,67 @@ Notes:
   `verification.md` (unless policy set `adversarial_review: false`).
 - `aos hook <name>` exists but is internal — the entry point the Claude Code
   hooks call.
+
+## The fleet — a primary agent over all projects
+
+**What it is.** `aos fleet` scaffolds `~/.aos/fleet/` — an `AGENTS.md` (with a
+`CLAUDE.md` import shim) that turns a plain agent session opened there into a
+**primary agent aware of every project you've registered**: it routes requests
+by project name, dispatches crewmate sessions to do the actual work, and
+reports back outcomes plus the decisions that need you. The hub is files, not
+a service — AOS remains the memory/governance layer; the runtime does the
+orchestrating.
+
+**The invariant:** AOS never executes agents by default — agents execute AOS.
+`aos fleet` only writes files and prints how to start. `--launch` is the
+explicit convenience that spawns a runtime in the hub (stdio passed through,
+nothing managed):
+
+| Runtime | Start manually | Reads the hub via |
+|---|---|---|
+| Claude Code | `cd ~/.aos/fleet && claude` | `CLAUDE.md` shim (`@AGENTS.md`) |
+| Codex CLI | `cd ~/.aos/fleet && codex` | `AGENTS.md` natively |
+| opencode | `cd ~/.aos/fleet && opencode` | `AGENTS.md` natively |
+| Factory Droid | `cd ~/.aos/fleet && droid` | `AGENTS.md` natively |
+
+`aos fleet --launch` (bare) picks the first of those found on PATH;
+`aos fleet --launch codex` picks one explicitly.
+
+**Why.** One agent you brain-dump to beats juggling a session per repo — but
+only if that agent has durable, current knowledge of everything. That is
+exactly what `~/.aos` already is. The fleet hub is the thin instruction layer
+that hands the whole spec to a single session:
+
+- `aos projects` / `aos status` — what exists, what's running, what needs you
+- `aos context --project <id>` — any project's pack, decisions, learnings
+- `aos find "<query>" --all` — cross-project recall ("have we solved this
+  anywhere before?")
+- `aos run session --run <id>` — the Claude Code session bound to a run
+  (recorded automatically by the hooks), so the hub can resume the exact
+  crewmate that did the work: `claude --resume $(aos run session --run <id>)`
+
+**How to use it.**
+
+```bash
+aos fleet                    # scaffold (first time) + print how to start
+aos fleet --launch           # optional: open the hub in the first installed runtime
+cd ~/.aos/fleet && claude    # or start it yourself with any supported runtime
+```
+
+Then just talk to it: "what's waiting on me?", "fix the flaky test in
+<project>", "have we ever dealt with rate limiting anywhere?". The shipped
+AGENTS.md encodes the discipline that makes this work: the hub **delegates,
+never implements** (a busy orchestrator is an unavailable one); every real task
+is dispatched as an AOS run so it lands in your decision queue; crewmate
+transcripts go to `~/.aos/fleet/reports/`; and gated actions (pushes, merges,
+closing reviews) always stop at your approval prompt — the hub cannot sign off
+on its own work, or anyone else's.
+
+The scaffold never overwrites your `AGENTS.md`: tune it freely (the file even
+tells the hub agent it may improve its own routing, logging changes to
+`fleet/log.md`). Re-running `aos fleet` only fills in missing files. The
+routing table is generated from your registry at scaffold time; refresh it from
+`aos projects` output when you add projects.
 
 ## The console
 

@@ -100,6 +100,9 @@ sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need
 ```
 ~/.aos/
 ├── registry.yaml                  # project id → repo paths
+├── fleet/                         # primary-agent hub (see The Fleet below)
+│   ├── AGENTS.md  CLAUDE.md       # the orchestrator's brain — instructions + routing
+│   └── reports/                   # crewmate session transcripts
 └── projects/<id>/
     ├── context/pack.md            # the brief every agent loads
     ├── context/decisions.md       # append-only decision log
@@ -109,19 +112,41 @@ sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  outcome.md
         ├── audit.jsonl            # every action, gate decision, verdict
-        └── meta.json              # state, verification, attempts, tokens
+        └── meta.json              # state, verification, attempts, tokens, bound session id
 ```
+
+## The Fleet — one agent aware of every project
+
+`aos fleet` scaffolds `~/.aos/fleet/` — files that turn a session opened there
+into a **primary agent** whose memory is your entire AOS spec. It routes
+brain-dumps to the right project (routing table generated from your registry),
+dispatches crewmate sessions to do the actual work (every task tracked as an
+AOS run), and reports back only outcomes and the items that need your decision.
+Start it with any runtime that reads AGENTS.md — Claude Code, Codex CLI,
+opencode, Factory Droid — via `cd ~/.aos/fleet && <runtime>`, or the explicit
+convenience `aos fleet --launch [claude|codex|opencode|droid]`. By design,
+**AOS never executes agents by default; agents execute AOS.**
+
+Why it works: the hub is **just files** — an `AGENTS.md` any runtime can read,
+backed by CLI queries any agent can run. Cross-project recall is
+`aos find "<query>" --all`; resuming the exact session that worked a run is
+`claude --resume $(aos run session --run <id>)` (AOS records the run↔session
+binding automatically). Crewmates inherit context injection, gates, and audit
+the moment they touch a registered repo — orchestration stays in the agent
+layer, governance stays in AOS, and closing any run still ends at your
+sign-off prompt.
 
 ## Skills
 
 - `/aos-ticket <ticket>` — full pipeline, ends `awaiting-review` with a PR draft in `outcome.md`
 - `/aos-verify` — contracts + adversarial skeptic subagent, anytime
+- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; closing it is gated, so the approval prompt is your sign-off
 - `/aos-learn` — distill the session into project memory
 - `/aos-ask <question>` — answer from run history with file:line citations
 
 ## CLI
 
-`aos init | status | context | run start/approve/finish/state/list | verify | find | console | projects | doctor | version | update`
+`aos init | status | context | run start/approve/finish/state/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
 
 ## Principles
 

@@ -116,6 +116,21 @@ $AOS run state "done" --run "$RUN1_ID" | grep -q "→ done" && pass "run state -
 $AOS run state awaiting-review --run "$RUN1_ID" >/dev/null   # restore for later console tests
 $AOS run state "done" --run "no-such-run" 2>/dev/null && fail "state --run accepted unknown run" || pass "run state --run rejects unknown run"
 $AOS find "LIN-1" | grep -q "ticket.md" && pass "find searches project memory" || fail "find"
+$AOS find "LIN-1" --all | grep -q "■ demo" && pass "find --all sweeps projects (grouped)" || fail "find --all"
+
+# --- fleet hub: default is scaffold-only (AOS never executes agents by default) ---
+FLEET_OUT=$($AOS fleet)
+echo "$FLEET_OUT" | grep -q "Fleet hub" || fail "fleet command failed"
+echo "$FLEET_OUT" | grep -q "codex" && pass "fleet: prints the supported runtimes" || fail "runtime list missing"
+grep -q "primary orchestration agent" "$AOS_HOME/fleet/AGENTS.md" && pass "fleet: AGENTS.md scaffolded" || fail "fleet AGENTS.md missing"
+# shellcheck disable=SC2016  # literal backticks — matching the markdown code span, not expanding
+grep -q '`demo`' "$AOS_HOME/fleet/AGENTS.md" && pass "fleet: routing table generated from registry" || fail "routing table missing"
+grep -q "@AGENTS.md" "$AOS_HOME/fleet/CLAUDE.md" && pass "fleet: CLAUDE.md import shim" || fail "CLAUDE.md shim missing"
+printf 'operator-tuned\n' > "$AOS_HOME/fleet/AGENTS.md"
+$AOS fleet >/dev/null
+grep -q "operator-tuned" "$AOS_HOME/fleet/AGENTS.md" && pass "fleet: re-run never overwrites a tuned hub" || fail "fleet clobbered AGENTS.md"
+$AOS fleet --launch bogus 2>/dev/null && fail "fleet accepted unknown runtime" || pass "fleet: --launch rejects unknown runtime"
+($AOS fleet --launch bogus 2>&1 || true) | grep -q "claude, codex, opencode, droid" && pass "fleet: --launch lists supported runtimes" || fail "supported list missing"
 
 # --- export: context pack → AGENTS.md for other runtimes ---
 $AOS export | grep -q "AGENTS.md" || fail "export did not report AGENTS.md"
@@ -221,6 +236,8 @@ $AOS run approve >/dev/null
 # --- session binding: concurrent sessions don't pollute the run ---
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-2"},"session_id":"sA"}' | $AOS hook post-tool
 grep -q '"session": "sA"' "$RUN2_DIR/meta.json" && pass "binding: run bound to starting session" || fail "run not bound"
+[ "$($AOS run session --run "$RUN2")" = "sA" ] && pass "run session: prints the bound session id" || fail "run session wrong"
+$AOS run session --run "$RUN1_ID" 2>/dev/null && fail "run session succeeded for unbound run" || pass "run session: unbound run → error"
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Grep","tool_input":{"pattern":"x"},"session_id":"sB"}' | $AOS hook post-tool
 grep -q '"session":"sB"' "$RUN2_DIR/audit.jsonl" && fail "foreign session polluted run audit" || pass "binding: foreign session kept out of run audit"
 grep -q '"session":"sB"' "$AOS_HOME/projects/demo/audit.jsonl" && pass "binding: foreign session lands in project audit" || fail "foreign session audit lost"

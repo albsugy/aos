@@ -6,10 +6,11 @@ import { ensureHome, projectDir } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
-import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan } from './run.js';
+import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta } from './run.js';
 import { verifyContracts } from './verify.js';
 import { printStatus } from './status.js';
-import { printFind } from './search.js';
+import { printFind, printFindAll } from './search.js';
+import { fleetScaffold, fleetLaunch } from './fleet.js';
 import { buildContext } from './context.js';
 import { loadPolicy } from './policy.js';
 import { serveConsole } from './console/server.js';
@@ -73,8 +74,10 @@ Usage:
   aos run finish [--state <s>]      Finish active run (default state: awaiting-review)
   aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
   aos run list                      List runs for this project
+  aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
-  aos find <query>                  Search project memory (runs, decisions, learnings)
+  aos find <query> [--all]          Search project memory; --all sweeps every project
+  aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
   aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
   aos doctor                        Diagnose the install, registry, and current repo's wiring
@@ -175,6 +178,26 @@ async function main() {
           console.error(String(e.message || e));
           process.exitCode = 1;
         }
+      } else if (sub === 'session') {
+        // The session bound to a run — recorded by the post-tool hook at
+        // `run start`. Lets a fleet/primary agent resume the exact crewmate
+        // that worked a run: claude --resume $(aos run session --run <id>)
+        const target = flags.run || getActiveRun(p.id);
+        if (!target) {
+          console.error('No active run. Use: aos run session --run <id>');
+          process.exitCode = 1;
+          break;
+        }
+        const meta = runMeta(p.id, target);
+        if (!meta) {
+          console.error(`Unknown run: ${target}`);
+          process.exitCode = 1;
+        } else if (!meta.session) {
+          console.error(`Run ${target} has no bound session (started outside a Claude Code session).`);
+          process.exitCode = 1;
+        } else {
+          console.log(meta.session);
+        }
       } else if (sub === 'list') {
         for (const r of listRuns(p.id)) {
           const adv =
@@ -211,13 +234,26 @@ async function main() {
       break;
     }
     case 'find': {
-      const p = requireProject(flags);
       if (!positional.length) {
-        console.error('Usage: aos find <query>');
+        console.error('Usage: aos find <query> [--project <id> | --all]');
         process.exitCode = 1;
         break;
       }
+      if (flags.all) {
+        printFindAll(loadRegistry().projects, positional.join(' '));
+        break;
+      }
+      const p = requireProject(flags);
       printFind(p.id, positional.join(' '));
+      break;
+    }
+    case 'fleet': {
+      // Default: scaffold only — AOS never executes agents by default.
+      // --launch (bare = auto-pick, or a runtime name) is the explicit opt-in.
+      const ok = flags.launch !== undefined
+        ? fleetLaunch(typeof flags.launch === 'string' ? flags.launch : undefined)
+        : fleetScaffold();
+      if (!ok) process.exitCode = 1;
       break;
     }
     case 'export': {

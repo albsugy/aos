@@ -36,3 +36,21 @@ export function printFind(projectId, query) {
   console.log(`Matches for "${query}" (project root: ${projectDir(projectId)}):\n`);
   for (const h of hits) console.log(`${h.file}:${h.line}  ${h.text}`);
 }
+
+// Cross-project search: the memory query a fleet/primary agent needs —
+// "have we solved this anywhere before?" — swept over every project's files.
+export function printFindAll(projects, query, maxHits = 60) {
+  let total = 0;
+  for (const p of projects) {
+    const hits = findInProject(p.id, query, Math.max(1, maxHits - total));
+    if (!hits.length) continue;
+    console.log(`■ ${p.id}`);
+    for (const h of hits) console.log(`  ${h.file}:${h.line}  ${h.text}`);
+    total += hits.length;
+    if (total >= maxHits) {
+      console.log(`\n(capped at ${maxHits} hits — narrow the query or use --project)`);
+      return;
+    }
+  }
+  if (!total) console.log(`No matches for "${query}" in any project.`);
+}

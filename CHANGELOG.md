@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.2 — 2026-07-19
+
+The fleet: one primary agent, aware of everything, governed by AOS.
+
+- **`aos fleet`** scaffolds `~/.aos/fleet/` — an AGENTS.md hub that turns a
+  single Claude Code session into a primary agent over every registered
+  project: routing table generated from the registry, dispatch recipes for
+  crewmate sessions (each task tracked as an AOS run, so results land in the
+  decision queue), and hard boundaries (delegate-don't-implement; gated
+  actions still end at the operator's approval prompt). The default only
+  writes files and prints how to start — **AOS never executes agents by
+  default; agents execute AOS**. `--launch [claude|codex|opencode|droid]` is
+  the explicit convenience that opens the hub in a runtime (bare `--launch`
+  picks the first one installed). Never overwrites a tuned hub.
+- **`aos find <query> --all`** — cross-project search over every project's
+  memory (runs, decisions, learnings, audit), grouped by project. The
+  "have we solved this anywhere before?" query a primary agent needs.
+- **`aos run session [--run <id>]`** — prints the Claude Code session id bound
+  to a run (the hooks have always recorded it). Enables resuming the exact
+  crewmate that worked a run: `claude --resume $(aos run session --run <id>)`.
+
 ## 0.9.1 — 2026-07-19
 
 - **The review action now exists.** `aos run state <state> --run <id>` targets
