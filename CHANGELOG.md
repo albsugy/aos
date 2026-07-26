@@ -1,5 +1,186 @@
 # Changelog
 
+## 0.11.0 — 2026-07-26
+
+The adversarial review stops being a checkbox, a silently-absent gate stops
+being invisible, the review queue stops being a graveyard, and the cost number
+stops lying.
+
+**Upgrading.** Three behaviour changes worth knowing before you update:
+`aos run finish` now refuses without a `review.json` (set
+`adversarial_review: warn` to keep the old behaviour); destructive git commands
+now ask (set `tiers.protect_worktree: false` to opt out); and reported token
+totals will *drop*, because they were being double-counted — the new numbers are
+the correct ones. Re-run `aos init` in each repo to pick up the new policy
+template, then `aos doctor`.
+
+### New
+
+- **`aos cost`** — what the agent actually cost, at API list prices, from the
+  per-model buckets AOS already records. Grouped by project (default), `run`,
+  `model`, or `contract`; windowed with `--since 7d|24h|2w|<date>`.
+  - It always reports **session spend** and **spend inside runs** separately,
+    plus the share. That gap is the honest answer to "how much of my agent bill
+    goes through the pipeline", and collapsing the two into one number would
+    flatter the pipeline's coverage.
+  - `--by contract` shows which contracts fail and what the runs they failed in
+    cost — labelled as exactly that, not as "cost caused by", because retry
+    tokens are not separable from the rest of a run.
+  - When a run's tokens settle, its price tag is stamped into `outcome.md` under
+    `## Cost`, so a PR drafted from that file carries its own cost. Marked and
+    idempotent: re-stamping replaces, never duplicates, and never touches the
+    prose above it.
+  - Models with no pricing rule are counted as `unpriced` and called out rather
+    than guessed at. Override rates in `~/.aos/pricing.yaml`.
+- **`aos init --hooks-only`** — installs the layer that works without anyone
+  invoking anything: context injection, gates, audit, token accounting. No
+  skills, no pipeline. The project home is still scaffolded, because
+  `policy.yaml` *is* the gate and `pack.md` *is* the memory. Running plain
+  `aos init` later adds the pipeline on top. The README now leads with this.
+- **Scope gate** — when a run's `plan.md` has a `## Files` (or `## Scope`)
+  section, writes outside that list ask. This is the one gate that knows what
+  the work is *supposed* to be: everything else asks "is this command
+  dangerous", this asks "is this the change you described" — the drift plan
+  approval cannot catch, where an agent gets sign-off for a two-file fix and
+  then refactors nine other modules. Entries may be exact paths, directories or
+  globs; commentary and backticks are stripped and prose lines ignored.
+  **Self-activating**: a plan that declares nothing gates nothing, so no
+  existing project changes behaviour and there is no flag to remember.
+  `scope_gate: false` switches it off.
+- **`dry_run: true`** — record what every gate *would* decide and let the tool
+  through, for tuning a policy against a real workflow before it starts
+  blocking. `aos status` prints the suppressed decisions with a breakdown by
+  action, and **`aos doctor` fails** while it is on: a forgotten `dry_run` looks
+  exactly like a healthy install from inside a session, because nothing ever
+  prompts. No sign-off tickets are minted in dry run — there is no prompt to
+  approve. Closing a run still works there, recorded as
+  `via: dry-run` so the record says plainly that nobody was asked.
+
+### Fixed
+
+- **Session token accounting was double-counting, by a lot.** Claude Code fires
+  SessionEnd more than once for the same session — resume, `/clear` and logout
+  each end a session whose transcript keeps growing — and every firing appended
+  that session's *cumulative* total to `sessions.jsonl`. Summing every line
+  therefore multiplied a resumed session's spend by the number of times it
+  ended — a heavily resumed session can be counted the better part of ten times
+  over, which is enough to make a project's reported tokens **mostly re-counts**
+  and its dollar estimate wrong by a multiple. Readers now deduplicate by
+  session id and keep the largest total (a rotated transcript can under-report a
+  later line, never erase an earlier one). The log itself stays append-only —
+  the sequence is what the learnings-debt marker reads.
+  - Runs *bound* to a session were already settled exactly once and were never
+    affected. Runs started outside a session were: they accumulated the raw
+    cumulative total on every firing, so they carried the same inflation. They
+    now keep a per-session high-water mark and credit only what is new, while
+    still summing genuinely distinct sessions.
+  - A `aos run finish` that the review gate **refuses** no longer settles the
+    run either. It used to latch the total at whatever had been spent mid-work,
+    so every token spent fixing the review vanished and the price tag stamped
+    into `outcome.md` was a fraction of the truth.
+- **The gate now protects the working tree.** `git reset --hard`, `git clean -f`,
+  `git checkout -- .`, `git restore`, `git switch --force`, `git branch -D` and
+  `git stash drop|clear` destroy work that exists in no commit — the accident
+  that actually happens to agents, far more than `rm -rf /` — and nothing in the
+  gate saw them, because none of them names the file it overwrites. They are now
+  parsed structurally and gated at **ask**, never deny. The parser resolves
+  flag clusters (`-Df`), `git -C .`, and wrapper prefixes with their own options
+  (`sudo -E`, `sudo -u root`, `env -u FOO`, `xargs -n 1`, `VAR=x`) — a wrapper
+  flag used to leave the real program unrecognized, which silently disabled the
+  self-protection checks too. For `git checkout`, whether an operand is a branch
+  or a path is settled by asking the working tree rather than by the shape of
+  the name: a branch called `fix/typo.md` is not gated, a directory called `src`
+  is. Two operands and an explicit `--` are git's own grammar for a path restore
+  and always ask.
+  Non-destructive neighbours stay silent: `git checkout <branch>`,
+  `git checkout -b new main`, `git checkout v1.0.0`, `git restore --staged`,
+  `git reset --soft`, plain `git stash`. They also count as writes now, so
+  `git checkout -- .claude/settings.json` can't disarm the hooks. Opt out with
+  `tiers.protect_worktree: false`.
+- **`gsed -i` was a bypass.** Command aliasing is resolved before any check:
+  GNU `g`-prefixes folded (`gsed`, `gawk`, `gcp` — the macOS/Homebrew spelling),
+  `busybox`/`toybox` applets unwrapped, and leading `VAR=value` assignments
+  skipped. `git`, `grep` and `gh` are deliberately not folded. Every check built
+  on `commandWritesFiles` — the plan gate and the protected paths — was
+  bypassable by spelling `sed` as `gsed`.
+- **The leverage ratio no longer reports a percentage it can't support.** Below
+  10 finished runs `aos status` shows the raw fraction
+  (`clean-first-pass: 1/3 runs (too few to rate)`) instead of "33%".
+- **The review queue is drained in-session, not in a dashboard.** Closing a run
+  required a TTY, which put the sign-off in the one place the human is not: they
+  are in the Claude Code session, and the second terminal is a context switch
+  that does not happen. In practice runs piled up at `awaiting-review` rather
+  than being closed.
+  - The `Stop` hook now blocks once when the session's run is sitting at
+    `awaiting-review`, and hands the close back to the model that did the work:
+    present the change and the review findings, recommend a disposition, run the
+    close. `review_capture: false` opts out.
+  - The gate already stops `aos run state done|shipped` and shows the human the
+    exact command. Approving that prompt is now accepted as the sign-off: the
+    PreToolUse hook mints a **single-use, 5-minute ticket** when it asks, and the
+    CLI consumes it, recording `via: gate-prompt` alongside the OS user. A TTY
+    still counts (`via: tty`) and still ranks first.
+  - What the ticket proves is narrow, and the docs say so: the command was gated
+    and then ran, which cannot happen without someone approving the prompt. It is
+    not proof against an agent that invokes `aos hook pre-tool` itself to mint
+    one — the same adversarial model the hook layer already declines to cover.
+  - With no route at all the close still refuses, and the message now names all
+    three ways to authorize it instead of only the terminal.
+  - `aos run finish` points at the in-session close; `/aos-ticket` gained a
+    close-out stage; `/aos-approve` proposes the close instead of telling the
+    human to go open a terminal.
+  - `signoff.json` joins the self-protected AOS state files: an agent writing
+    one would be forging a human's approval to close a run, so creating it is
+    the gate's job alone.
+
+### Enforced
+
+- **Adversarial review is now a gate, not a note.** The old check — a heading
+  matching `adversarial|skeptic|refut` in `verification.md` plus 20 characters
+  of body — was evidence-of-process a model satisfied by writing the heading.
+  Reviews are now structured claims in the run's **`review.json`** (`reviewer`,
+  `scope`, and `findings` with `severity` / `summary` / `location` / `status` /
+  `resolution`), and **`aos run finish` refuses** while that file is missing,
+  malformed, or holds a finding still marked `open`. This does not prove a review
+  was *good* — nothing mechanical can — but it moves the bar from "a heading
+  exists" to "explicit claims, each dispositioned", and makes the one checkable
+  thing a hard stop: no run reaches review with a known-open finding in it.
+  - **`aos run review`** validates the file on demand, against the same checks
+    the gate uses, so the fix loop doesn't run through `finish`.
+  - Escape hatches are loud: `aos run finish --force` finishes anyway and stamps
+    the run `adversarial_review: forced` in meta *and* audit;
+    `verification.adversarial_review: warn` in `policy.yaml` downgrades the gate
+    to the previous warning behaviour; `false` still opts out entirely.
+  - `meta.json` records the review state (`clean` / `resolved` / `open` /
+    `invalid` / `absent` / `not-required` / `forced`) plus per-status counts.
+  - The gate covers **both** entries into `awaiting-review` — `aos run finish`
+    and `aos run state awaiting-review` — so the review can't be stepped around
+    with the other command.
+  - Forced jumps that skip `awaiting-review` entirely (`run state done --force`,
+    `run finish --state done --force`) never block — the human sign-off is the
+    authority at close — but they are **visible**: the review state is stamped
+    into meta and the audit line, and the close prints
+    "⚠ Closed with adversarial review: absent". No path leaves the run stuck at
+    `pending` as if the question never came up.
+  - `warn` mode warns out loud at finish (not just in meta), and `aos verify` /
+    the console report the tri-state mode honestly instead of collapsing `warn`
+    into "required".
+  - **Upgrading:** projects on `adversarial_review: true` will find `aos run
+    finish` blocked until a `review.json` exists. `/aos-verify` and `/aos-ticket`
+    write it; set `warn` to keep the old behaviour.
+- **A dead hook command is now detectable.** Hook commands end in `|| true` so a
+  missing `aos` can never break a session — which also meant a moved or
+  uninstalled binary turned every gate off with no visible symptom. `aos doctor`
+  now resolves each wired hook command (launcher path, then the `PATH` fallback)
+  and fails loudly when none resolve.
+- **The fail-open path is tested.** New smoke coverage: every hook entry point
+  swallows malformed input, exits 0, emits no decision, and logs to
+  `hook-errors.log` where `doctor` surfaces it; and the launcher chain still
+  exits silently with 0 when the binary is gone.
+- **Docs** — README and DOCS.md rewritten to state plainly which parts are
+  enforced mechanism (gates, plan approval, review gate, state machine, audit)
+  and which are prompt-authored convention.
+
 ## 0.10.0 — 2026-07-19
 
 Hardening: the pipeline's promises get teeth — captured learnings, a real state

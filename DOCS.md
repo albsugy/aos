@@ -40,7 +40,8 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
 - **Enforced beats remembered** — guardrails and audit live in hooks, not in
   prompts an agent can forget or ignore.
 - **Don't self-certify** — verification is deterministic contracts plus an
-  adversarial reviewer, not the agent grading its own homework.
+  adversarial reviewer, not the agent grading its own homework. The review's
+  findings are structured and the run can't close with one left open.
 - **Every layer works standalone** — the hooks alone are worth installing; the
   pipeline is optional; the console is read-only.
 - **Local-only** — the console binds `127.0.0.1`, and the CLI makes no network
@@ -130,6 +131,7 @@ And from a terminal at any time:
 
 ```bash
 aos status              # all projects: runs, states, leverage ratio, tokens
+aos cost --since 7d     # what the last week cost, and how much of it went through runs
 aos console             # http://127.0.0.1:4560
 ```
 
@@ -150,30 +152,45 @@ The `/aos-ticket` skill moves it through six stages, each leaving a file behind:
 1. **Intake** — `ticket.md`: the source ticket + an explicit acceptance-criteria checklist.
 2. **Plan** — `plan.md`: approach, files to touch, risks, test strategy.
 3. **Implement** — code, on a branch; the hooks audit and gate as it goes.
-4. **Verify** — `verification.md`: deterministic contracts + an adversarial review.
+4. **Verify** — deterministic contracts (`verification.md`) + an adversarial
+   review recorded as structured findings (`review.json`), which the finish gates on.
 5. **Package** — `outcome.md`: summary, changes, risks, how-to-test, PR draft.
 6. **Learn** — distil durable notes back into `learnings.md` / `decisions.md` / `playbooks/`.
 
 A run carries a `meta.json` with its state, verification verdict, attempts, token
-usage, and whether an adversarial review was recorded. States form a **real state
+usage, and the adversarial review's state and finding counts. States form a **real state
 machine**, not free text: `in-progress ↔ blocked`, `in-progress → awaiting-review`
 (via `aos run finish`), `awaiting-review → done | shipped | in-progress` (reopen),
 `done → shipped` (and reopen paths back); `shipped` is terminal. Illegal jumps —
 like `in-progress → shipped`, which would skip review entirely — are rejected;
 `--force` overrides and is recorded in the audit.
 
-**Sign-off identity.** Closing a run — `aos run state done|shipped` — must be run
-from an interactive terminal: an agent's shell tool has no TTY, a human's
-terminal does. Both closing and plan approval (`aos run approve`) record who
-signed off (`closed_by` / `approved_by`: OS user, how — `tty`, `prompt`, or
-`headless-env` — and timestamp) in the run's meta and audit. Plan approval
-itself stays prompt-based (the pipeline has the agent run it; the permission
-prompt is that sign-off) — only closing demands the human's own terminal. CI
-can set `AOS_ALLOW_HEADLESS_APPROVE=1`; the override is recorded as `via:
-headless-env` instead of claiming a terminal. This is accident-protection, not
-cryptographic proof — a deliberately adversarial process can fake a TTY — but it
-upgrades "a permission prompt existed" to "an interactive terminal under this OS
-user ran the command", and it works on headless and non-Claude runtimes too.
+**Sign-off identity.** Closing a run (`aos run state done|shipped`) and approving
+a plan (`aos run approve`) both record who signed off and how — `closed_by` /
+`approved_by`, carrying the OS user, the route, and a timestamp — in the run's
+meta and audit. Five routes, strongest first:
+
+| `via` | What it means |
+|---|---|
+| `tty` | An interactive terminal under this OS user ran the command |
+| `gate-prompt` | The PreToolUse gate asked, and the human approved the prompt |
+| `dry-run` | The project is in `dry_run`, so the gate never prompted anyone |
+| `headless-env` | `AOS_ALLOW_HEADLESS_APPROVE=1` — the CI escape hatch |
+| `prompt` | Unverified; only accepted where no sign-off is required |
+
+`gate-prompt` is how the close normally happens. AOS used to require a TTY for
+it, which was right about *who* may close a run and wrong about *where*: the
+human is in the Claude Code session, not in a second terminal, and runs that
+needed a context switch to close never closed. So the gate — which already stops
+the command and shows the human its exact text — mints a single-use, 5-minute
+ticket when it asks, and the CLI consumes it as sign-off.
+
+What that proves is narrow and worth stating: the command was gated, and then it
+ran, which cannot happen without someone approving the prompt. It is not proof
+against an agent that invokes `aos hook pre-tool` itself to mint a ticket — the
+same deliberately-adversarial model the rest of the hook layer does not cover,
+and an agent willing to forge sign-off would just pass `--force`. With no route
+at all, the close refuses and names all three ways to authorize it.
 
 **Gates.** Policy (`policy.yaml`) sorts actions into tiers. **Forbidden** actions
 are denied; **gated** actions require your approval; everything else is
@@ -182,11 +199,42 @@ cover both Bash commands and file writes.
 
 **Verification — don't self-certify.** `aos verify` runs the deterministic
 `contracts` from policy (e.g. your test suite) and records pass/fail. Separately,
-an **adversarial review** asks a skeptic subagent to *refute* the work. AOS can't
-judge whether that review was any good, but it records whether one actually
-happened — `aos run finish` reads `verification.md` and marks the run's
-adversarial review `present`, `absent`, or `not-required`, and warns you when
-it's missing.
+an **adversarial review** asks a skeptic subagent to *refute* the work, and
+records what it found as structured claims in the run's `review.json`:
+
+```json
+{
+  "reviewer": "skeptic subagent",
+  "scope": ["src/gate.js", "acceptance criterion 2", "npm test"],
+  "findings": [
+    {
+      "severity": "high",
+      "summary": "the gate never fires on the shell path",
+      "location": "src/gate.js:12",
+      "status": "fixed",
+      "resolution": "extended the check to Bash redirects and tee"
+    }
+  ]
+}
+```
+
+This one is **enforced, not reported**: `aos run finish` refuses to move the run
+to `awaiting-review` while `review.json` is missing, malformed, or holds a
+finding still marked `open`. `status` is `fixed` | `dismissed` | `deferred` |
+`open`; everything but `open` needs a written `resolution`. `findings: []` is a
+legitimate outcome of a genuine hunt — but `scope` must still say what was hunted
+through. Validate the file any time with `aos run review`; the run's meta records
+the resulting state (`clean`, `resolved`, `open`, `invalid`, `absent`,
+`not-required`, `forced`) plus the counts.
+
+Be clear about what this does and does not prove. It does **not** prove the
+review was any good — only another reviewer can judge that, and a determined
+model can still write a shallow review that validates. What it does prove is that
+explicit claims were made, each with a disposition a human can audit, and that no
+run reached review with a known-open finding inside it. Escape hatches exist and
+are loud: `aos run finish --force` finishes anyway and stamps the run
+`adversarial_review: forced` in both meta and audit; `adversarial_review: warn`
+in policy downgrades the gate to a warning; `false` turns it off entirely.
 
 **Memory that compounds.** The context pack, decisions log, and learnings are
 injected into every new session automatically (see [Hooks](#hooks)), so session
@@ -207,8 +255,20 @@ policy.yaml opts out).
 finished runs that passed verification on the first attempt — runs with no
 contracts configured are never counted as passing, since nothing was verified)
 and **token economics** (input, output, and cache-read tracked separately, since
-cache reads cost a fraction of fresh tokens). Token numbers are best-effort:
-they're recorded when a session ends, so sessions that crash aren't counted.
+cache reads cost a fraction of fresh tokens).
+
+The leverage ratio only appears once **10 runs** have finished; below that the
+raw fraction is shown instead (`clean-first-pass: 1/3 runs (too few to rate)`),
+because a percentage over three runs is noise dressed as a metric.
+
+Token numbers are best-effort: they're recorded when a session ends, so sessions
+that crash aren't counted. A session that ends more than once — resume, `/clear`
+and logout each fire SessionEnd against the same, still-growing transcript —
+appends its cumulative total each time, so readers deduplicate by session id and
+keep the largest total. Runs bound to a session were always settled exactly
+once; runs started outside one now keep a per-session high-water mark instead of
+re-adding the cumulative total, and a `run finish` the review gate refuses does
+not settle at all.
 
 **Cost estimates.** Usage is recorded per model, and the console and
 `aos status` derive an **estimated dollar cost at Anthropic API list prices**
@@ -235,7 +295,7 @@ are applied at display time, so a table update corrects history retroactively.
     ├── state.json                 # which run is active
     ├── audit.jsonl                # project-level audit (actions outside a run)
     └── runs/<date>-<ticket>/
-        ├── ticket.md  plan.md  verification.md  outcome.md
+        ├── ticket.md  plan.md  verification.md  review.json  outcome.md
         ├── audit.jsonl            # every action, gate decision, and verdict for this run
         └── meta.json              # state, verification, attempts, tokens, adversarial-review status
 ```
@@ -279,7 +339,9 @@ tiers:
       reason: Environment files hold secrets
 
 verification:
-  adversarial_review: true   # /aos-verify must spawn a skeptic subagent (false to opt out)
+  # true: ENFORCED — `aos run finish` refuses while review.json is missing,
+  # malformed, or has an open finding. `warn`: record only. false: not required.
+  adversarial_review: true
   contracts:
     - name: tests
       command: npm test
@@ -294,22 +356,79 @@ verification:
 check → your + built-in `forbidden` → your + built-in `gated` → allow.
 
 **How a file write is evaluated**: built-in self-protection → your `protected_paths`
-globs → script-content scan → allow.
+globs → script-content scan → plan gate → scope gate → allow.
+
+**Scope gate.** When a run's `plan.md` has a `## Files` (or `## Scope`) section,
+writes to files outside that list ask for approval. This is the one gate that
+knows what the work is *supposed* to be: everything else asks "is this command
+dangerous", this asks "is this the change you described" — the drift that plan
+approval alone cannot catch, where an agent gets sign-off for a two-file fix and
+then refactors nine other modules.
+
+It is **self-activating**: a plan with no Files section declares no scope and
+gates nothing, so no existing project changes behavior and there is no flag to
+remember. Entries may be exact paths (`src/gate.js`), directories (`docs/`), or
+globs (`test/**/*.sh`); trailing commentary and backticks are stripped, and
+prose lines that aren't paths are ignored. Parsing is deliberately narrow in one
+direction: a line phrased as an exclusion ("Do not touch config/production.yaml")
+is never read as a declaration, because a scope gate that grants what the plan
+forbids is worse than no scope gate. If a `## Files` section is written in a
+shape the parser doesn't recognize, it declares nothing and the gate stays
+off — check with `aos context` or by writing an out-of-scope file and seeing
+whether it asks. The run's own folder and project
+memory stay writable. Always `ask`, never deny — being outside the plan is not
+proof of a mistake, and the honest response is to show you the drift. Set
+`scope_gate: false` to switch it off.
+
+**Dry run.** `dry_run: true` records what every gate *would* decide to the audit
+and lets the tool through anyway — for tuning a policy against your real
+workflow before it starts blocking things. `aos status` prints the suppressed
+decisions with a breakdown by action, and **`aos doctor` fails while it is on**:
+a forgotten `dry_run` looks exactly like a healthy install from inside a session,
+because nothing ever prompts. No sign-off tickets are minted in dry run either —
+there is no prompt to approve.
 
 **Always-on built-ins** (merged in, cannot be silently removed):
 
 - **Structural `rm` check** — catches recursive deletes of `/`, `~`, `$HOME` (and
   `/*` etc.) regardless of flag order, `sudo`, or wrappers — beyond what a plain
   regex catches.
+- **Working-tree guard** — `git reset --hard`, `git clean -f`, `git checkout -- .`,
+  `git restore`, `git switch --force`, `git branch -D`, and `git stash drop|clear`
+  destroy work that exists in no commit. None of them names the file it
+  overwrites, so nothing else in the gate saw them. Parsed structurally (flag
+  clusters, `git -C .`, `env`/`sudo` and `VAR=x` prefixes) and always **ask**,
+  never deny — every one is a command a human legitimately means. Non-destructive
+  neighbours stay silent: `git checkout <branch>`, `git checkout -b`,
+  `git restore --staged`, `git reset --soft`, plain `git stash`. Set
+  `tiers.protect_worktree: false` to disable. This is the accident that actually
+  happens; `rm -rf /` is the one that gets written about.
+
+  `git checkout X` is a branch switch or a destructive path restore depending on
+  what `X` *is*, and the name cannot settle it — a branch may be called
+  `fix/typo.md` and a directory may be called `src`. So the guard asks the
+  working tree, the same question git asks: an operand that exists is a path and
+  gets the prompt, one that does not is a ref and does not. Two operands
+  (`git checkout <ref> <path>`) and an explicit `--` are git's own grammar for a
+  path restore and always ask. Where there is no working directory to consult —
+  the script-content scan, which reads a file that will run somewhere else — it
+  falls back to the name's shape and errs toward asking.
 - **Default forbidden** — force-push (plain `--force`, `-f`, and `+refspec`);
   recursive delete of root/home.
 - **Default gated** — `git push`, `gh pr merge`, `deploy` (anchored so
-  `cat docs/deploy.md` doesn't trip it), and `aos run approve` (plan approval is
-  yours to give — the prompt *is* the approval).
+  `cat docs/deploy.md` doesn't trip it), and the two sign-off commands
+  `aos run approve` and `aos run state done|shipped` (both are yours to give —
+  the prompt *is* the approval, and approving it mints the sign-off ticket the
+  CLI records).
+- **Command aliasing** — the program a token invokes is resolved before any check:
+  path stripped, GNU `g`-prefixes folded (`gsed`, `gawk`, `gcp`), `busybox`/
+  `toybox` applets unwrapped, and `sudo`/`env`/`VAR=x` prefixes skipped. `git`,
+  `grep` and `gh` are deliberately not folded.
 - **Self-protection** — writes to `.claude/settings.json` (rewiring hooks),
   anything under `.git/hooks/`, and AOS's own state files (`policy.yaml`,
-  `audit.jsonl`, `meta.json`, `state.json`, `sessions.jsonl`, `registry.yaml`)
-  require approval, so an agent can't disable its own guardrails.
+  `audit.jsonl`, `meta.json`, `state.json`, `sessions.jsonl`, `registry.yaml`,
+  `signoff.json`) require approval, so an agent can't disable its own guardrails
+  or forge a sign-off. Enforced on the shell path too.
 - **Script-content scan** — a shell script being written is scanned with the same
   policy, so a gated/forbidden command can't be laundered into a file and run
   later.
@@ -318,7 +437,7 @@ A broken regex or glob is skipped, never taking the whole gate down.
 
 ## Hooks
 
-`aos init` wires four hooks into the repo's `.claude/settings.json`. They run
+`aos init` wires five hooks into the repo's `.claude/settings.json`. They run
 automatically — no skill invocation needed.
 
 | Hook | Effect |
@@ -327,7 +446,7 @@ automatically — no skill invocation needed.
 | `PreToolUse` | Gates **Bash and file writes** (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected paths are enforced on the shell path too (`tee`, `> file`, `sed -i` naming a protected target get the same ask), and evasive git-push forms (`git -C . push`) are caught structurally. Enforces `plan_gate: ask` — including write-intent Bash — until `aos run approve`. |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl`, and binds a run to the session that started it (so concurrent sessions don't pollute its trail). |
 | `SessionEnd` | Records token usage — fresh input, output, and cache reads separately — per session and per run. Flags sessions that did substantive work without writing learnings (`learnings_owed`), so the next session sees the debt. |
-| `Stop` | When the session's finished run recorded no learnings, blocks the stop once and asks the in-session model to extract 1-3 learnings while it still has the context. Guarded: once per session, never mid-run, `learnings_capture: false` opts out. |
+| `Stop` | Collects what the run still owes, while the model that did the work still has it in context. Two independent asks, each blocking the stop at most once: **close the review** when the session's run is sitting at `awaiting-review` (present the change, propose `done`/`shipped`, let the gate prompt the human for sign-off) and **extract learnings** when a finished run recorded none. Guarded: once per session per ask, never mid-run; `review_capture: false` / `learnings_capture: false` opt out. |
 
 **Design guarantees.** The hook command calls the stable `aos` launcher with a
 `PATH` fallback and a trailing `|| true`, so a missing or broken AOS can **never**
@@ -348,8 +467,8 @@ CLI and console work without them.
   implement → verify → package → learn) and ends `awaiting-review` with a PR
   draft in `outcome.md`.
 - **`/aos-verify`** — runs the contracts and spawns a skeptic subagent to refute
-  the work; appends findings to `verification.md` under an `## Adversarial review`
-  heading (which `aos run finish` looks for). Use standalone anytime.
+  the work, then records its findings and their dispositions in the run's
+  `review.json` — the file `aos run finish` gates on. Use standalone anytime.
 - **`/aos-learn`** — distils the session into `learnings.md`, `decisions.md`, and
   (for repeated procedures) a new `playbooks/` entry.
 - **`/aos-ask <question>`** — answers from run history — past runs, decisions,
@@ -362,13 +481,15 @@ CLI and console work without them.
 ## CLI commands
 
 ```
-aos init [--name <name>]          Register this repo as a project (spec + skills + hooks)
-aos status                        All projects: runs, states, leverage ratio, tokens
+aos init [--name <name>] [--hooks-only]   Register this repo as a project (spec + hooks; skills unless --hooks-only)
+aos status                        All projects: runs, states, leverage ratio, tokens, dry-run warnings
+aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
 aos context [--project <id>]      Print the project context that agents load
 aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
 aos run approve                   Approve the active run's plan (when plan_gate: ask)
-aos run finish [--state <s>]      Finish the active run (default state: awaiting-review)
-aos run state <state> [--run <id>] [--force]  Set run state (validated state machine; --force overrides, audited). done/shipped need a TTY + are gated: prompt = human sign-off (see /aos-approve)
+aos run review [--run <id>]       Validate the run's adversarial review (what the finish gate checks)
+aos run finish [--state <s>]      Finish the active run (default: awaiting-review); blocked by an unsatisfied review gate
+aos run state <state> [--run <id>] [--force]  Set run state (validated state machine; --force overrides, audited). done/shipped are gated: approving the prompt IS the sign-off (see /aos-approve)
 aos run list                      List runs for this project
 aos run session [--run <id>]      Print the session id bound to a run — resume its crewmate with: claude --resume $(aos run session --run <id>)
 aos verify                        Run the verification contracts from policy.yaml
@@ -390,10 +511,50 @@ Notes:
 - `aos verify` exits `0` when all **required** contracts pass, `1` otherwise — so
   it's scriptable. When a run is active it writes `verification.md` and updates
   the run's verdict.
-- `aos run finish` warns if no adversarial review was recorded in
-  `verification.md` (unless policy set `adversarial_review: false`).
+- `aos run finish` **refuses** while the adversarial review is missing,
+  malformed, or has an open finding — `aos run review` shows the same verdict on
+  demand, and `--force` finishes anyway (recorded as `forced` in meta + audit).
+  `adversarial_review: warn` in policy downgrades the gate to a warning.
 - `aos hook <name>` exists but is internal — the entry point the Claude Code
   hooks call.
+
+### `aos cost`
+
+What the agent actually cost, estimated at published API list prices from the
+per-model token buckets AOS records. Two numbers, always reported separately,
+because collapsing them would overstate how much of your work the pipeline
+covers:
+
+- **Session spend** — every token the agent burned in the repo, tracked or not.
+- **In runs** — the part that happened inside a run. The `Tracked` column is the
+  share, and it is usually the more interesting number.
+
+```bash
+aos cost                       # this repo, all time
+aos cost --all --since 7d      # every project, last week
+aos cost --by run              # per run, with verification attempts
+aos cost --by model            # per model, cache reads and writes split out
+aos cost --by contract         # which contracts fail, and what those runs cost
+```
+
+`--since` takes `7d` / `24h` / `2w` or any parseable date; an unreadable value is
+an error rather than a silently unfiltered report. Models with no pricing rule
+are never guessed at — their tokens are counted as `unpriced` and called out.
+
+**Estimates, not invoices.** Subscription (Max/Pro) usage is not billed per token
+at all, and Bedrock/Vertex rates differ. `--since` filters on when a session
+*ended*, and a session that was resumed reports its whole cumulative spend at
+its last ending — so a long-running session opened before the window can land
+entirely inside it. Override or extend the table at
+`~/.aos/pricing.yaml`. `--by contract` reports "cost of runs where this contract
+failed", *not* "cost this contract's failures caused" — retry tokens are not
+separable from the rest of a run, and the header says so rather than implying a
+precision that isn't there.
+
+**On the run itself.** When a run's tokens settle, its price tag is stamped into
+`outcome.md` under a `## Cost` heading, so a PR drafted from that file carries
+its own cost. The stamp is marked and idempotent — re-stamping replaces it and
+never touches the prose above it, and a run with no `outcome.md` is left alone.
 
 ## The fleet — a primary agent over all projects
 

@@ -5,28 +5,51 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
 
-Operate AI coding agents like a professional: **portable memory, enforced guardrails,
-automatic audit, real verification, and a local console** — all stored as plain files you own.
+**Policy gates, an audit ledger, and project memory for Claude Code** — installed as hooks,
+so they work without anybody invoking anything. Everything is markdown, YAML, and JSONL
+under your home directory. Open source (MIT), no network calls, no account.
 
-Open source (MIT), local-first, and runs entirely on your machine.
+```bash
+npm i -g @albsugy/aos && cd your-repo && aos init --hooks-only
+```
 
-AOS is not an orchestration framework and not a platform. It's three thin parts:
+That's a complete install. From the next session on, in this repo:
 
-1. **The Spec** — a file convention under `~/.aos/` (context packs, policies, playbooks,
-   run records, audit logs). Readable by any agent from any provider, forever.
-2. **The Skills + Hooks** — Claude Code integration: a ticket pipeline that runs work
-   through intake → plan → implement → verify → package → learn, with hooks that enforce
-   policy and write audit *automatically*.
-3. **The Console** — a local, read-only dashboard: decision queue (with queue
-   latency), run states, verification verdicts, token economics with estimated
-   cost at API rates, cycle times, leverage ratio.
+- every session **starts with the project's context** — the pack, recent decisions,
+  learnings, open runs — injected before you type anything;
+- **risky commands and writes are gated** — force-push and `rm -rf /` denied, `git push`,
+  `deploy`, and `git reset --hard` asked, `.claude/settings.json` and `.git/hooks/`
+  protected so the agent can't disarm its own guardrails;
+- **every tool call is audited** to `audit.jsonl`, and token spend is tracked per session
+  so `aos cost` can tell you what the week actually cost.
 
-The design bet: frontier labs keep making agent *execution* better and cheaper; AOS owns
-what they never will — **your** context, **your** policies, **your** audit trail, portable
-across runtimes.
+No skills, no pipeline, nothing to remember. If you later want the ticket workflow —
+plan approval, contract verification, an adversarial review that has to resolve, human
+sign-off — run plain `aos init` and read on.
+
+The gates are hooks, so they hold whether or not the agent cooperates. The pipeline that
+uses them is markdown, so it holds only as well as the model follows it. This README is
+explicit about which is which — see [What's enforced](#whats-enforced-and-whats-convention).
 
 **Package:** [npmjs.com/package/@albsugy/aos](https://www.npmjs.com/package/@albsugy/aos)
 · **Full manual:** [DOCS.md](DOCS.md)
+
+## What's enforced, and what's convention
+
+Both matter. Only one of them survives an agent that doesn't feel like cooperating.
+
+| Enforced by hooks and the CLI | Convention (markdown the model follows) |
+|---|---|
+| **Command + file-write gates** — forbidden denied, gated asks. Shell paths (`tee`, `>`, `sed -i`) are parsed, not pattern-matched; evasive forms (`git -C . push`, `rm -Rf /*`, quoted flags, `$(…)` substitution) are caught structurally | The **quality** of a plan, a ticket write-up, or an `outcome.md` |
+| **Self-protection** — an agent can't edit `.claude/settings.json`, `.git/hooks/`, or AOS's own policy/audit files without your approval | Whether the intake actually captured the ticket's real acceptance criteria |
+| **Plan approval** (`plan_gate: ask`) — implementation writes stay blocked until a human approves, and `aos run approve` is itself gated so the agent can't self-approve | Whether the skeptic subagent hunted hard or glanced |
+| **Review gate** — `aos run finish` refuses while the adversarial review is missing, malformed, or has an open finding | Whether a recorded learning is worth reading |
+| **Sign-off** — closing a run needs a human's approval at the gate prompt (or a real TTY), recorded with your OS user and which route it came through | Whether a playbook gets proposed |
+| **Working-tree guard** — `git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore`, `git rm -r`, `git branch -D` are parsed structurally and gated; `git checkout <branch>`, `-b`, `--staged` restore and `--soft` reset stay silent | |
+| **Scope gate** — when `plan.md` declares a `## Files` list, writes outside it ask. Self-activating: no declaration, no gating | Whether the declared file list was honest in the first place |
+| **Audit** — every tool call, gate decision, and verdict appended to the run's `audit.jsonl`, automatically | |
+| **State machine** — `in-progress → shipped` (skipping review) is rejected; `--force` is audited | |
+| **Token accounting** — per run and per session, cache reads split from fresh input | |
 
 ## Install
 
@@ -42,12 +65,12 @@ npm i -g @albsugy/aos
 
 Requires Node ≥ 22 (curl path also needs curl + tar). Both channels deliver the same
 artifact from the npm registry: the single-file bundle (`dist/aos.mjs`, dependencies
-inlined) plus the skills/templates — a small, fast install. The curl installer resolves
-the version from the registry, **verifies the registry's sha-512 integrity hash**,
-unpacks to `~/.local/share/aos`, and links `~/.local/bin/aos`. Pin with
-`AOS_VERSION=0.7.2`; update later with `aos update`; diagnose with `aos doctor`.
+inlined) plus the skills/templates. The curl installer resolves the version from the
+registry, **verifies the registry's sha-512 integrity hash**, unpacks to
+`~/.local/share/aos`, and links `~/.local/bin/aos`. Pin with `AOS_VERSION=0.7.2`; update
+with `aos update`; diagnose with `aos doctor`.
 
-Prefer to build it yourself? The source is right here — clone and run:
+Prefer to build it yourself? The source is right here:
 
 ```bash
 git clone https://github.com/albsugy/aos.git && cd aos
@@ -55,12 +78,11 @@ npm ci && npm run build
 ln -sf "$PWD/dist/aos.mjs" ~/.local/bin/aos
 ```
 
-(Or `AOS_FROM_SOURCE=1` with the curl installer does the same.) Releases published
-from this public repo onward carry npm
-[provenance attestations](https://docs.npmjs.com/generating-provenance-statements),
-so you can verify the bundle was built from this source by CI.
+(Or `AOS_FROM_SOURCE=1` with the curl installer.) Releases carry npm
+[provenance attestations](https://docs.npmjs.com/generating-provenance-statements), so you
+can verify the bundle was built from this source by CI.
 
-Uninstall: `rm -rf ~/.local/share/aos ~/.local/bin/aos` — your data in `~/.aos` is yours to keep.
+Uninstall: `rm -rf ~/.local/share/aos ~/.local/bin/aos` — your data in `~/.aos` stays.
 
 ## Quickstart
 
@@ -74,89 +96,141 @@ aos init                # registers the project, scaffolds ~/.aos/projects/<id>/
 #   ~/.aos/projects/<id>/policy.yaml       — gates + verification contracts
 
 # then, inside a Claude Code session in that repo:
-/aos-ticket LIN-482     # runs the full pipeline; ends awaiting your review
+/aos-ticket LIN-482     # runs the pipeline; ends awaiting your review
 
 aos status              # all projects: runs, states, leverage ratio, tokens, est. cost
+aos cost --since 7d     # what the week cost — and how much of it went through runs
 aos export              # write the context pack as AGENTS.md for Codex/Cursor/etc.
 aos console             # http://127.0.0.1:4560
 ```
+
+`aos doctor` is worth running after any move or update: hook commands end in `|| true` so
+a missing `aos` can never break a session, which also means it would otherwise turn every
+gate off silently. Doctor resolves them and says so.
 
 ## What the hooks do (no skill invocation needed)
 
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session |
-| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve` |
+| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve`; when a run's `plan.md` declares a `## Files` list, writes outside it ask too. `dry_run: true` records every decision without enforcing any of them |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl` — each run is bound to the session that started it, so concurrent sessions don't pollute its trail |
 | `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run, and flags sessions that did substantive work without writing learnings |
-| `Stop` | Blocks the stop once when the session's finished run recorded no learnings, so the model that did the work extracts them while it still has the context |
+| `Stop` | Collects what the run still owes, while the model that did the work still has it in context: closes out a run sitting at `awaiting-review` (present it, propose `done`/`shipped`, let the gate prompt you to sign off) and extracts learnings when a finished run recorded none. Each ask blocks at most once per session |
 
 **Threat model, honestly:** these gates are accident-protection for well-meaning agents —
 the failure mode that actually happens. They cover the tool paths agents really use (Bash,
 file writes), but a deliberately adversarial agent needs OS-level isolation (containers,
-sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need a hard boundary.
+sandboxes), which no hook layer provides. Pair AOS with sandboxing when you need a hard
+boundary. Hooks also fail **open** by design: a broken gate allows rather than blocks, logs
+to `~/.aos/hook-errors.log`, and `aos doctor` surfaces it. Availability over integrity is
+the explicit trade.
 
-## The Spec
+## Verification: contracts + a review that has to resolve
+
+`aos verify` executes the `contracts` from your `policy.yaml` — real commands (your test
+suite, lint, typecheck) in a real subprocess. If no contracts are configured, it says so
+and refuses to record a pass; nothing is silently green.
+
+The adversarial review is the second half, and it's the one quality claim AOS enforces
+rather than reports. A skeptic subagent tries to refute the work and records what it found
+as structured claims in the run's `review.json`:
+
+```json
+{
+  "reviewer": "skeptic subagent",
+  "scope": ["src/gate.js", "acceptance criterion 2", "npm test"],
+  "findings": [
+    {
+      "severity": "high",
+      "summary": "the gate never fires on the shell path",
+      "location": "src/gate.js:12",
+      "status": "fixed",
+      "resolution": "extended the check to Bash redirects and tee"
+    }
+  ]
+}
+```
+
+`aos run finish` **refuses** while that file is missing, malformed, or holds a finding
+still marked `open`. `aos run review` validates it on demand.
+
+What this proves: explicit claims were made, each with a disposition you can audit, and no
+run reached your review queue with a known-open finding inside it. What it does **not**
+prove: that the review was any good. Only another reviewer can judge that, and a model
+determined to phone it in still can. Escape hatches are deliberate and loud —
+`aos run finish --force` stamps the run `adversarial_review: forced` in meta and audit;
+`adversarial_review: warn` in policy downgrades the gate to a warning.
+
+## The spec
 
 ```
 ~/.aos/
 ├── registry.yaml                  # project id → repo paths
-├── fleet/                         # primary-agent hub (see The Fleet below)
-│   ├── AGENTS.md  CLAUDE.md       # the orchestrator's brain — instructions + routing
-│   └── reports/                   # crewmate session transcripts
+├── fleet/                         # optional hub for a cross-project agent (see below)
 └── projects/<id>/
     ├── context/pack.md            # the brief every agent loads
     ├── context/decisions.md       # append-only decision log
-    ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, verification contracts
+    ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, verification
     ├── learnings.md               # compounding gotchas & fixes
     ├── playbooks/                 # extracted repeatable procedures
     └── runs/<date>-<ticket>/
-        ├── ticket.md  plan.md  verification.md  outcome.md
+        ├── ticket.md  plan.md  verification.md  review.json  outcome.md
         ├── audit.jsonl            # every action, gate decision, verdict
-        └── meta.json              # state, verification, attempts, tokens, bound session id
+        └── meta.json              # state, verification, review, attempts, tokens, bound session id
 ```
 
-## The Fleet — one agent aware of every project
-
-`aos fleet` scaffolds `~/.aos/fleet/` — files that turn a session opened there
-into a **primary agent** whose memory is your entire AOS spec. It routes
-brain-dumps to the right project (routing table generated from your registry),
-dispatches crewmate sessions to do the actual work (every task tracked as an
-AOS run), and reports back only outcomes and the items that need your decision.
-Start it with any runtime that reads AGENTS.md — Claude Code, Codex CLI,
-opencode, Factory Droid — via `cd ~/.aos/fleet && <runtime>`, or the explicit
-convenience `aos fleet --launch [claude|codex|opencode|droid]`. By design,
-**AOS never executes agents by default; agents execute AOS.**
-
-Why it works: the hub is **just files** — an `AGENTS.md` any runtime can read,
-backed by CLI queries any agent can run. Cross-project recall is
-`aos find "<query>" --all`; resuming the exact session that worked a run is
-`claude --resume $(aos run session --run <id>)` (AOS records the run↔session
-binding automatically). Crewmates inherit context injection, gates, and audit
-the moment they touch a registered repo — orchestration stays in the agent
-layer, governance stays in AOS, and closing any run still ends with you — a
-command that only runs from your own interactive terminal.
+**Memory, concretely:** `SessionStart` injects the pack plus the last ~40 decision lines
+and ~30 learning lines, inside a hard character budget that protects the newest entries
+from a bloated pack. That's a tail, not retrieval — there's no ranking or embedding, and
+`aos find` is a substring search across the files. It compounds because it's append-only
+and always loaded, not because it's clever; when learnings outgrow the window, the session
+is told to compact them rather than letting old knowledge quietly stop loading.
 
 ## Skills
 
-- `/aos-onboard` — extract the repo's real context: fill the pack from the code, mine git history for decisions, author contracts
-- `/aos-ticket <ticket>` — full pipeline, ends `awaiting-review` with a PR draft in `outcome.md`
-- `/aos-verify` — contracts + adversarial skeptic subagent, anytime
-- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; closing it requires your own terminal (TTY sign-off, recorded with your OS user)
-- `/aos-learn` — distill the session into project memory
+Six markdown skills installed into `.claude/skills/`. They're instructions to the model —
+the hooks are what hold when the model deviates.
+
+- `/aos-onboard` — extract the repo's real context: fill the pack from the code, mine git
+  history for decisions, author contracts
+- `/aos-ticket <ticket>` — the six-stage pipeline (intake → plan → implement → verify →
+  package → learn), ending `awaiting-review` with a PR draft in `outcome.md`. Stages 2, 4
+  and 5 hit real gates — plan approval, the review gate, the state machine; the rest is the
+  checklist
+- `/aos-verify` — contracts + a skeptic subagent, writing `review.json`. Standalone anytime
+- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; it proposes the
+  close and the gate prompts you to sign off, in the session you're already in
+- `/aos-learn` — distil the session into project memory
 - `/aos-ask <question>` — answer from run history with file:line citations
 
 ## CLI
 
-`aos init | status | context | run start/approve/finish/state/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
+`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
+
+## The fleet hub
+
+`aos fleet` scaffolds `~/.aos/fleet/` — an `AGENTS.md` (with a routing table generated from
+your registry), a `CLAUDE.md` pointing at it, and a `reports/` directory. Open a session
+there with any runtime that reads `AGENTS.md` and it starts as a cross-project agent that
+can route work and query every project via the CLI.
+
+To be precise about what that is: **files and a `cd`**. There's no process supervision, no
+message passing, no scheduler — `aos fleet --launch` is a convenience that runs your
+runtime in that directory. The leverage comes from crewmate sessions inheriting context
+injection, gates, and audit the moment they touch a registered repo. AOS never executes
+agents by default; agents execute AOS.
 
 ## Principles
 
 - **Files over platforms** — everything is markdown/YAML/JSONL in your home dir. `git init ~/.aos` if you want history.
 - **Enforced beats remembered** — guardrails and audit live in hooks, not in prompts.
-- **Don't self-certify** — verification = deterministic contracts + an adversarial reviewer.
+- **Don't self-certify** — contracts run real commands; the adversarial review has to
+  resolve its own findings before a run can close.
+- **Say which is which** — a convention documented as a guarantee is worse than no
+  guarantee at all.
 - **Every layer works standalone** — hooks alone are worth installing; the pipeline is optional.
-- **Local-only** — the console binds 127.0.0.1; nothing leaves your machine.
+- **Local-only** — the console binds 127.0.0.1; the CLI makes zero network calls (the installer owns all outbound access, and a smoke test greps the shipped bundle to keep it true).
 
 ## Contributing
 
@@ -167,9 +241,11 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Status
 
-Published on npm and production-hardened: Node ≥ 22, a smoke suite run against both
-the source and the compiled bundle across macOS/Linux and Node 22/24 in CI, plus a
-dist-freshness gate and shellcheck. It runs entirely on your machine and works standalone.
+Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
+against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
+plus a dist-freshness gate and shellcheck. ~175 assertions, weighted toward the
+gate's adversarial bypass surface — that's where the value is, so that's where the tests
+are. There are no unit tests; every assertion is end-to-end.
 
 ## License
 
