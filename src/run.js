@@ -11,8 +11,10 @@ import {
   today,
   nowIso,
   withLock,
+  canonicalPath,
 } from './paths.js';
 import { reviewState, reviewCounts, reviewPath, reviewProblemLines, BLOCKING_REVIEW_STATES } from './review.js';
+import { gitBranch, safeUrl } from './vcs.js';
 
 export function statePath(projectId) {
   return path.join(projectDir(projectId), 'state.json');
@@ -62,7 +64,7 @@ export function mutateRunMeta(projectId, runId, mutate) {
   });
 }
 
-export function startRun(projectId, { ticket, title, planGate }) {
+export function startRun(projectId, { ticket, title, planGate, repoRoot = null, ticketUrl = null }) {
   const base = `${today()}-${slugify(ticket || title || 'run')}`;
   let runId = base;
   let i = 2;
@@ -73,7 +75,14 @@ export function startRun(projectId, { ticket, title, planGate }) {
   const meta = {
     run: runId,
     ticket: ticket || null,
+    // The source ticket, when `--ticket` was given a URL — otherwise the id is
+    // all we have and the link back to the tracker is lost.
+    ticket_url: ticketUrl || null,
     title: title || null,
+    // Captured at start, refreshed at finish: reviewing a run means reading its
+    // diff, and without the branch the console can only describe the change.
+    branch: repoRoot ? gitBranch(repoRoot) : null,
+    pr_url: null,
     state: 'in-progress',
     verification: 'pending',
     verification_attempts: 0,
@@ -386,7 +395,7 @@ function assertReviewGate(projectId, runId, force) {
   return { ...review, blocked };
 }
 
-export function finishRun(projectId, runId, state = 'awaiting-review', { force = false } = {}) {
+export function finishRun(projectId, runId, state = 'awaiting-review', { force = false, repoRoot = null } = {}) {
   const current = runMeta(projectId, runId);
   if (!current) throw new Error(`Unknown run: ${runId}`);
   // assertTransition's own error advises --force, so the flag must actually
@@ -402,8 +411,16 @@ export function finishRun(projectId, runId, state = 'awaiting-review', { force =
   const blocked = review.blocked;
   const adversarial_review = blocked ? 'forced' : review.state;
   const learnings_recorded = learningsState(projectId, runId);
+  const touched = touchedFiles(projectId, runId, repoRoot);
+  // The branch is re-read here: work often starts on main and moves to a
+  // feature branch once the plan is approved, so the start-time value is
+  // frequently not the branch the change actually lives on.
+  const branchNow = repoRoot ? gitBranch(repoRoot) : null;
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
+    m.files = touched.files;
+    m.bash_writes = touched.bash_writes || undefined;
+    if (branchNow) m.branch = branchNow;
     m.adversarial_review = adversarial_review;
     // What the gate saw, so a reviewer reading meta.json doesn't have to
     // re-derive it — and so `forced` records what was skipped.
@@ -423,6 +440,67 @@ export function finishRun(projectId, runId, state = 'awaiting-review', { force =
     learnings_recorded,
   });
   if (getActiveRun(projectId) === runId) setActiveRun(projectId, null);
+  return meta;
+}
+
+// The files a run actually touched, reconstructed from its audit trail.
+//
+// File-tool calls record an absolute path, so those are exact. Bash writes
+// record the command text, which we deliberately do NOT try to parse into
+// filenames — guessing would produce a list that looks authoritative and is
+// wrong. `bash_writes` reports how many such commands ran so the list can be
+// read as "these, plus whatever N shell commands did" rather than "these".
+export function touchedFiles(projectId, runId, repoRoot = null) {
+  const files = new Set();
+  let bashWrites = 0;
+  // Both sides canonicalized: the audit stores the path the runtime sent, and
+  // process.cwd() resolves symlinks, so on macOS (/var -> /private/var) the two
+  // spellings never prefix-match and every path stays stubbornly absolute.
+  const root = repoRoot ? canonicalPath(repoRoot) : null;
+  for (const entry of auditLines(path.join(runDir(projectId, runId), 'audit.jsonl'))) {
+    if (entry.event !== 'tool') continue;
+    if (WRITE_TOOLS.has(entry.tool)) {
+      const summary = String(entry.summary || '');
+      if (!summary || !path.isAbsolute(summary)) continue;
+      const abs = canonicalPath(summary);
+      // Run-folder and project-memory writes are bookkeeping, not the change.
+      if (abs.startsWith(canonicalPath(runDir(projectId, runId)) + path.sep)) continue;
+      if (abs.startsWith(canonicalPath(projectDir(projectId)) + path.sep)) continue;
+      files.add(root && abs.startsWith(root + path.sep) ? abs.slice(root.length + 1) : abs);
+    } else if (entry.tool === 'Bash' && /(^|\s)(>|>>|tee\b|sed\s+-\w*i)/.test(String(entry.summary || ''))) {
+      bashWrites++;
+    }
+  }
+  return { files: [...files].sort(), bash_writes: bashWrites };
+}
+
+// Attach links a run cannot discover for itself. The PR url is the one that
+// matters most — it is what turns the console from a status page into a review
+// starting point — and nothing can auto-detect it without a network call the
+// CLI refuses to make, so the pipeline records it after opening the PR.
+export function linkRun(projectId, runId, { pr, ticket, branch } = {}) {
+  const rejected = [];
+  const meta = mutateRunMeta(projectId, runId, (m) => {
+    let changed = false;
+    for (const [field, value] of [['pr_url', pr], ['ticket_url', ticket]]) {
+      if (value === undefined || value === null) continue;
+      const url = safeUrl(value);
+      if (!url) {
+        rejected.push(`${field === 'pr_url' ? '--pr' : '--ticket-url'} must be an http(s) URL`);
+        continue;
+      }
+      m[field] = url;
+      changed = true;
+    }
+    if (branch) {
+      m.branch = String(branch).slice(0, 200);
+      changed = true;
+    }
+    return changed ? undefined : false;
+  });
+  if (!meta) throw new Error(`Unknown run: ${runId}`);
+  if (rejected.length) throw new Error(rejected.join('; '));
+  appendAudit(projectId, { event: 'run-link', run: runId, pr: meta.pr_url || undefined, branch: meta.branch || undefined });
   return meta;
 }
 

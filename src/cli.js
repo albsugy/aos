@@ -7,7 +7,8 @@ import { ensureHome, projectDir } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
-import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta } from './run.js';
+import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun } from './run.js';
+import { parseTicket } from './vcs.js';
 import { reviewState, reviewPath, reviewProblemLines, reviewCounts } from './review.js';
 import { verifyContracts } from './verify.js';
 import { printStatus } from './status.js';
@@ -163,11 +164,12 @@ Usage:
   aos status                        All projects: runs, states, leverage ratio, tokens
   aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
   aos context [--project <id>]      Print the project context pack (what agents load)
-  aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
+  aos run start --ticket <id|url> [--title <t>]   Start a run (branch auto-detected; a URL is kept as the ticket link)
   aos run approve                   Approve the active run's plan (human step when plan_gate: ask)
   aos run review [--run <id>]       Validate the run's adversarial review (review.json) — what the finish gate checks
   aos run finish [--state <s>]      Finish active run (default: awaiting-review); blocked by an unsatisfied review gate (--force overrides, audited)
   aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
+  aos run link [--pr <url>] [--ticket-url <url>] [--branch <n>]  Attach the PR / ticket / branch to a run
   aos run list                      List runs for this project
   aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
@@ -236,13 +238,20 @@ async function main() {
       const p = requireProject(flags);
       if (sub === 'start') {
         const policy = loadPolicy(p.id);
-        const { runId, dir } = startRun(p.id, {
-          ticket: flags.ticket,
-          title: flags.title,
+        // `--ticket` takes an id or a tracker URL; a URL keeps the link and
+        // still yields a readable run id.
+        const t = parseTicket(strFlag(flags.ticket));
+        const { runId, dir, meta: started } = startRun(p.id, {
+          ticket: t.id,
+          title: strFlag(flags.title),
           planGate: policy.plan_gate,
+          repoRoot: process.cwd(),
+          ticketUrl: t.url || strFlag(flags['ticket-url']) || null,
         });
         console.log(`✔ Run started: ${runId}`);
         console.log(`  folder: ${dir}`);
+        if (started.branch) console.log(`  branch: ${started.branch}`);
+        if (started.ticket_url) console.log(`  ticket: ${started.ticket_url}`);
         console.log(`  plan_gate: ${policy.plan_gate}`);
         if (policy.plan_gate === 'ask') {
           console.log(`  implementation writes stay gated until the human runs: aos run approve`);
@@ -272,6 +281,7 @@ async function main() {
         try {
           meta = finishRun(p.id, active, strFlag(flags.state) || 'awaiting-review', {
             force: Boolean(flags.force),
+            repoRoot: process.cwd(),
           });
         } catch (e) {
           // The review gate's message is already formatted for the human (and
@@ -359,6 +369,35 @@ async function main() {
               `⚠ Closed with adversarial review: ${meta.adversarial_review} — recorded in meta and audit.`
             );
           }
+        } catch (e) {
+          console.error(String(e.message || e));
+          process.exitCode = 1;
+        }
+      } else if (sub === 'link') {
+        // The PR url is the one thing a run cannot discover for itself — the
+        // CLI makes no network calls — so the pipeline records it after
+        // opening the PR, and the console becomes a review starting point.
+        const target = strFlag(flags.run) || getActiveRun(p.id);
+        if (!target) {
+          console.error('No active run. Use: aos run link --run <id> --pr <url>');
+          process.exitCode = 1;
+          break;
+        }
+        if (!flags.pr && !flags['ticket-url'] && !flags.branch) {
+          console.error('Nothing to link. Pass --pr <url>, --ticket-url <url>, and/or --branch <name>.');
+          process.exitCode = 1;
+          break;
+        }
+        try {
+          const meta = linkRun(p.id, target, {
+            pr: strFlag(flags.pr),
+            ticket: strFlag(flags['ticket-url']),
+            branch: strFlag(flags.branch),
+          });
+          console.log(`✔ Linked ${target}`);
+          if (meta.branch) console.log(`  branch: ${meta.branch}`);
+          if (meta.pr_url) console.log(`  pr:     ${meta.pr_url}`);
+          if (meta.ticket_url) console.log(`  ticket: ${meta.ticket_url}`);
         } catch (e) {
           console.error(String(e.message || e));
           process.exitCode = 1;

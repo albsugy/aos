@@ -189,6 +189,11 @@
   details.mem summary:hover { color: var(--ink); }
   details.mem summary .cnt { margin-left: auto; color: var(--ink-4); font: 11px var(--mono); }
   details.mem .inner { padding: 0 18px 16px 26px; }
+  .ext { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+  .ext:hover { border-bottom-color: var(--accent); }
+  .nydiff { margin: 10px 0 2px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+  .nydiff code { font: 11px var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+  .files { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: flex-end; max-width: 70%; }
   .needsyou { margin: 18px 0 4px; padding: 16px 18px; border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--s-await) 40%, var(--rule)); background: color-mix(in srgb, var(--s-await) 7%, var(--surface)); }
   .nyhead { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink); margin-bottom: 4px; }
@@ -781,7 +786,9 @@ function renderRun(r) {
   if (m.plan_gate === 'ask') html += `<span class="tag ${m.plan_approved ? 'pass' : 'ask'}" title="${m.plan_approved ? 'Human approved the plan' : 'Implementation writes are gated until: aos run approve'}"><i></i>plan ${m.plan_approved ? 'approved' : 'awaiting approval'}</span>`;
   html += `</div>`;
   html += `<div class="rmeta">
-    ${m.ticket ? `<span>ticket <b>${esc(m.ticket)}</b></span>` : ''}
+    ${m.ticket ? `<span>ticket <b>${esc(m.ticket)}</b>${m.ticket_url ? ' ' + extLink(m.ticket_url, 'open', 'Open the source ticket') : ''}</span>` : ''}
+    ${m.branch ? `<span title="Branch the run was on when it finished">branch <b class="mono">${esc(m.branch)}</b></span>` : ''}
+    ${m.pr_url ? `<span>${extLink(m.pr_url, 'pull request', 'Open the pull request — the diff is what a review actually needs')}</span>` : ''}
     ${m.title ? `<span>${esc(m.title)}</span>` : ''}
     <span title="Verification attempts">attempts <b>${m.verification_attempts || 0}</b></span>
     <span title="Fresh input · output tokens attributed to this run${m.tokens?.cache_read ? `, plus ${fmtTok(m.tokens.cache_read)} cache reads` : ''}">tokens <b>${fmtTok(m.tokens?.input || 0)} in · ${fmtTok(m.tokens?.output || 0)} out</b></span>
@@ -818,6 +825,16 @@ function runTabs(d) {
     tabs.push(['doc:' + rel, rel.replace(/\.md$/, ''), 'y']);
   }
   return tabs;
+}
+
+/* Anything that becomes an href. meta.json is operator-written and the CLI
+   already refuses non-http(s) urls, but the console must not depend on that:
+   a `javascript:` url reaching an href here is a scripting hole in a page that
+   renders your whole audit trail. */
+function extLink(url, label, tip) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) return '';
+  return `<a class="ext" href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(tip || u)}">${esc(label)} ↗</a>`;
 }
 
 /* Everything meta.json records that the page used to drop on the floor: who
@@ -857,6 +874,13 @@ function runFacts(d) {
     rows += `<div class="kv"><span class="k" title="When the run first entered each state">timeline</span><span class="v">${
       times.map(([st, ts]) => `${esc(st)} <span title="${esc(ts)}" style="color:var(--ink-3)">${rel(ts)}</span>`).join(' → ')}</span></div>`;
   }
+  if (m.files && m.files.length) {
+    const shown = m.files.slice(0, 40);
+    rows += `<div class="kv"><span class="k" title="Reconstructed from the run's audit trail at finish">files touched</span><span class="v files">${
+      shown.map(f => `<span class="mono">${esc(f)}</span>`).join('')}${
+      m.files.length > shown.length ? `<span style="color:var(--ink-3)">+${m.files.length - shown.length} more</span>` : ''}${
+      m.bash_writes ? `<span style="color:var(--ink-3)" title="Shell commands that wrote something — their targets are not parsed, because guessing would produce a list that looks authoritative and is wrong">+ ${m.bash_writes} shell write${m.bash_writes === 1 ? '' : 's'}</span>` : ''}</span></div>`;
+  }
   if (m.session) {
     rows += `<div class="kv"><span class="k" title="The Claude Code session this run was bound to">session</span><span class="v mono">${esc(m.session)}</span></div>`;
   }
@@ -893,8 +917,13 @@ function runNeedsYou(d) {
     } else if (m.learnings_recorded === 'absent') {
       warn = `<div class="nywarn">No learnings were recorded for this run yet.</div>`;
     }
+    const diff = m.pr_url
+      ? `<div class="nydiff">Review the change: ${extLink(m.pr_url, 'pull request', 'Open the pull request')}${m.branch ? ` <span style="color:var(--ink-3)">on <span class="mono">${esc(m.branch)}</span></span>` : ''}</div>`
+      : m.branch
+        ? `<div class="nydiff">No PR linked. The change is on <span class="mono">${esc(m.branch)}</span> — attach one with <code>aos run link --pr &lt;url&gt; --run ${esc(run)}</code>.</div>`
+        : '';
     return `<div class="needsyou"><div class="nyhead"><span class="nytag">Waiting on you</span>
-      <b>Sign off to close this run — or send it back.</b></div>${warn}
+      <b>Sign off to close this run — or send it back.</b></div>${warn}${diff}
       ${cmdRow('Have the agent review it and propose the close', `/aos-approve ${run}`,
         'Re-checks the diff against the acceptance criteria and the review findings, recommends a disposition, then runs the close. You approve the gate prompt — <b>that prompt is the sign-off</b>.')}
       ${cmdRow('Or close it yourself', `aos run state done --run ${run}`,

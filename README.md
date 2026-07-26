@@ -178,6 +178,7 @@ determined to phone it in still can. Escape hatches are deliberate and loud —
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
         ├── audit.jsonl            # every action, gate decision, verdict
+        │                          # meta also records branch, PR/ticket links, files touched
         └── meta.json              # state, verification, review, attempts, tokens, bound session id
 ```
 
@@ -207,7 +208,7 @@ the hooks are what hold when the model deviates.
 
 ## CLI
 
-`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
+`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
 
 ## The fleet hub
 

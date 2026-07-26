@@ -158,7 +158,25 @@ The `/aos-ticket` skill moves it through six stages, each leaving a file behind:
 6. **Learn** — distil durable notes back into `learnings.md` / `decisions.md` / `playbooks/`.
 
 A run carries a `meta.json` with its state, verification verdict, attempts, token
-usage, and the adversarial review's state and finding counts. States form a **real state
+usage, the adversarial review's state and finding counts, and its **provenance**:
+the `branch` (read straight off `.git/HEAD` at start and re-read at finish, since
+work often begins on main and moves to a feature branch), `ticket_url` when
+`--ticket` was given a tracker URL, `pr_url` once linked, and `files` —
+the paths the run actually touched, reconstructed from its own audit trail
+rather than from what the run claimed. Shell writes are counted (`bash_writes`)
+but never parsed into filenames: guessing would produce a list that looks
+authoritative and is wrong.
+
+Nothing can auto-detect a PR without a network call the CLI refuses to make, so
+the pipeline records it:
+
+```bash
+aos run link --pr https://github.com/acme/app/pull/91
+aos run link --run 2026-07-26-lin-482 --ticket-url https://linear.app/... --branch feat/limits
+```
+
+Only `http(s)` URLs are stored — a `javascript:` URL in `meta.json` would become
+a click target in the console, so it is refused at capture and again at render. States form a **real state
 machine**, not free text: `in-progress ↔ blocked`, `in-progress → awaiting-review`
 (via `aos run finish`), `awaiting-review → done | shipped | in-progress` (reopen),
 `done → shipped` (and reopen paths back); `shipped` is terminal. Illegal jumps —
@@ -513,11 +531,12 @@ aos init [--name <name>] [--hooks-only]   Register this repo as a project (spec 
 aos status                        All projects: runs, states, leverage ratio, tokens, dry-run warnings
 aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
 aos context [--project <id>]      Print the project context that agents load
-aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
+aos run start --ticket <id|url> [--title <t>]   Start a run (branch auto-detected; a URL is kept as the ticket link)
 aos run approve                   Approve the active run's plan (when plan_gate: ask)
 aos run review [--run <id>]       Validate the run's adversarial review (what the finish gate checks)
 aos run finish [--state <s>]      Finish the active run (default: awaiting-review); blocked by an unsatisfied review gate
 aos run state <state> [--run <id>] [--force]  Set run state (validated state machine; --force overrides, audited). done/shipped are gated: approving the prompt IS the sign-off (see /aos-approve)
+aos run link [--pr <url>] [--ticket-url <url>] [--branch <name>]  Attach the PR / ticket / branch to a run
 aos run list                      List runs for this project
 aos run session [--run <id>]      Print the session id bound to a run — resume its crewmate with: claude --resume $(aos run session --run <id>)
 aos verify                        Run the verification contracts from policy.yaml

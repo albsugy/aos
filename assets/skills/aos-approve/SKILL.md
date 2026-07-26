@@ -30,8 +30,11 @@ their dispositions), `verification.md` (contract verdicts + narrative), and
 `review.md` + `reviews/*.md` if a reviewer fleet ran. Then verify the claims
 against reality — do not take outcome.md's word for it:
 
-1. **Diff**: if the run names a branch/PR, read the actual diff. Does it match
-   outcome.md's Changes section? Anything touched that outcome.md omits?
+1. **Diff**: read the actual diff — `meta.json` records the `branch` and, when
+   the pipeline linked one, `pr_url`. Does it match outcome.md's Changes
+   section? Cross-check against `files` in meta.json, which is reconstructed
+   from the audit trail rather than from what the run claimed. Anything touched
+   that outcome.md omits is the interesting part.
 2. **Acceptance criteria**: spot-check each criterion against the code/diff,
    not against the outcome summary. Cite file:line for what you checked.
 3. **Contracts**: `aos verify` was recorded — if the working tree has moved

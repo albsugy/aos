@@ -29,6 +29,10 @@ files live in the run folder printed by `aos run start`.
 5. Create a branch named after the ticket. Implement per the plan. The AOS hooks audit your
    actions and gate risky commands automatically — if a gate asks for approval, that is
    expected behavior, not an error.
+   - The run recorded the branch it started on. If you branched after starting, that is
+     fine — `aos run finish` re-reads it. If you push the branch and open a PR at any
+     point, record it: `aos run link --pr <url>`. Nothing can auto-detect that (the CLI
+     makes no network calls), and without it a reviewer has a summary but no diff.
 
 ## 4. Verify — do not self-certify
 
@@ -55,8 +59,9 @@ files live in the run folder printed by `aos run start`.
     - **Risks & follow-ups**
     - **How to test** — exact commands/steps
     - **PR draft** — title + body ready to paste
-11. Run: `aos run finish` (state becomes `awaiting-review`). If the review gate refuses, it
-    prints exactly what is missing — fix that, don't reach for `--force`.
+11. If a PR exists and you have not linked it yet, do it now: `aos run link --pr <url>`.
+    Then run `aos run finish` (state becomes `awaiting-review`). If the review gate refuses,
+    it prints exactly what is missing — fix that, don't reach for `--force`.
 
 ## 6. Close it out — here, not in a dashboard
 

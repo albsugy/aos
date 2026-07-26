@@ -16,6 +16,21 @@ template, then `aos doctor`.
 
 ### New
 
+- **Runs record where the change lives.** Reviewing a run means reading its
+  diff, and a run had no idea what branch it was on. `run start` now reads the
+  branch straight off `.git/HEAD` (no subprocess — the CLI shells out for
+  verification contracts and nothing else) and `run finish` re-reads it, since
+  work often starts on main and moves to a feature branch once the plan is
+  approved. `--ticket` accepts a tracker URL and keeps the link while still
+  deriving a readable run id. **`aos run link`** attaches the PR, ticket URL or
+  branch after the fact — a PR cannot be auto-detected without a network call.
+  Only http(s) URLs are accepted, at capture and again at render.
+- **Runs record what they touched.** `meta.files` is reconstructed from the
+  run's own audit trail at finish — repo-relative, excluding the run's own
+  bookkeeping writes — so "what did this actually change" no longer means
+  reading audit.jsonl. Shell writes are counted, never parsed into filenames.
+
+
 - **`aos cost`** — what the agent actually cost, at API list prices, from the
   per-model buckets AOS already records. Grouped by project (default), `run`,
   `model`, or `contract`; windowed with `--since 7d|24h|2w|<date>`.

@@ -740,6 +740,38 @@ STOP_OFF=$(printf '%s' '{"cwd":"'"$SIGN_REPO"'","session_id":"sU"}' | $AOS hook 
 echo "$STOP_OFF" | grep -q "sitting at awaiting-review" && fail "review_capture false still nudged ($RUNU)" \
   || pass "stop: review_capture false disables the nudge"
 
+# --- run provenance: branch, ticket link, PR link, files touched ---
+# Reviewing a run means reading its diff. Without a branch and a PR the console
+# can only describe the change, so the branch is read off .git/HEAD at start
+# (no subprocess — the CLI shells out for contracts and nothing else).
+PROV_REPO="$WORK/prov-repo"; mkdir -p "$PROV_REPO/src"
+(cd "$PROV_REPO" && git init -q -b main && git checkout -q -b feat/limits && $AOS init --name prov >/dev/null)
+(cd "$PROV_REPO" && $AOS run start --ticket "https://linear.app/acme/issue/LIN-482" --title "Harden upload" >/dev/null)
+PROV_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/prov/state.json")
+PROV_DIR="$AOS_HOME/projects/prov/runs/$PROV_RUN"
+prov_meta() { node -e 'const m=require(process.argv[1]);console.log(m[process.argv[2]])' "$PROV_DIR/meta.json" "$1"; }
+[ "$(prov_meta branch)" = "feat/limits" ] && pass "provenance: branch read from .git/HEAD at run start" || fail "branch not captured ($(prov_meta branch))"
+[ "$(prov_meta ticket)" = "LIN-482" ] && pass "provenance: a ticket URL still yields a readable run id" || fail "ticket id not derived"
+case "$PROV_RUN" in *lin-482*) pass "provenance: run folder named from the ticket, not the URL";; *) fail "run id from URL: $PROV_RUN";; esac
+[ "$(prov_meta ticket_url)" = "https://linear.app/acme/issue/LIN-482" ] && pass "provenance: the source ticket link is kept" || fail "ticket_url lost"
+# a PR cannot be auto-detected (no network calls), so it is linked explicitly
+(cd "$PROV_REPO" && $AOS run link --pr "https://github.com/acme/app/pull/91" >/dev/null)
+[ "$(prov_meta pr_url)" = "https://github.com/acme/app/pull/91" ] && pass "provenance: PR link attached" || fail "pr_url not stored"
+# a url that would become a click target in the console must never be stored
+(cd "$PROV_REPO" && $AOS run link --pr "javascript:alert(1)" >/dev/null 2>&1) && fail "javascript: URL accepted" || pass "provenance: non-http(s) URLs refused"
+[ "$(prov_meta pr_url)" = "https://github.com/acme/app/pull/91" ] && pass "provenance: a refused link leaves the old one intact" || fail "rejected url clobbered pr_url"
+# files touched are reconstructed from the audit, repo-relative, excluding the
+# run's own bookkeeping writes
+printf '%s' '{"cwd":"'"$PROV_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-482"},"session_id":"sP"}' | $AOS hook post-tool
+printf '%s' '{"cwd":"'"$PROV_REPO"'","tool_name":"Write","tool_input":{"file_path":"'"$PROV_REPO"'/src/upload.js"},"session_id":"sP"}' | $AOS hook post-tool
+printf '%s' '{"cwd":"'"$PROV_REPO"'","tool_name":"Edit","tool_input":{"file_path":"'"$PROV_DIR"'/plan.md"},"session_id":"sP"}' | $AOS hook post-tool
+printf '%s' '{"cwd":"'"$PROV_REPO"'","tool_name":"Bash","tool_input":{"command":"echo x > src/other.js"},"session_id":"sP"}' | $AOS hook post-tool
+review_active prov
+(cd "$PROV_REPO" && $AOS run finish >/dev/null)
+node -e 'const m=require(process.argv[1]);process.exit(JSON.stringify(m.files)===JSON.stringify(["src/upload.js"])?0:1)' "$PROV_DIR/meta.json" \
+  && pass "provenance: files touched are repo-relative and exclude run bookkeeping" || fail "files wrong: $(prov_meta files)"
+[ "$(prov_meta bash_writes)" = "1" ] && pass "provenance: shell writes are counted, not guessed at" || fail "bash_writes wrong ($(prov_meta bash_writes))"
+
 # --- scope gate: the plan declares its files, drift asks ---
 # Self-activating: a plan with no Files section gates nothing, so no existing
 # project changes behaviour. Declaring the section is the opt-in.
