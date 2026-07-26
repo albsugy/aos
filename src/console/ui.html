@@ -189,6 +189,23 @@
   details.mem summary:hover { color: var(--ink); }
   details.mem summary .cnt { margin-left: auto; color: var(--ink-4); font: 11px var(--mono); }
   details.mem .inner { padding: 0 18px 16px 26px; }
+  .needsyou { margin: 18px 0 4px; padding: 16px 18px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--s-await) 40%, var(--rule)); background: color-mix(in srgb, var(--s-await) 7%, var(--surface)); }
+  .nyhead { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink); margin-bottom: 4px; }
+  .nytag { font: 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--s-await);
+    border: 1px solid color-mix(in srgb, var(--s-await) 40%, transparent); padding: 4px 7px; border-radius: 5px; white-space: nowrap; }
+  .nywarn { margin: 8px 0 2px; font-size: 12.5px; color: var(--s-block); line-height: 1.5; }
+  .nywarn code { font: 11.5px var(--mono); }
+  .cmd { margin-top: 14px; }
+  .cmdl { font: 11px var(--sans); letter-spacing: .03em; color: var(--ink-3); margin-bottom: 5px; }
+  .cmdb { display: flex; align-items: center; gap: 8px; }
+  .cmdb code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 12.5px var(--mono); color: var(--ink);
+    background: var(--inset); border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px; }
+  .cmdb button { flex: none; font: 11px var(--sans); color: var(--ink-3); background: var(--surface-2);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  .cmdb button:hover { color: var(--ink); border-color: var(--rule-2); }
+  .cmdn { margin-top: 5px; font-size: 11.5px; color: var(--ink-3); line-height: 1.55; }
+  .cmdn code { font: 11px var(--mono); background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
   .alarm { display: flex; flex-direction: column; gap: 4px; margin: 0 0 18px; padding: 12px 16px; border-radius: 10px;
     border: 1px solid color-mix(in srgb, var(--s-block) 45%, var(--rule)); background: color-mix(in srgb, var(--s-block) 9%, var(--surface));
     color: var(--s-block); font-size: 12.5px; line-height: 1.5; }
@@ -775,8 +792,10 @@ function renderRun(r) {
     ${dir ? `<span class="path" title="${esc(dir)}"><span class="p">&lrm;${esc(d.dir_display || dir)}</span><button data-path="${esc(dir)}" onclick="navigator.clipboard.writeText(this.dataset.path);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)" title="Copy full run folder path">copy</button></span>` : ''}
   </div>`;
   html += stageStrip(d);
+  html += runNeedsYou(d);
 
   html += `<div id="tabzone">` + renderTabZone(d) + `</div>`;
+  html += runFacts(d);
   return html;
 }
 
@@ -799,6 +818,107 @@ function runTabs(d) {
     tabs.push(['doc:' + rel, rel.replace(/\.md$/, ''), 'y']);
   }
   return tabs;
+}
+
+/* Everything meta.json records that the page used to drop on the floor: who
+   signed off and by what route, which contracts ran, when each state was
+   entered, and the session the run is bound to. For a tool whose pitch is an
+   audit trail, "recorded but never shown" is barely better than not recorded. */
+const VIA_TIP = {
+  tty: 'Typed in an interactive terminal under this OS user',
+  'gate-prompt': 'The gate asked and a human approved the permission prompt',
+  'dry-run': 'Gates were in dry run — nobody was actually asked',
+  'headless-env': 'AOS_ALLOW_HEADLESS_APPROVE=1 — a CI override, not a person',
+  prompt: 'Unverified',
+};
+function signoff(label, by) {
+  if (!by) return '';
+  return `<div class="kv"><span class="k">${esc(label)}</span><span class="v">${esc(by.user || 'unknown')}
+    · <span title="${esc(VIA_TIP[by.via] || '')}">${esc(by.via || '?')}</span>
+    ${by.ts ? ` · <span title="${esc(by.ts)}">${rel(by.ts)}</span>` : ''}</span></div>`;
+}
+
+const RUN_ORDER = ['in-progress', 'blocked', 'awaiting-review', 'done', 'shipped'];
+function runFacts(d) {
+  const m = d.meta;
+  let rows = '';
+  rows += signoff('plan approved by', m.approved_by);
+  rows += signoff('closed by', m.closed_by);
+  if (m.learnings_recorded) {
+    rows += `<div class="kv"><span class="k" title="Whether learnings.md or decisions.md was written while this run was open">learnings</span><span class="v">${
+      m.learnings_recorded === 'present' ? 'recorded' : '<span style="color:var(--s-await)">none recorded</span>'}</span></div>`;
+  }
+  if ((m.contracts || []).length) {
+    rows += `<div class="kv"><span class="k" title="Latest verification attempt">contracts</span><span class="v">${
+      m.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''} <span style="color:var(--${c.pass ? 's-good' : 's-block'})">${c.pass ? '✓' : '✗'}</span>`).join(' · ')}</span></div>`;
+  }
+  const times = Object.entries(m.state_times || {}).sort((a, b) => RUN_ORDER.indexOf(a[0]) - RUN_ORDER.indexOf(b[0]));
+  if (times.length) {
+    rows += `<div class="kv"><span class="k" title="When the run first entered each state">timeline</span><span class="v">${
+      times.map(([st, ts]) => `${esc(st)} <span title="${esc(ts)}" style="color:var(--ink-3)">${rel(ts)}</span>`).join(' → ')}</span></div>`;
+  }
+  if (m.session) {
+    rows += `<div class="kv"><span class="k" title="The Claude Code session this run was bound to">session</span><span class="v mono">${esc(m.session)}</span></div>`;
+  }
+  if (!rows) return '';
+  return `<section><h2 title="Recorded in the run's meta.json">Record</h2><div class="card">${rows}</div></section>`;
+}
+
+/* ── what is actually waiting on the human, and how to do it ──────────
+   A run parked at awaiting-review told the operator its state and nothing
+   else: not what decision was owed, not how to take it, not how to get the
+   agent to do the legwork. The console is read-only by design (no auth, and
+   it must never act on your behalf), but read-only is not a reason to be
+   unhelpful — it can hand over the exact commands. */
+function cmdRow(label, command, note) {
+  return `<div class="cmd"><div class="cmdl">${esc(label)}</div>
+    <div class="cmdb"><code>${esc(command)}</code>
+    <button data-cmd="${esc(command)}" onclick="navigator.clipboard.writeText(this.dataset.cmd);this.textContent='copied';setTimeout(()=>this.textContent='copy',1200)">copy</button></div>
+    ${note ? `<div class="cmdn">${note}</div>` : ''}</div>`;
+}
+
+function runNeedsYou(d) {
+  const m = d.meta, rv = d.review || {};
+  const run = m.run;
+  const resume = m.session ? cmdRow('Resume the session that did the work',
+    `claude --resume ${m.session}`,
+    'Picks up in the session bound to this run, with its whole history in context.') : '';
+
+  if (m.state === 'awaiting-review') {
+    let warn = '';
+    if (m.adversarial_review === 'forced') {
+      warn = `<div class="nywarn">This run finished <b>past its own review gate</b> (<code>--force</code>). Find out what was skipped before you sign anything off.</div>`;
+    } else if (REVIEW_MISSING.has(m.adversarial_review)) {
+      warn = `<div class="nywarn">Its adversarial review is <b>${esc(m.adversarial_review)}</b> — see the Review tab before deciding.</div>`;
+    } else if (m.learnings_recorded === 'absent') {
+      warn = `<div class="nywarn">No learnings were recorded for this run yet.</div>`;
+    }
+    return `<div class="needsyou"><div class="nyhead"><span class="nytag">Waiting on you</span>
+      <b>Sign off to close this run — or send it back.</b></div>${warn}
+      ${cmdRow('Have the agent review it and propose the close', `/aos-approve ${run}`,
+        'Re-checks the diff against the acceptance criteria and the review findings, recommends a disposition, then runs the close. You approve the gate prompt — <b>that prompt is the sign-off</b>.')}
+      ${cmdRow('Or close it yourself', `aos run state done --run ${run}`,
+        'Use <code>shipped</code> instead if the work is merged <i>and</i> released. To send it back: <code>aos run state in-progress --run ' + esc(run) + '</code>.')}
+      ${resume}</div>`;
+  }
+
+  if (m.state === 'blocked') {
+    return `<div class="needsyou"><div class="nyhead"><span class="nytag">Waiting on you</span>
+      <b>This run is blocked and will not move on its own.</b></div>
+      <div class="nywarn">Whoever parked it should have said why — check the Outcome and Audit tabs.</div>
+      ${cmdRow('Put it back in progress', `aos run state in-progress --run ${run}`, '')}
+      ${resume}</div>`;
+  }
+
+  if (m.state === 'in-progress' && m.plan_gate === 'ask' && !m.plan_approved) {
+    return `<div class="needsyou"><div class="nyhead"><span class="nytag">Waiting on you</span>
+      <b>The plan needs your approval before implementation writes are allowed.</b></div>
+      <div class="nywarn">Read the Plan tab first — implementation file writes and write-intent Bash stay gated until this is approved.</div>
+      ${cmdRow('The agent runs this; you approve the prompt', 'aos run approve',
+        'Run it from the session working this ticket. The permission prompt <b>is</b> the approval.')}
+      ${resume}</div>`;
+  }
+  return '';
 }
 
 /* review.json as the gate sees it. Severity and disposition are the two things

@@ -47,6 +47,7 @@ Both matter. Only one of them survives an agent that doesn't feel like cooperati
 | **Sign-off** — closing a run needs a human's approval at the gate prompt (or a real TTY), recorded with your OS user and which route it came through | Whether a playbook gets proposed |
 | **Working-tree guard** — `git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore`, `git rm -r`, `git branch -D` are parsed structurally and gated; `git checkout <branch>`, `-b`, `--staged` restore and `--soft` reset stay silent | |
 | **Scope gate** — when `plan.md` declares a `## Files` list, writes outside it ask. Self-activating: no declaration, no gating | Whether the declared file list was honest in the first place |
+| **Forbidden holds in every permission mode** — Claude Code honours a hook's `deny` even under `--dangerously-skip-permissions`. The **gated** tier is conditional: modes that auto-approve (`acceptEdits`, `auto`, `bypassPermissions`) or auto-deny (`dontAsk`) mean an `ask` may never reach you, so AOS records the mode on every decision and refuses to accept a sign-off nobody gave | Whether you notice the audit line saying so |
 | **Audit** — every tool call, gate decision, and verdict appended to the run's `audit.jsonl`, automatically | |
 | **State machine** — `in-progress → shipped` (skipping review) is rejected; `--force` is audited | |
 | **Token accounting** — per run and per session, cache reads split from fresh input | |

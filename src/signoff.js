@@ -26,12 +26,16 @@ function ticketPath(projectId) {
 }
 
 // Called by the PreToolUse gate, at the moment it decides to ask.
-export function recordSignoffTicket(projectId, { action, command, session }) {
+export function recordSignoffTicket(projectId, { action, command, session, mode }) {
   try {
     writeJson(ticketPath(projectId), {
       action,
       command: String(command || '').slice(0, 300),
       session: session || null,
+      // The permission mode the prompt was shown under — the caller only mints
+      // a ticket in modes where a prompt actually reaches a human, and this
+      // records which one so the audit can be checked after the fact.
+      mode: mode || null,
       ts: nowIso(),
     });
   } catch {

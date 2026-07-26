@@ -697,6 +697,40 @@ close_run "done" >/dev/null 2>&1 && fail "consumed ticket reused" || pass "close
 printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sT"}' | $AOS hook pre-tool >/dev/null
 close_run "done" >/dev/null 2>&1 && fail "plan-approve ticket closed a run" || pass "close: tickets are bound to their action"
 
+# --- permission modes: an `ask` that reaches nobody is not a sign-off ---
+# Claude Code fires PreToolUse in EVERY permission mode and honours `deny` even
+# under --dangerously-skip-permissions, but an `ask` only reaches a human in the
+# prompting modes. Minting a sign-off ticket in bypassPermissions/acceptEdits/
+# dontAsk would let an agent close its own run with nobody in the loop.
+mode_gate() {
+  printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state done --run '"$RUNS"'"},"session_id":"sT","permission_mode":"'"$1"'"}' | $AOS hook pre-tool
+}
+for MODE in bypassPermissions acceptEdits dontAsk auto; do
+  rm -f "$AOS_HOME/projects/signoff/signoff.json"
+  mode_gate "$MODE" | grep -q '"permissionDecision":"ask"' || fail "gate stopped asking in $MODE"
+  [ -f "$AOS_HOME/projects/signoff/signoff.json" ] && fail "sign-off ticket minted in $MODE (no human sees that prompt)"
+done
+pass "modes: the gate still asks, but mints no sign-off ticket where nobody is prompted"
+for MODE in default plan; do
+  rm -f "$AOS_HOME/projects/signoff/signoff.json"
+  mode_gate "$MODE" >/dev/null
+  [ -f "$AOS_HOME/projects/signoff/signoff.json" ] || fail "no sign-off ticket in $MODE (a human IS prompted there)"
+done
+pass "modes: prompting modes still mint the ticket"
+# an older Claude Code sends no permission_mode — assume the interactive default
+rm -f "$AOS_HOME/projects/signoff/signoff.json"
+printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state done --run '"$RUNS"'"},"session_id":"sT"}' | $AOS hook pre-tool >/dev/null
+[ -f "$AOS_HOME/projects/signoff/signoff.json" ] && pass "modes: a payload without permission_mode still works" || fail "missing permission_mode broke the ticket"
+# and the mode is recorded on the gate decision, so an auditor can tell later
+rm -f "$AOS_HOME/projects/signoff/signoff.json"
+mode_gate bypassPermissions >/dev/null
+grep -rq '"mode":"bypassPermissions"' "$AOS_HOME/projects/signoff/" \
+  && pass "modes: the permission mode is recorded on the gate decision" || fail "permission mode not audited"
+# a forbidden command is denied in every mode — Claude Code honours deny even
+# under --dangerously-skip-permissions, so this is the tier that always holds
+printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"session_id":"sT","permission_mode":"bypassPermissions"}' | $AOS hook pre-tool \
+  | grep -q '"permissionDecision":"deny"' && pass "modes: forbidden stays denied in bypassPermissions" || fail "deny weakened in bypass mode"
+
 # review_capture: false opts out (last — it replaces the policy wholesale)
 RUNU=$(sign_start "LIN-U" sU)
 review_active signoff

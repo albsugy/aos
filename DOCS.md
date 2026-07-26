@@ -192,6 +192,34 @@ same deliberately-adversarial model the rest of the hook layer does not cover,
 and an agent willing to forge sign-off would just pass `--force`. With no route
 at all, the close refuses and names all three ways to authorize it.
 
+**Permission modes — what survives `--dangerously-skip-permissions`.** Claude
+Code fires `PreToolUse` in *every* permission mode, and honours a hook's `deny`
+**even in `bypassPermissions`**. So AOS's forbidden tier — force-push, recursive
+deletes of root/home — holds no matter how the session was started. That is the
+strongest claim in this document and it is not conditional.
+
+The `ask` tier is conditional, and the docs say so plainly. An `ask` only
+reaches a human in a mode that actually prompts (`default`, `plan`). In
+`acceptEdits` and `auto`, whole categories of tool call are auto-approved
+before anyone sees them; `dontAsk` auto-denies; `bypassPermissions` skips the
+checks. AOS cannot make a prompt appear where the runtime has decided not to
+show one, so in those modes treat the gated tier as **advisory** — the decision
+is still recorded, but nobody was asked.
+
+Two consequences AOS handles for you:
+
+- Every gate line in `audit.jsonl` records the `mode` it was decided under. An
+  `ask` logged in `bypassPermissions` did not necessarily reach anybody, and an
+  auditor reading the trail later has no other way to tell.
+- **No sign-off ticket is minted outside a prompting mode.** The ticket's whole
+  claim is "the gate asked, then the command ran, so somebody approved" — which
+  is false when the mode auto-approves. `aos run state done` therefore refuses
+  in those modes and points at the terminal, rather than accepting a sign-off
+  nobody gave.
+
+If you run agents in `bypassPermissions`, pair AOS with OS-level isolation. The
+deny tier is a backstop, not a sandbox.
+
 **Gates.** Policy (`policy.yaml`) sorts actions into tiers. **Forbidden** actions
 are denied; **gated** actions require your approval; everything else is
 auto-allowed (your normal Claude Code permissions still apply on top). Gates

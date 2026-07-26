@@ -36,6 +36,26 @@ const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close']);
 // purpose — it is parked, not done, and can still spend more tokens.
 const FINISHED_STATES = new Set(['awaiting-review', 'done', 'shipped']);
 
+// Permission modes in which an `ask` is guaranteed to reach a human.
+//
+// This matters because the sign-off ticket's whole claim is "the gate asked and
+// then the command ran, which cannot happen unless somebody approved the
+// prompt". That holds in `default` and `plan`. It does not hold in modes that
+// auto-approve or auto-deny — `bypassPermissions` and `dontAsk` most obviously,
+// and `acceptEdits`/`auto` auto-approve categories of tool call outright. In
+// those, minting a ticket would let an agent close its own run with no human
+// anywhere in the loop, which is the one thing the sign-off exists to prevent.
+//
+// Claude Code sends `permission_mode` on every hook payload. When it is absent
+// (older versions), assume the interactive default rather than refusing to work
+// — the TTY and CI routes still exist as fallbacks either way.
+const PROMPTING_MODES = new Set(['default', 'plan']);
+
+function promptReachesHuman(input) {
+  const mode = input.permission_mode;
+  return !mode || PROMPTING_MODES.has(mode);
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -231,6 +251,7 @@ export async function hookPreTool() {
       tool: input.tool_name,
       command: target,
       session: input.session_id || null,
+      mode: input.permission_mode || undefined,
     });
     return;
   }
@@ -243,11 +264,12 @@ export async function hookPreTool() {
   // Ordering is load-bearing: this MUST stay below the dry_run return. In dry
   // run no prompt is ever shown, so a ticket minted here would be sign-off
   // nobody gave.
-  if (verdict.decision === 'ask' && SIGNOFF_ACTIONS.has(verdict.action)) {
+  if (verdict.decision === 'ask' && SIGNOFF_ACTIONS.has(verdict.action) && promptReachesHuman(input)) {
     recordSignoffTicket(project.id, {
       action: verdict.action,
       command: target,
       session: input.session_id || null,
+      mode: input.permission_mode || null,
     });
   }
 
@@ -258,6 +280,10 @@ export async function hookPreTool() {
     tool: input.tool_name,
     command: target,
     session: input.session_id || null,
+    // Which permission mode the decision was taken under. An `ask` recorded in
+    // bypassPermissions did not necessarily reach anybody, and an auditor
+    // reading this trail later has no other way to know that.
+    mode: input.permission_mode || undefined,
   });
 
   process.stdout.write(

@@ -58,6 +58,27 @@ template, then `aos doctor`.
 
 ### Fixed
 
+- **Permission modes are accounted for.** Claude Code fires `PreToolUse` in every
+  mode and honours `deny` even under `--dangerously-skip-permissions`, so the
+  forbidden tier always holds — but an `ask` only reaches a human in a
+  prompting mode. Every gate decision now records the `permission_mode` it was
+  taken under, and **no sign-off ticket is minted** in `bypassPermissions`,
+  `acceptEdits`, `auto` or `dontAsk`: the ticket claims a human approved a
+  prompt, which is untrue where the mode auto-approves. Closing a run in those
+  modes falls back to the terminal route.
+- **The run page says what is waiting on you and how to do it.** A run parked at
+  `awaiting-review` reported its state and nothing else — not the decision owed,
+  not how to take it, not how to get the agent to do the legwork. It now leads
+  with the action, copyable: `/aos-approve <run>` to have the agent re-check and
+  propose the close, the direct `aos run state` command, and
+  `claude --resume <session>` to reopen the session bound to the run. Blocked
+  runs and unapproved plans get the same treatment.
+- **The run page shows the rest of the record.** Sign-off identity and route
+  (`closed_by` / `approved_by`), per-run contract results, the state timeline,
+  the bound session, and whether learnings were captured were all recorded in
+  meta.json and none of them were displayed.
+
+
 - **Session token accounting was double-counting, by a lot.** Claude Code fires
   SessionEnd more than once for the same session — resume, `/clear` and logout
   each end a session whose transcript keeps growing — and every firing appended
