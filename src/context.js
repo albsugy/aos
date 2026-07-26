@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { projectDir, readIfExists, tailLines } from './paths.js';
 import { listRuns } from './run.js';
+import { readSessionLines } from './sessions.js';
 import { loadPolicy } from './policy.js';
 
 const MAX_CONTEXT_CHARS = 9000;
@@ -8,18 +9,13 @@ const MAX_CONTEXT_CHARS = 9000;
 // The most recent session that owed learnings, unless a later session already
 // wrote memory (that addresses the debt). Light sessions in between neither
 // clear nor create debt — it persists until someone actually writes.
-function owedSessionEntry(dir) {
-  const raw = readIfExists(path.join(dir, 'sessions.jsonl'));
-  if (!raw) return null;
-  const lines = raw.trim().split('\n').slice(-20);
+// Reads the raw event sequence, not the deduplicated totals: the question
+// here is "what happened most recently", and each SessionEnd is its own event.
+function owedSessionEntry(projectId) {
+  const lines = readSessionLines(projectId).slice(-20);
   for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const entry = JSON.parse(lines[i]);
-      if (entry.memory_write) return null;
-      if (entry.learnings_owed) return entry;
-    } catch {
-      // skip malformed lines
-    }
+    if (lines[i].memory_write) return null;
+    if (lines[i].learnings_owed) return lines[i];
   }
   return null;
 }
@@ -66,7 +62,7 @@ export function buildContext(projectId, projectName) {
     );
   }
   // Learnings debt from a previous session (SessionEnd marker).
-  const lastSession = owedSessionEntry(dir);
+  const lastSession = owedSessionEntry(projectId);
   if (lastSession) {
     head.push(
       `⚠ A previous session (${lastSession.session || 'unknown'}, ${lastSession.ts || ''}) did ` +

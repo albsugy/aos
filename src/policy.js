@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { aosHome, projectDir, readIfExists } from './paths.js';
@@ -8,7 +9,23 @@ export const DEFAULT_POLICY = {
   // Learnings capture: SessionEnd debt marker + Stop-hook extraction nudge.
   // `false` turns both off; the `run finish` warning stays (it's advice, not a gate).
   learnings_capture: true,
+  // Review capture: the Stop hook asks a session whose run is at
+  // awaiting-review to present it and propose the close, so the sign-off
+  // happens in-session instead of waiting on a dashboard visit.
+  review_capture: true,
+  // Scope gate: when a run's plan.md declares a Files section, writes outside
+  // it ask. Self-activating — no declaration, no gating — so `false` is only
+  // needed to switch it off for a project that does declare scope.
+  scope_gate: true,
+  // Dry run: record every gate decision to the audit and let the tool through
+  // anyway, so a policy can be tuned against a real workflow before it starts
+  // enforcing. `aos doctor` fails while this is on — a forgotten dry_run is a
+  // project that believes it is guarded and is not.
+  dry_run: false,
   tiers: {
+    // Built-in structural guard over git subcommands that destroy uncommitted
+    // work (see destructiveGit). Gated at `ask`; false disables it.
+    protect_worktree: true,
     forbidden: [
       // --force-with-lease falls through to the gated `git push` rule instead.
       // (?<=[\s'"]) also catches quoted flags; -\w*f catches combined ones (-uf).
@@ -39,7 +56,7 @@ export const DEFAULT_POLICY = {
       // Same pattern for closing a review: an agent may review the run and
       // PROPOSE done/shipped, but the permission prompt is the human sign-off.
       {
-        pattern: '\\baos(\\.mjs)?\\s+run\\s+state\\s+(done|shipped)\\b',
+        pattern: '\\baos(\\.mjs)?\\s+run\\s+state\\b[^|;&]*\\b(done|shipped)\\b',
         action: 'review-close',
         reason: 'Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off',
       },
@@ -97,7 +114,30 @@ const DANGEROUS_RM_TARGETS = new Set([
   '~', '~/', '~/*',
   '$HOME', '$HOME/', '$HOME/*', '${HOME}', '${HOME}/', '${HOME}/*',
 ]);
-const WRAPPER_BINS = /^(sudo|command|env|nohup|time|xargs)$/i;
+// busybox/toybox are transparent the same way sudo is: the applet name is the
+// next token, so `busybox sed -i` must resolve to sed.
+const WRAPPER_BINS = /^(sudo|command|env|nohup|time|xargs|busybox|toybox)$/i;
+
+// Tools shipped under a `g` prefix by Homebrew's GNU coreutils (gsed, gawk,
+// gcp…). Only names whose stripped form is a real tool are folded, so `git`,
+// `grep` and `gh` are untouched.
+const GNU_ALIASES = new Set([
+  'sed', 'awk', 'cp', 'mv', 'rm', 'ln', 'install', 'tar',
+  'truncate', 'sort', 'head', 'tail', 'date', 'find', 'chmod', 'chown',
+]);
+
+function unquote(token) {
+  return String(token).replace(/^["']|["']$/g, '');
+}
+
+// The executable a token invokes, normalized: path stripped, lower-cased,
+// GNU `g` prefix folded. Every structural check goes through this so a
+// gsed/busybox invocation can't read as a different program than sed.
+function canonicalBin(token) {
+  const base = unquote(token).split('/').pop().toLowerCase();
+  if (base.length > 1 && base[0] === 'g' && GNU_ALIASES.has(base.slice(1))) return base.slice(1);
+  return base;
+}
 
 // Heredoc bodies are data, not commands — parsing their lines as segments
 // produced false denies (a heredoc containing the *string* "rm -rf /" is not
@@ -122,16 +162,72 @@ export function commandSegments(command) {
 // `then`, the next token is a fresh command position (`if rm -rf / ; then`).
 const COMMAND_PREFIX = /^(do|then|else|elif|if|until|while)$/i;
 
+// A leading `VAR=value` is an environment prefix, not the program:
+// `PATH=/tmp:$PATH git push` still invokes git.
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+// Wrapper options that consume a following value, per wrapper — the same flag
+// means different things to different wrappers. `sudo -i` is a login shell and
+// takes nothing; `xargs -I` takes a replacement string. Treating them alike
+// swallowed the wrapped program as if it were an option's value.
+const WRAPPER_VALUE_OPTS = {
+  sudo: /^(-u|-g|-p|-C|-r|-t|-U|--user|--group|--prompt|--close-from|--role|--type|--other-user)$/,
+  env: /^(-u|--unset|-C|--chdir|-S|--split-string)$/,
+  xargs: /^(-n|-I|-L|-P|-s|-E|-a|-d|--max-args|--replace|--max-lines|--max-procs|--max-chars|--delimiter|--arg-file|--eof)$/,
+  time: /^(-o|-f|--output|--format)$/,
+};
+const NO_VALUE_OPTS = /^$/;
+
+// Redirections are shell plumbing, not arguments to the program. Leaving them
+// in made `git checkout main 2>&1` look like `<tree-ish> <pathspec>` — two
+// operands — and falsely ask on an ordinary branch switch. A bare operator
+// (`2>`, `<`) also consumes the filename token that follows it.
+const REDIRECT = /^[0-9]*(&?>{1,2}|<{1,3})/;
+
+function stripRedirections(tokens) {
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const m = REDIRECT.exec(tokens[i]);
+    if (!m) {
+      out.push(tokens[i]);
+      continue;
+    }
+    // `>file` carries its own target; a bare `>` takes the next token.
+    if (tokens[i].length === m[0].length) i++;
+  }
+  return out;
+}
+
 function segmentTokens(segment) {
-  const tokens = segment.trim().split(/\s+/).filter(Boolean);
-  while (tokens.length && (WRAPPER_BINS.test(tokens[0]) || COMMAND_PREFIX.test(tokens[0]))) tokens.shift();
+  const tokens = stripRedirections(segment.trim().split(/\s+/).filter(Boolean));
+  for (let shifted = true; shifted && tokens.length; ) {
+    shifted = false;
+    const head = tokens[0];
+    if (COMMAND_PREFIX.test(head) || ENV_ASSIGNMENT.test(head)) {
+      tokens.shift();
+      shifted = true;
+    } else if (WRAPPER_BINS.test(head)) {
+      const valueOpts = WRAPPER_VALUE_OPTS[canonicalBin(head)] || NO_VALUE_OPTS;
+      tokens.shift();
+      // A wrapper's OWN flags sit between it and the program it runs. Not
+      // skipping them left tokens[0] as a flag, so `sudo -E git reset --hard`
+      // read as neither git nor anything else and sailed past every structural
+      // check — including the self-protection ones.
+      while (tokens.length && tokens[0].startsWith('-') && tokens[0] !== '--') {
+        const opt = tokens.shift();
+        if (valueOpts.test(opt) && tokens.length && !tokens[0].startsWith('-')) tokens.shift();
+      }
+      if (tokens[0] === '--') tokens.shift();
+      shifted = true;
+    }
+  }
   return tokens;
 }
 
 function dangerousRm(command) {
   for (const segment of commandSegments(command)) {
     const tokens = segmentTokens(segment);
-    if (!tokens.length || tokens[0].split('/').pop() !== 'rm') continue;
+    if (!tokens.length || canonicalBin(tokens[0]) !== 'rm') continue;
     let recursive = false;
     const targets = [];
     for (const t of tokens.slice(1)) {
@@ -139,7 +235,7 @@ function dangerousRm(command) {
       else if (/^-[A-Za-z]+$/.test(t)) {
         if (/r/i.test(t)) recursive = true;
       } else if (!t.startsWith('--')) {
-        targets.push(t.replace(/^["']|["']$/g, ''));
+        targets.push(unquote(t));
       }
     }
     if (recursive && targets.some((t) => DANGEROUS_RM_TARGETS.has(t))) {
@@ -155,15 +251,19 @@ function dangerousRm(command) {
 const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 
 function gitSubcommand(tokens) {
+  let dashC = null;
   for (let i = 1; i < tokens.length; i++) {
     const t = tokens[i];
     if (GIT_VALUE_OPTS.has(t)) {
+      // -C changes the directory operands resolve against, which the checkout
+      // path/ref test below needs.
+      if (t === '-C' && tokens[i + 1]) dashC = unquote(tokens[i + 1]);
       i++; // skip the option's value
     } else if (!t.startsWith('-')) {
-      return { sub: t.replace(/^["']|["']$/g, ''), rest: tokens.slice(i + 1) };
+      return { sub: unquote(t), rest: tokens.slice(i + 1), dashC };
     }
   }
-  return { sub: null, rest: [] };
+  return { sub: null, rest: [], dashC: null };
 }
 
 // Evasive git-push forms the regex tiers miss (`git -C . push`,
@@ -172,11 +272,11 @@ function gitSubcommand(tokens) {
 function gitPushCheck(command) {
   for (const segment of commandSegments(command)) {
     const tokens = segmentTokens(segment);
-    if (!tokens.length || tokens[0].split('/').pop() !== 'git') continue;
+    if (!tokens.length || canonicalBin(tokens[0]) !== 'git') continue;
     const { sub, rest } = gitSubcommand(tokens);
     if (sub !== 'push') continue;
     const force = rest.some((raw) => {
-      const t = raw.replace(/^["']|["']$/g, ''); // quoted flags ('-f') still force
+      const t = unquote(raw); // quoted flags ('-f') still force
       return t === '--force' || (/^-[A-Za-z]+$/.test(t) && t.includes('f')) || t.startsWith('+');
     });
     return { force };
@@ -184,8 +284,142 @@ function gitPushCheck(command) {
   return null;
 }
 
+// Git subcommands that destroy uncommitted work.
+//
+// This is the accident that actually happens. `rm -rf /` is a thought
+// experiment; `git checkout -- .` wiping an afternoon of unstaged edits is a
+// Tuesday. Neither the regex tiers nor commandWritesFiles saw any of these
+// before, because none of them names the file it is about to overwrite — the
+// destruction is implied by the subcommand.
+//
+// Tier is `ask`, never `deny`: every one of these is a command a human
+// legitimately means, so the cost of a false positive is one prompt and the
+// cost of a false negative is lost work. Reasons name what is destroyed and
+// whether it is recoverable, because that is the question the human is
+// actually answering at the prompt.
+// `git checkout X` is a branch switch or a destructive path restore depending
+// on what X *is*, and no amount of pattern-matching on the name settles it: a
+// branch may be called `fix/typo.md` and a directory may be called `src`.
+//
+// So don't guess — ask the working tree, which is the same thing git does. If
+// the operand names something that exists, it is a path and the checkout will
+// overwrite it. A ref that does not exist on disk is a ref.
+//
+// Shape is only the fallback, for callers with no working directory (the
+// script-content scan reads a file that will run somewhere else entirely).
+// There it errs toward asking, since a missed path restore costs real work and
+// a false positive costs one prompt.
+const BARE_FILENAMES = new Set([
+  'Makefile', 'Dockerfile', 'Jenkinsfile', 'Gemfile', 'Rakefile', 'Procfile',
+  'Brewfile', 'Vagrantfile', 'README', 'LICENSE', 'CHANGELOG', 'CODEOWNERS',
+  'NOTICE', 'AUTHORS', 'VERSION',
+]);
+
+function looksLikePath(operand) {
+  return (
+    operand === '.' ||
+    operand.endsWith('/') ||
+    /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(operand) ||
+    BARE_FILENAMES.has(operand.split('/').pop())
+  );
+}
+
+function isPathOperand(operand, cwd, dashC) {
+  if (operand === '.' || operand.endsWith('/')) return true; // unambiguous
+  if (!cwd) return looksLikePath(operand);
+  try {
+    return fs.existsSync(path.resolve(cwd, dashC || '.', operand));
+  } catch {
+    return looksLikePath(operand); // unreadable cwd — fall back rather than throw
+  }
+}
+
+function destructiveGit(tokens, cwd) {
+  const { sub, rest, dashC } = gitSubcommand(tokens);
+  if (!sub) return null;
+  const args = rest.map(unquote);
+  const has = (...names) => args.some((a) => names.includes(a));
+  // Short flags cluster: -fd, -fdx and -Rf all carry f.
+  const shortFlag = (ch) => args.some((a) => /^-[A-Za-z]+$/.test(a) && a.includes(ch));
+
+  if (sub === 'reset' && (has('--hard') || has('--merge'))) {
+    return 'git reset --hard discards every uncommitted change in the working tree — unrecoverable';
+  }
+  if (sub === 'clean' && (has('--force') || shortFlag('f'))) {
+    return 'git clean -f deletes untracked files outright — they are in no commit and no stash, so this is unrecoverable';
+  }
+  // `git checkout` is two commands wearing one name: switch branches (safe) or
+  // restore paths from a commit (destroys uncommitted changes to them). Telling
+  // them apart without touching the filesystem:
+  //   `--`, `-f`             explicit — always the destructive shape
+  //   two+ non-flag args     `<tree-ish> <pathspec>`; that IS git's grammar
+  //   one arg that looks     `.`, `src/`, or something with a file extension.
+  //   like a file            A tag (`v1.0.0`) has no alphabetic extension and a
+  //                          branch (`feature/login`) has no extension at all.
+  // Branch-creating flags opt out: `git checkout -b new main` is two args and
+  // perfectly safe.
+  if (sub === 'checkout') {
+    if (has('--') || has('--force') || shortFlag('f')) {
+      return 'this git checkout overwrites working-tree files from a commit — uncommitted changes to them are lost';
+    }
+    const creating = has('-b', '-B', '-t', '--track', '--orphan', '--detach', '--guess', '--no-guess');
+    const operands = args.filter((a) => !a.startsWith('-'));
+    if (!creating && (operands.length >= 2 || (operands.length === 1 && isPathOperand(operands[0], cwd, dashC)))) {
+      return 'this git checkout restores paths from a commit, overwriting them — uncommitted changes to them are lost';
+    }
+  }
+  // git restore discards worktree changes by default; --staged alone only
+  // unstages, which touches no file on disk.
+  if (sub === 'restore') {
+    const staged = has('--staged') || shortFlag('S');
+    const worktree = has('--worktree') || shortFlag('W');
+    if (!staged || worktree) {
+      return 'git restore overwrites working-tree files from a commit — uncommitted changes to them are lost';
+    }
+  }
+  if (sub === 'switch' && (has('--force', '--discard-changes') || shortFlag('f'))) {
+    return 'git switch --force discards uncommitted changes while switching branches';
+  }
+  // -D, -Df, and `-d --force` are the same command; match the cluster, not the
+  // exact token.
+  if (
+    sub === 'branch' &&
+    (shortFlag('D') || ((has('--delete') || shortFlag('d')) && (has('--force') || shortFlag('f'))))
+  ) {
+    return 'git branch -D force-deletes a branch, including commits that exist nowhere else';
+  }
+  // The sub-subcommand is the first OPERAND, not args[0] — `git stash -q drop`.
+  const operand = args.find((a) => !a.startsWith('-'));
+  if (sub === 'stash' && ['drop', 'clear'].includes(operand)) {
+    return `git stash ${operand} permanently discards stashed work`;
+  }
+  // `git rm` of a committed file is recoverable, so only the two unrecoverable
+  // shapes are gated: -f overrides local modifications, -r takes a whole tree.
+  // `--cached` only touches the index, so it never qualifies.
+  if (sub === 'rm' && !has('--cached') && (has('--force') || shortFlag('f') || shortFlag('r') || has('-R'))) {
+    return 'this git rm deletes working-tree files (forced or recursive) — local modifications to them are lost';
+  }
+  if (sub === 'worktree' && operand === 'remove' && (has('--force') || shortFlag('f'))) {
+    return 'git worktree remove --force deletes a worktree that still has uncommitted changes';
+  }
+  if (sub === 'submodule' && operand === 'deinit' && (has('--force') || shortFlag('f'))) {
+    return 'git submodule deinit --force discards uncommitted changes inside the submodule';
+  }
+  return null;
+}
+
+export function gitDestructiveCheck(command, cwd) {
+  for (const segment of commandSegments(command)) {
+    const tokens = segmentTokens(segment);
+    if (!tokens.length || canonicalBin(tokens[0]) !== 'git') continue;
+    const reason = destructiveGit(tokens, cwd);
+    if (reason) return { reason };
+  }
+  return null;
+}
+
 // Returns { decision: 'allow' | 'ask' | 'deny', reason, action }
-export function evaluateCommand(policy, command) {
+export function evaluateCommand(policy, command, { cwd = null } = {}) {
   const cmd = String(command || '');
   const rm = dangerousRm(cmd);
   if (rm) return { decision: 'deny', action: 'forbidden', reason: rm.reason };
@@ -225,6 +459,19 @@ export function evaluateCommand(policy, command) {
       reason: 'Action "git-push" requires human approval per project policy',
     };
   }
+  // Opt-out for repos where discarding the worktree is routine
+  // (tiers.protect_worktree: false). Default on: losing uncommitted work is
+  // the most common real agent accident, and the check only ever asks.
+  if (policy.tiers?.protect_worktree !== false) {
+    const destructive = gitDestructiveCheck(cmd, cwd);
+    if (destructive) {
+      return {
+        decision: 'ask',
+        action: 'worktree-destructive',
+        reason: `${destructive.reason} — requires human approval`,
+      };
+    }
+  }
   return { decision: 'allow', action: 'auto', reason: '' };
 }
 
@@ -250,7 +497,7 @@ function inPlaceFlag(tokens) {
   return tokens.slice(1).some((t) => /^-[A-Za-z]*i/.test(t) || t.startsWith('--in-place'));
 }
 
-export function commandWritesFiles(command) {
+export function commandWritesFiles(command, { cwd = null } = {}) {
   const cmd = String(command || '');
   // Redirections, minus quoted text ("a > b" redirects nothing) and the
   // harmless forms: fd duplication (2>&1) and null sinks.
@@ -261,14 +508,21 @@ export function commandWritesFiles(command) {
   for (const segment of commandSegments(cmd)) {
     const tokens = segmentTokens(segment);
     if (!tokens.length) continue;
-    const bin = tokens[0].split('/').pop().toLowerCase();
+    const bin = canonicalBin(tokens[0]);
     if (WRITE_BINS.has(bin)) return true;
     if ((bin === 'sed' || bin === 'perl' || bin === 'awk') && inPlaceFlag(tokens)) return true;
     if (bin === 'sort' && tokens.some((t) => t === '-o' || t.startsWith('--output'))) return true;
     if (bin === 'curl' && tokens.some((t) => /^-[A-Za-z]*[oO]/.test(t) || t.startsWith('--output') || t.startsWith('--remote-name'))) return true;
     // Extract and create both write; both flag styles (`-xzf` / old-style `xzf`).
     if (bin === 'tar' && tokens[1] && (/^-?[A-Za-z]*[xc][A-Za-z]*$/.test(tokens[1]) || tokens.includes('--extract'))) return true;
-    if (bin === 'git' && ['apply', 'am'].includes(gitSubcommand(tokens).sub)) return true;
+    if (bin === 'git') {
+      if (['apply', 'am'].includes(gitSubcommand(tokens).sub)) return true;
+      // The destructive subcommands overwrite or delete working-tree files, so
+      // the plan gate and the protected-path checks must see them as writes —
+      // `git checkout -- .claude/settings.json` disarms the hooks just as
+      // surely as editing the file does.
+      if (destructiveGit(tokens, cwd)) return true;
+    }
     if (INTERPRETER_BINS.test(bin) && WRITE_HINTS.test(cmd)) return true;
   }
   return false;
@@ -277,7 +531,7 @@ export function commandWritesFiles(command) {
 // The Bash counterpart of evaluateFileWrite's built-in self-protection: a
 // shell command that writes AND names a protected target (hook wiring, git
 // hooks, AOS policy/audit state) gets the same "ask" the file tools would.
-export function evaluateBashProtected(command, { home } = {}) {
+export function evaluateBashProtected(command, { home, cwd = null } = {}) {
   const cmd = String(command || '');
   // git config core.hooksPath re-points hooks at an arbitrary directory — same
   // effect as writing .git/hooks/, with no file write for the heuristic to see.
@@ -288,7 +542,7 @@ export function evaluateBashProtected(command, { home } = {}) {
       reason: 'Re-pointing core.hooksPath plants hooks that run on future git commands — requires human approval',
     };
   }
-  if (!commandWritesFiles(cmd)) return null;
+  if (!commandWritesFiles(cmd, { cwd })) return null;
   if (/\.claude[\\/]settings(\.local)?\.json/.test(cmd)) {
     return {
       decision: 'ask',
@@ -328,6 +582,10 @@ const PROTECTED_AOS_BASENAMES = new Set([
   'state.json',
   'sessions.jsonl',
   'registry.yaml',
+  // The pending sign-off ticket. Writing one forges a human's approval to close
+  // a run, so it belongs here with the rest of the self-protection — the gate
+  // is the only thing that should ever create it.
+  'signoff.json',
 ]);
 
 function globToRegExp(glob) {

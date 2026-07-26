@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadPolicy } from './policy.js';
 import { getActiveRun, runDir, runMeta, mutateRunMeta, appendAudit } from './run.js';
+import { reviewMode } from './review.js';
 import { nowIso } from './paths.js';
 
 function runContract(contract, cwd) {
@@ -40,7 +41,10 @@ export function verifyContracts(projectId, cwd) {
     return {
       verdict: 'none',
       results: [],
-      adversarial_review: policy.verification?.adversarial_review !== false,
+      // gate | warn | off — reviewMode is the one source of truth for the
+      // tri-state setting; deriving `!== false` here would misreport warn as
+      // a hard gate.
+      review_mode: reviewMode(projectId),
     };
   }
   const results = contracts.map((c) => runContract(c, cwd));
@@ -63,7 +67,7 @@ export function verifyContracts(projectId, cwd) {
     verdict,
     contracts: results.map((r) => ({ name: r.name, pass: r.pass, required: r.required })),
   });
-  return { verdict, results, adversarial_review: policy.verification?.adversarial_review !== false };
+  return { verdict, results, review_mode: reviewMode(projectId) };
 }
 
 function writeVerificationReport(projectId, runId, results, verdict) {

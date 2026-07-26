@@ -31,27 +31,42 @@ function globToRegExp(glob) {
   );
 }
 
+// Memoized per process: costOf() is called once per run, and `aos status` /
+// `aos cost` / the console's /api/state each call it in a loop — re-reading and
+// re-parsing pricing.yaml every time made the table scale with run count. The
+// CLI is short-lived, so a process-lifetime cache needs no invalidation; the
+// console re-reads on restart, which is when a rate change would matter.
+let pricingCache = null;
+
 export function loadPricing() {
+  if (pricingCache) return pricingCache;
   const raw = readIfExists(path.join(aosHome(), 'pricing.yaml'));
-  if (!raw) return DEFAULT_PRICING;
+  if (!raw) return (pricingCache = DEFAULT_PRICING);
   try {
     const user = YAML.parse(raw);
-    if (!Array.isArray(user)) return DEFAULT_PRICING;
+    if (!Array.isArray(user)) return (pricingCache = DEFAULT_PRICING);
     // User rules first: they win over the bundled defaults.
-    return [...user.filter((r) => r && r.match), ...DEFAULT_PRICING];
+    return (pricingCache = [...user.filter((r) => r && r.match), ...DEFAULT_PRICING]);
   } catch {
-    return DEFAULT_PRICING;
+    return (pricingCache = DEFAULT_PRICING);
   }
 }
 
+// Compiled once per glob, not once per model per call.
+const globCache = new Map();
+
 function rateFor(modelId, pricing) {
   for (const rule of pricing) {
-    let re;
-    try {
-      re = globToRegExp(rule.match);
-    } catch {
-      continue;
+    let re = globCache.get(rule.match);
+    if (re === undefined) {
+      try {
+        re = globToRegExp(rule.match);
+      } catch {
+        re = null; // a broken rule is skipped, permanently
+      }
+      globCache.set(rule.match, re);
     }
+    if (!re) continue;
     if (re.test(modelId)) {
       return {
         input: rule.input || 0,

@@ -12,7 +12,7 @@ import {
   nowIso,
   withLock,
 } from './paths.js';
-import { loadPolicy } from './policy.js';
+import { reviewState, reviewCounts, reviewPath, reviewProblemLines, BLOCKING_REVIEW_STATES } from './review.js';
 
 export function statePath(projectId) {
   return path.join(projectDir(projectId), 'state.json');
@@ -77,8 +77,9 @@ export function startRun(projectId, { ticket, title, planGate }) {
     state: 'in-progress',
     verification: 'pending',
     verification_attempts: 0,
-    // present | absent | not-required | pending — computed at finish from
-    // verification.md (see adversarialReviewState). "Don't self-certify."
+    // pending | clean | resolved | open | invalid | absent | not-required |
+    // forced — computed at finish from review.json (see review.js). Blocking
+    // states stop the finish. "Don't self-certify."
     adversarial_review: 'pending',
     // The session that started this run, bound by the post-tool hook. Audit
     // and tokens from other concurrent sessions stay out of this run.
@@ -133,18 +134,42 @@ export function setRunState(projectId, runId, state, { force = false, by = null 
   const current = runMeta(projectId, runId);
   if (!current) throw new Error(`Unknown run: ${runId}`);
   assertTransition(current.state, state, force);
+  // `run state awaiting-review` reaches the same state finishRun does, so it
+  // has to clear the same gate — otherwise the review is one command away from
+  // being skipped. Closing states normally arrive THROUGH that gated edge, but
+  // `--force` can jump straight to done/shipped from anywhere — so a close
+  // also snapshots the review (never blocks: the human sign-off is the
+  // authority at close) rather than leaving meta stuck at "pending" as if the
+  // question had never come up.
+  const gated = state === 'awaiting-review';
+  const closing = state === 'done' || state === 'shipped';
+  const review = gated
+    ? assertReviewGate(projectId, runId, force)
+    : closing
+      ? { ...reviewState(projectId, runId), blocked: false }
+      : null;
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
+    // A close only fills the snapshot in when the gated edge never ran
+    // (forced jump) — it must not overwrite an earlier honest `forced` stamp.
+    if (review && (gated || !m.adversarial_review || m.adversarial_review === 'pending')) {
+      m.adversarial_review = review.blocked ? 'forced' : review.state;
+      m.review = { state: review.state, ...reviewCounts(review.findings) };
+    }
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
-    if (by && (state === 'done' || state === 'shipped')) m.closed_by = { ...by, ts: nowIso() };
+    if (by && closing) m.closed_by = { ...by, ts: nowIso() };
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
+  // Same audit fields as finishRun: an auditor grepping for review_forced or
+  // adversarial_review must see this path too, not only `run finish`.
   appendAudit(projectId, {
     event: 'run-state',
     run: runId,
     state,
     forced: force || undefined,
+    adversarial_review: review ? (review.blocked ? 'forced' : review.state) : undefined,
+    review_forced: review?.blocked || undefined,
     by: by || undefined,
   });
   return meta;
@@ -177,31 +202,55 @@ function addModelBuckets(target, nowModels, baseModels = {}) {
   }
 }
 
-export function settleRunTokens(projectId, runId, usageNow) {
+// Credit `usageNow − base` onto the run's totals, never negative.
+function creditDelta(tokens, usageNow, base = {}) {
+  tokens.input += Math.max(0, (usageNow.input || 0) - (base.input || 0));
+  tokens.output += Math.max(0, (usageNow.output || 0) - (base.output || 0));
+  tokens.cache_read = (tokens.cache_read || 0) + Math.max(0, (usageNow.cache_read || 0) - (base.cache_read || 0));
+  if (usageNow.models) {
+    tokens.models = tokens.models || {};
+    addModelBuckets(tokens.models, usageNow.models, base.models);
+  }
+}
+
+// Per-field max of two usage snapshots, model buckets included.
+function highWater(seen, usageNow) {
+  const out = {
+    input: Math.max(seen.input || 0, usageNow.input || 0),
+    output: Math.max(seen.output || 0, usageNow.output || 0),
+    cache_read: Math.max(seen.cache_read || 0, usageNow.cache_read || 0),
+    models: {},
+  };
+  for (const id of new Set([...Object.keys(seen.models || {}), ...Object.keys(usageNow.models || {})])) {
+    const a = (seen.models || {})[id] || {};
+    const b = (usageNow.models || {})[id] || {};
+    out.models[id] = Object.fromEntries(MODEL_BUCKET_KEYS.map((k) => [k, Math.max(a[k] || 0, b[k] || 0)]));
+  }
+  return out;
+}
+
+export function settleRunTokens(projectId, runId, usageNow, sessionId = null) {
   return mutateRunMeta(projectId, runId, (meta) => {
     meta.tokens = meta.tokens || { input: 0, output: 0, cache_read: 0 }; // legacy runs
-    // Unbound runs (started from a terminal, not a session) keep the old
-    // accumulate-per-session behavior — every session's usage is theirs.
+    // Unbound runs (started from a terminal, not a session) can legitimately
+    // collect usage from several sessions — but each session's transcript total
+    // is CUMULATIVE and SessionEnd fires repeatedly against it (resume, /clear,
+    // logout). Adding the raw total every time multiplied an unbound run's
+    // spend by the number of endings, the same bug sessions.jsonl had. So keep
+    // a per-session high-water mark and credit only what is new.
     if (!meta.session) {
-      meta.tokens.input += usageNow.input || 0;
-      meta.tokens.output += usageNow.output || 0;
-      meta.tokens.cache_read = (meta.tokens.cache_read || 0) + (usageNow.cache_read || 0);
-      if (usageNow.models) {
-        meta.tokens.models = meta.tokens.models || {};
-        addModelBuckets(meta.tokens.models, usageNow.models);
-      }
+      const key = sessionId || '_';
+      meta.tokens_seen = meta.tokens_seen || {};
+      const seen = meta.tokens_seen[key] || {};
+      creditDelta(meta.tokens, usageNow, seen);
+      // A HIGH-WATER mark, not the last value: a rotated or truncated
+      // transcript reports less than it did before, and storing that smaller
+      // number would re-credit the same region on the next firing.
+      meta.tokens_seen[key] = highWater(seen, usageNow);
       return;
     }
     if (meta.tokens_settled) return false;
-    const base = meta.tokens_baseline || { input: 0, output: 0, cache_read: 0 };
-    meta.tokens.input += Math.max(0, (usageNow.input || 0) - (base.input || 0));
-    meta.tokens.output += Math.max(0, (usageNow.output || 0) - (base.output || 0));
-    meta.tokens.cache_read =
-      (meta.tokens.cache_read || 0) + Math.max(0, (usageNow.cache_read || 0) - (base.cache_read || 0));
-    if (usageNow.models) {
-      meta.tokens.models = meta.tokens.models || {};
-      addModelBuckets(meta.tokens.models, usageNow.models, base.models);
-    }
+    creditDelta(meta.tokens, usageNow, meta.tokens_baseline || {});
     meta.tokens_settled = true;
   });
 }
@@ -224,18 +273,20 @@ export function approvePlan(projectId, runId, by = null) {
   return meta;
 }
 
-// Evidence-of-process, not proof-of-quality: we can't judge whether an
-// adversarial review was any good, but we can record whether one was actually
-// written into verification.md. `not-required` when policy opts out.
+// The adversarial review lives in review.json now — see review.js for the
+// schema and for why the old heading-in-verification.md check was replaced.
 export function adversarialReviewState(projectId, runId) {
-  const policy = loadPolicy(projectId);
-  if (policy.verification?.adversarial_review === false) return 'not-required';
-  const md = readIfExists(path.join(runDir(projectId, runId), 'verification.md')) || '';
-  const heading = md.match(/^#{1,6}\s*.*(adversarial|skeptic|refut)/im);
-  if (!heading) return 'absent';
-  // A bare heading with nothing under it doesn't count as a review.
-  const body = md.slice(heading.index + heading[0].length).trim();
-  return body.length > 20 ? 'present' : 'absent';
+  return reviewState(projectId, runId).state;
+}
+
+// Thrown by finishRun when the review gate refuses. Carries the already
+// formatted lines so the CLI prints one message and adds no reasoning of its own.
+export class ReviewGateError extends Error {
+  constructor(lines) {
+    super(lines.join('\n'));
+    this.name = 'ReviewGateError';
+    this.lines = lines;
+  }
 }
 
 // A memory write is any audited tool call that touched learnings.md or
@@ -282,10 +333,13 @@ export function learningsState(projectId, runId) {
 // What a session did, seen through its audit lines. A session's lines land in
 // the run bound to it or in the project log (see appendAudit), so scan both.
 // `substantive` = enough file-tool writes to plausibly owe a learning, or any
-// bound run; `memoryWrite` = learnings/decisions were touched; `nudged` =
-// the Stop hook already blocked once for this session.
+// bound run; `memoryWrite` = learnings/decisions were touched; `nudged` /
+// `reviewNudged` = the Stop hook already blocked once for this session, per
+// topic (each nudge fires at most once, independently).
 export function sessionMemoryActivity(projectId, sessionId) {
-  if (!sessionId) return { substantive: false, memoryWrite: false, nudged: false };
+  if (!sessionId) {
+    return { substantive: false, memoryWrite: false, nudged: false, reviewNudged: false };
+  }
   const files = [path.join(projectDir(projectId), 'audit.jsonl')];
   const bound = findRunBySession(projectId, sessionId);
   if (bound) files.push(path.join(runDir(projectId, bound.run), 'audit.jsonl'));
@@ -296,33 +350,78 @@ export function sessionMemoryActivity(projectId, sessionId) {
   let writes = 0;
   let memoryWrite = false;
   let nudged = false;
+  let reviewNudged = false;
   for (const file of files) {
     for (const entry of auditLines(file)) {
       if (entry.session !== sessionId) continue;
       if (entry.event === 'learnings-nudge') nudged = true;
+      if (entry.event === 'review-nudge') reviewNudged = true;
       if (entry.event !== 'tool') continue;
       if (isMemoryWrite(entry)) memoryWrite = true;
       if (WRITE_TOOLS.has(entry.tool)) writes++;
     }
   }
-  return { substantive: Boolean(bound) || writes >= 3, memoryWrite, nudged, bound };
+  return { substantive: Boolean(bound) || writes >= 3, memoryWrite, nudged, reviewNudged, bound };
 }
 
-export function finishRun(projectId, runId, state = 'awaiting-review') {
+// The one quality claim AOS enforces rather than reports: a run does not reach
+// awaiting-review while its adversarial review is missing, malformed, or has
+// an unresolved finding. `--force` is the escape hatch and is audited — the
+// point is that skipping the review becomes a visible act, not a silent one.
+// Throws unless the run's review clears the gate; returns what the gate saw
+// (plus `blocked`, i.e. "cleared only because --force was passed").
+function assertReviewGate(projectId, runId, force) {
+  const review = reviewState(projectId, runId);
+  const blocked = review.mode === 'gate' && BLOCKING_REVIEW_STATES.has(review.state);
+  if (blocked && !force) {
+    throw new ReviewGateError([
+      `Run ${runId} cannot reach awaiting-review — the adversarial review gate is not satisfied.`,
+      '',
+      ...reviewProblemLines(review, reviewPath(projectId, runId)),
+      '',
+      'Then re-run the command. To proceed anyway: add --force (recorded in the audit).',
+      'To turn the gate into a warning for this project: verification.adversarial_review: warn in policy.yaml.',
+    ]);
+  }
+  return { ...review, blocked };
+}
+
+export function finishRun(projectId, runId, state = 'awaiting-review', { force = false } = {}) {
   const current = runMeta(projectId, runId);
   if (!current) throw new Error(`Unknown run: ${runId}`);
-  assertTransition(current.state, state, false);
-  const adversarial_review = adversarialReviewState(projectId, runId);
+  // assertTransition's own error advises --force, so the flag must actually
+  // reach it — one flag forces both the transition and the review gate, the
+  // same contract `run state` has.
+  assertTransition(current.state, state, force);
+  // Only the entry into awaiting-review is gated; `--state blocked` is a
+  // legitimate way to park a run that never got as far as a review.
+  const review =
+    state === 'awaiting-review'
+      ? assertReviewGate(projectId, runId, force)
+      : { ...reviewState(projectId, runId), blocked: false };
+  const blocked = review.blocked;
+  const adversarial_review = blocked ? 'forced' : review.state;
   const learnings_recorded = learningsState(projectId, runId);
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
     m.adversarial_review = adversarial_review;
+    // What the gate saw, so a reviewer reading meta.json doesn't have to
+    // re-derive it — and so `forced` records what was skipped.
+    m.review = { state: review.state, ...reviewCounts(review.findings) };
     m.learnings_recorded = learnings_recorded;
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  appendAudit(projectId, { event: 'run-state', run: runId, state, adversarial_review, learnings_recorded });
+  appendAudit(projectId, {
+    event: 'run-state',
+    run: runId,
+    state,
+    forced: force || undefined,
+    adversarial_review,
+    review_forced: blocked || undefined,
+    learnings_recorded,
+  });
   if (getActiveRun(projectId) === runId) setActiveRun(projectId, null);
   return meta;
 }
@@ -359,4 +458,24 @@ export function appendAudit(projectId, entry) {
 
 export function readRunFile(projectId, runId, file) {
   return readIfExists(path.join(runDir(projectId, runId), file));
+}
+
+// What a dry-run policy suppressed: the count and a breakdown by action, so
+// somebody tuning a policy can see what it WOULD do before switching it on.
+// Only called when dry_run is actually enabled — it reads every run's audit,
+// which is too much IO to do on every `aos status`.
+export function dryRunGateSummary(projectId) {
+  const files = [path.join(projectDir(projectId), 'audit.jsonl')];
+  for (const r of listRuns(projectId)) files.push(path.join(runDir(projectId, r.run), 'audit.jsonl'));
+  const byAction = {};
+  let total = 0;
+  for (const file of files) {
+    for (const entry of auditLines(file)) {
+      if (entry.event !== 'gate' || !entry.dry_run) continue;
+      total++;
+      const key = `${entry.decision}:${entry.action}`;
+      byAction[key] = (byAction[key] || 0) + 1;
+    }
+  }
+  return { total, byAction };
 }

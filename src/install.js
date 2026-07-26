@@ -144,12 +144,16 @@ function installHooks(repoRoot) {
   writeJson(settingsPath, settings);
 }
 
-export function init(repoRoot, { name } = {}) {
+// `hooksOnly` installs the layer that works without anyone invoking anything:
+// context injection, gates, audit, token accounting. The project home is still
+// scaffolded — policy.yaml IS the gate and pack.md IS the context, so there is
+// no hooks-only install without them. Only the pipeline skills are skipped.
+export function init(repoRoot, { name, hooksOnly = false } = {}) {
   const resolved = path.resolve(repoRoot);
   const id = slugify(name || path.basename(resolved));
   const project = addProject({ id, name: name || path.basename(resolved), repo: resolved });
   const { dir, detection } = scaffoldProjectHome(id, resolved);
-  installSkills(resolved);
+  if (!hooksOnly) installSkills(resolved);
   installHooks(resolved);
-  return { project, home: dir, detection };
+  return { project, home: dir, detection, hooksOnly };
 }

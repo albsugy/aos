@@ -104,6 +104,29 @@ export function withLock(file, fn) {
   }
 }
 
+// Resolve symlinks in a path that may not exist yet.
+//
+// The registry stores realpath'd repo roots, but a hook's `cwd` and
+// `file_path` arrive however the runtime spelled them — and on macOS every
+// path under /var or /tmp is a symlink to /private/…. Comparing the two
+// spellings with startsWith silently answers "not in this repo", which turns
+// a gate off rather than on. realpath the deepest ancestor that exists and
+// re-attach the rest, so a file about to be created still canonicalizes.
+export function canonicalPath(p) {
+  let dir = path.resolve(p);
+  const tail = [];
+  for (;;) {
+    try {
+      return tail.length ? path.join(fs.realpathSync(dir), ...tail) : fs.realpathSync(dir);
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) return path.resolve(p); // hit the root, nothing resolved
+      tail.unshift(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
 export function tailLines(text, n) {
   const lines = text.trimEnd().split('\n');
   return lines.slice(Math.max(0, lines.length - n)).join('\n');

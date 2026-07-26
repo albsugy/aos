@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { aosHome, projectDir, appendLine, nowIso } from './paths.js';
+import { aosHome, projectDir, appendLine, nowIso, canonicalPath } from './paths.js';
 import { findProjectByCwd } from './registry.js';
 import os from 'node:os';
 import {
@@ -23,6 +23,18 @@ import {
   sessionMemoryActivity,
 } from './run.js';
 import { buildContext } from './context.js';
+import { recordSignoffTicket } from './signoff.js';
+import { sessionsPath } from './sessions.js';
+import { runScope, inScope } from './scope.js';
+import { stampRunCost } from './cost.js';
+
+// Gate actions whose permission prompt doubles as a human sign-off. Kept in
+// step with the `plan-approve` / `review-close` rules in the policy template.
+const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close']);
+
+// States a run only reaches by actually finishing. `blocked` is absent on
+// purpose — it is parked, not done, and can still spend more tokens.
+const FINISHED_STATES = new Set(['awaiting-review', 'done', 'shipped']);
 
 async function readStdin() {
   const chunks = [];
@@ -42,6 +54,22 @@ function summarizeToolInput(toolName, toolInput = {}) {
 function resolveProject(input) {
   const cwd = input.cwd || process.cwd();
   return findProjectByCwd(cwd);
+}
+
+// The REPO root, not the session's working directory.
+//
+// A session opened in packages/web of a monorepo has cwd two levels below the
+// repo. Slicing repo-relative paths against cwd there makes every declared
+// scope entry look wrong and everything genuinely out of scope look invisible,
+// and it silently stops user `protected_paths` globs (`src/**`, `.env*`) from
+// matching. The registry already knows the real root — and canonicalizes it —
+// so use it, and realpath the cwd so a symlinked checkout still lines up.
+// Both the root and the write target are canonicalized, so the comparison
+// happens in one spelling — see canonicalPath.
+function repoRootFor(project, cwd) {
+  const resolved = canonicalPath(cwd);
+  const match = (project.repos || []).find((r) => resolved === r || resolved.startsWith(r + path.sep));
+  return match || resolved;
 }
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -66,9 +94,39 @@ function planGateReason(runId) {
 function planGateVerdict(projectId, absPath, sessionId) {
   const active = unapprovedPlanRun(projectId, sessionId);
   if (!active) return null;
-  if (absPath.startsWith(runDir(projectId, active) + path.sep)) return null;
-  if (absPath.startsWith(projectDir(projectId) + path.sep)) return null;
+  if (absPath.startsWith(canonicalPath(runDir(projectId, active)) + path.sep)) return null;
+  if (absPath.startsWith(canonicalPath(projectDir(projectId)) + path.sep)) return null;
   return { decision: 'ask', action: 'plan-gate', reason: planGateReason(active) };
+}
+
+// Scope gate: the run's plan.md declared which files it expects to touch, and
+// this write is not one of them. Self-activating — a plan with no Files section
+// declares no scope and gates nothing — so it only ever fires where somebody
+// wrote the list down. See scope.js.
+//
+// Runs regardless of plan_gate: an approved plan is exactly when scope drift
+// matters, because approval is what unblocked the writes.
+function scopeGateVerdict(projectId, absPath, sessionId, repoRoot) {
+  const active = getActiveRun(projectId);
+  if (!active || !repoRoot) return null;
+  const meta = runMeta(projectId, active);
+  if (!meta) return null;
+  if (meta.session && sessionId && meta.session !== sessionId) return null; // another session's run
+  if (absPath.startsWith(canonicalPath(runDir(projectId, active)) + path.sep)) return null;
+  if (absPath.startsWith(canonicalPath(projectDir(projectId)) + path.sep)) return null;
+  if (!absPath.startsWith(repoRoot + path.sep)) return null; // outside the repo entirely — not ours to judge
+  const entries = runScope(projectId, active);
+  if (!entries.length) return null;
+  const rel = absPath.slice(repoRoot.length + 1);
+  if (inScope(rel, entries)) return null;
+  return {
+    decision: 'ask',
+    action: 'plan-scope',
+    reason:
+      `${rel} is outside the scope plan.md declared for run ${active} ` +
+      `(${entries.slice(0, 6).join(', ')}${entries.length > 6 ? `, +${entries.length - 6} more` : ''}). ` +
+      `Approve this write if the plan was incomplete — and update plan.md so the record matches the work.`,
+  };
 }
 
 // The Bash side of the plan gate: `tee`, `> file`, `sed -i`, `git apply`
@@ -123,10 +181,10 @@ export async function hookPreTool() {
   if (input.tool_name === 'Bash') {
     const command = String(input.tool_input?.command || '');
     target = command.slice(0, 300);
-    verdict = evaluateCommand(policy, command);
+    verdict = evaluateCommand(policy, command, { cwd: input.cwd || process.cwd() });
     if (verdict.decision === 'allow') {
       verdict =
-        evaluateBashProtected(command, { home: aosHome() }) ||
+        evaluateBashProtected(command, { home: aosHome(), cwd: input.cwd || process.cwd() }) ||
         planGateBashVerdict(project.id, command, input.session_id || null);
       if (!verdict) return;
     }
@@ -134,14 +192,23 @@ export async function hookPreTool() {
     const filePath = input.tool_input?.file_path || input.tool_input?.notebook_path || '';
     if (!filePath) return;
     const cwd = input.cwd || process.cwd();
-    const abs = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    const abs = canonicalPath(path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath));
     const content = String(
       input.tool_input?.content || input.tool_input?.new_string || input.tool_input?.new_source || ''
     );
+    const repoRoot = repoRootFor(project, cwd);
     target = abs;
-    verdict = evaluateFileWrite(policy, abs, content, { home: aosHome(), repoRoot: cwd });
+    // `home` is canonicalized to match `abs`: these are path comparisons, and
+    // AOS_HOME under a symlinked /tmp would otherwise never prefix-match, which
+    // would quietly switch the self-protection off. (evaluateBashProtected
+    // keeps the raw spelling — it matches against command TEXT, not paths.)
+    verdict = evaluateFileWrite(policy, abs, content, { home: canonicalPath(aosHome()), repoRoot });
     if (verdict.decision === 'allow') {
-      verdict = planGateVerdict(project.id, abs, input.session_id || null);
+      verdict =
+        planGateVerdict(project.id, abs, input.session_id || null) ||
+        (policy.scope_gate === false
+          ? null
+          : scopeGateVerdict(project.id, abs, input.session_id || null, repoRoot));
       if (!verdict) return;
     }
   } else {
@@ -149,6 +216,40 @@ export async function hookPreTool() {
   }
 
   if (verdict.decision === 'allow') return;
+
+  // Dry run: record what the gate WOULD have done and let the tool through.
+  // The point is to let someone tune a policy against their real workflow
+  // before switching it on — `aos doctor` and `aos status` both say loudly
+  // that gates are recording rather than enforcing, because a forgotten
+  // dry_run is a project that believes it is protected and is not.
+  if (policy.dry_run === true) {
+    appendAudit(project.id, {
+      event: 'gate',
+      dry_run: true,
+      decision: verdict.decision,
+      action: verdict.action,
+      tool: input.tool_name,
+      command: target,
+      session: input.session_id || null,
+    });
+    return;
+  }
+
+  // The human is about to see a permission prompt for a sign-off command.
+  // Approving it IS the sign-off — mint the ticket the CLI will consume, so
+  // closing a run no longer requires the human to leave the session for a
+  // terminal they never actually go to. See signoff.js.
+  //
+  // Ordering is load-bearing: this MUST stay below the dry_run return. In dry
+  // run no prompt is ever shown, so a ticket minted here would be sign-off
+  // nobody gave.
+  if (verdict.decision === 'ask' && SIGNOFF_ACTIONS.has(verdict.action)) {
+    recordSignoffTicket(project.id, {
+      action: verdict.action,
+      command: target,
+      session: input.session_id || null,
+    });
+  }
 
   appendAudit(project.id, {
     event: 'gate',
@@ -190,8 +291,23 @@ export async function hookPostTool() {
       // Settle the finished run's tokens now, at its actual end — not at
       // SessionEnd, when later runs' spend would be lumped in.
       const bound = findRunBySession(project.id, input.session_id);
-      if (bound && input.transcript_path) {
-        settleRunTokens(project.id, bound.run, sumTranscriptUsage(input.transcript_path));
+      // Only when the finish actually took, i.e. the run reached a FINISHED
+      // state. The review gate refusing is the designed common path, and
+      // settling there latches tokens_settled at a mid-work total — every token
+      // spent fixing the review then vanishes and outcome.md keeps a fraction
+      // of the real price. Testing `!== 'in-progress'` was not enough: a run
+      // parked at `blocked` is equally unfinished, and a finish refused from
+      // there froze it just the same.
+      if (bound && FINISHED_STATES.has(bound.state) && input.transcript_path) {
+        const meta = settleRunTokens(
+          project.id,
+          bound.run,
+          sumTranscriptUsage(input.transcript_path),
+          input.session_id
+        );
+        // Stamp the price tag now that the numbers are final — at `run finish`
+        // time they are not, because this hook is what settles them.
+        if (meta) stampRunCost(project.id, bound.run, meta);
       }
     }
   }
@@ -283,8 +399,12 @@ export async function hookSessionEnd() {
     learningsOwed = act.substantive && !act.memoryWrite;
     memoryWrite = act.memoryWrite;
   }
+  // Append-only, and deliberately re-appended on every SessionEnd (resume,
+  // /clear and logout each end the same session): the sequence is what
+  // buildContext reads for the learnings-debt marker. The totals here are
+  // cumulative for the session, so readers must deduplicate — see sessions.js.
   appendLine(
-    path.join(projectDir(project.id), 'sessions.jsonl'),
+    sessionsPath(project.id),
     JSON.stringify({
       ts: nowIso(),
       session: input.session_id || null,
@@ -316,17 +436,29 @@ export async function hookSessionEnd() {
     if (!bound || !input.session_id || bound === input.session_id) target = active;
   }
   if (!target) target = findRunBySession(project.id, input.session_id)?.run || null;
-  if (target) settleRunTokens(project.id, target, usage);
+  if (target) settleRunTokens(project.id, target, usage, input.session_id || null);
   appendAudit(project.id, { event: 'session-end', session: input.session_id || null });
 }
 
-// Assisted learnings extraction, no separate model call: when the session's
-// run has finished but nothing was written to learnings.md, block the stop
-// ONCE and hand the extraction back to the very model that did the work —
-// it still has the whole session in context. Deliberately narrow trigger
-// (finished run only, once per session) so ordinary mid-conversation stops
-// are never nagged; run-less sessions are covered by the SessionEnd debt
-// marker instead.
+// Everything the pipeline owes at the end of a session, collected in-session
+// while the model that did the work still has it all in context.
+//
+// Two debts, each blocking the stop at most once:
+//
+//   review-close  — the run reached awaiting-review, which is a queue with one
+//                   entry and no reader. Nobody opens a dashboard tomorrow to
+//                   drain it; every run this project ever finished proved that.
+//                   So the close happens HERE: the agent presents what it
+//                   built and what the review found, and runs the close, which
+//                   the gate turns into a permission prompt. That prompt is
+//                   the human sign-off (see signoff.js) — same authority as a
+//                   TTY, in the place the human actually is.
+//   learnings     — a finished run with nothing written to learnings.md. Only
+//                   a model can author one, and this model still can.
+//
+// Both triggers are deliberately narrow (a bound, finished run) so ordinary
+// mid-conversation stops are never nagged; run-less sessions are covered by
+// the SessionEnd debt marker instead.
 export async function hookStop() {
   const input = JSON.parse(await readStdin());
   // stop_hook_active means this stop already follows a blocked stop — never
@@ -334,24 +466,51 @@ export async function hookStop() {
   if (input.stop_hook_active) return;
   const project = resolveProject(input);
   if (!project) return;
-  if (loadPolicy(project.id).learnings_capture === false) return;
+  const policy = loadPolicy(project.id);
+  // Both asks off → skip the scan entirely. sessionMemoryActivity walks every
+  // run's meta plus up to three audit logs, and this hook fires on every turn.
+  if (policy.review_capture === false && policy.learnings_capture === false) return;
   const act = sessionMemoryActivity(project.id, input.session_id);
-  const finished = act.bound && !['in-progress', 'blocked'].includes(act.bound.state);
-  if (!finished || act.memoryWrite || act.nudged) return;
-  appendAudit(project.id, {
-    event: 'learnings-nudge',
-    run: act.bound.run,
-    session: input.session_id || null,
-  });
-  process.stdout.write(
-    JSON.stringify({
-      decision: 'block',
-      reason:
-        `Run ${act.bound.run} finished but nothing was recorded to learnings.md this session. ` +
+  if (!act.bound) return;
+  const finished = !['in-progress', 'blocked'].includes(act.bound.state);
+
+  const asks = [];
+  const events = [];
+
+  if (policy.review_capture !== false && act.bound.state === 'awaiting-review' && !act.reviewNudged) {
+    asks.push(
+      `Run ${act.bound.run} is sitting at awaiting-review, and you are the last one here who ` +
+        `knows what it did. Close it out now rather than leaving it in the queue:\n` +
+        `  1. Summarize for the human, in a few lines: what changed, what the contracts ` +
+        `reported, and what the adversarial review found (runs/${act.bound.run}/review.json).\n` +
+        `  2. State your recommendation — done (merged/complete) or shipped (released) — ` +
+        `or say plainly if it should go back to in-progress.\n` +
+        `  3. Run \`aos run state done --run ${act.bound.run}\` (or shipped). You will hit a ` +
+        `permission prompt: that prompt IS the human's sign-off, so do not try to route ` +
+        `around it, and do not pass --force.\n` +
+        `If the human declines or does not answer, leave the run as it is and stop — ` +
+        `you won't be asked again this session.`
+    );
+    events.push({ event: 'review-nudge', run: act.bound.run });
+  }
+
+  if (policy.learnings_capture !== false && finished && !act.memoryWrite && !act.nudged) {
+    asks.push(
+      `Run ${act.bound.run} finished but nothing was recorded to learnings.md this session. ` +
         `Distill 1-3 concrete, actionable learnings from this session and append them to ` +
         `${path.join(projectDir(project.id), 'learnings.md')} (significant choices go to ` +
         `context/decisions.md in the decision format). If genuinely nothing is worth ` +
-        `recording, say so and stop — you won't be asked again.`,
+        `recording, say so and stop — you won't be asked again.`
+    );
+    events.push({ event: 'learnings-nudge', run: act.bound.run });
+  }
+
+  if (!asks.length) return;
+  for (const e of events) appendAudit(project.id, { ...e, session: input.session_id || null });
+  process.stdout.write(
+    JSON.stringify({
+      decision: 'block',
+      reason: asks.join('\n\n'),
     })
   );
 }

@@ -8,6 +8,7 @@ import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
 import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta } from './run.js';
+import { reviewState, reviewPath, reviewProblemLines, reviewCounts } from './review.js';
 import { verifyContracts } from './verify.js';
 import { printStatus } from './status.js';
 import { printFind, printFindAll } from './search.js';
@@ -17,28 +18,51 @@ import { loadPolicy } from './policy.js';
 import { serveConsole } from './console/server.js';
 import { runDoctor } from './doctor.js';
 import { exportAgentsMd } from './export.js';
+import { consumeSignoffTicket } from './signoff.js';
+import { printCost, parseSince } from './cost.js';
 
 const [, , cmd, ...rest] = process.argv;
 
-// Sign-off identity. Closing a run (done|shipped) must come from a human's
-// own interactive terminal — an agent's shell tool has no TTY. Not
-// adversarial-proof (a TTY can be faked), but it upgrades "a prompt existed"
-// to "an interactive terminal under this OS user ran the command", and it
-// works on headless and non-Claude runtimes where no permission prompt
-// exists at all. Plan approval stays prompt-based (`required: false`): the
-// pipeline has the agent run `aos run approve` and the permission prompt IS
-// that sign-off — there we only record who/how, we don't refuse.
-// AOS_ALLOW_HEADLESS_APPROVE=1 is the CI escape hatch; the recorded identity
-// then says so instead of claiming a terminal.
-function signoffIdentity(action, { required = true } = {}) {
+// Sign-off identity — who authorized this, and how. Four forms, strongest
+// first:
+//
+//   tty          an interactive terminal under this OS user ran the command
+//   gate-prompt  the PreToolUse gate asked, and the human approved the prompt
+//                (single-use ticket — see signoff.js)
+//   headless-env AOS_ALLOW_HEADLESS_APPROVE=1, the CI escape hatch
+//   prompt       unverified; only accepted where `required: false`
+//
+// `gate-prompt` exists because requiring a TTY put the sign-off in the one
+// place the human never is. They are in the Claude Code session, where the
+// gate is already showing them the command; making them open a second terminal
+// meant runs stayed at awaiting-review forever. Approving the prompt is the
+// same human act — now it counts, and what it was is recorded either way.
+function signoffIdentity(action, { required = true, projectId = null, ticket = null } = {}) {
   const headless = process.env.AOS_ALLOW_HEADLESS_APPROVE === '1';
-  if (required && !process.stdin.isTTY && !headless) {
-    console.error(
-      `${action} must be run by a human in an interactive terminal — ask the user to run it themselves.\n` +
-        `(CI can set AOS_ALLOW_HEADLESS_APPROVE=1; the override is recorded in the audit.)`
-    );
-    process.exitCode = 1;
-    return null;
+  // Under dry_run the gate never prompts, so no ticket can ever exist — and
+  // requiring one would make closing a run the single thing dry run makes
+  // HARDER, with an error message pointing at a prompt that will never appear.
+  // Accept it, and record honestly that no human was actually asked.
+  const dryRun = projectId ? loadPolicy(projectId).dry_run === true : false;
+  let via = null;
+  if (process.stdin.isTTY) via = 'tty';
+  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket)) via = 'gate-prompt';
+  else if (dryRun) via = 'dry-run';
+  else if (headless) via = 'headless-env';
+
+  if (!via) {
+    if (required) {
+      console.error(
+        `${action} needs a human sign-off, and this invocation has none.\n` +
+          `  • In a Claude Code session: the AOS gate prompts you for this command — approve it there.\n` +
+          `    (No prompt appeared? The hooks may not be wired: run \`aos doctor\`.)\n` +
+          `  • Outside a session: run it yourself in an interactive terminal.\n` +
+          `  • In CI: set AOS_ALLOW_HEADLESS_APPROVE=1 — the override is recorded in the audit.`
+      );
+      process.exitCode = 1;
+      return null;
+    }
+    via = 'prompt';
   }
   let user = null;
   try {
@@ -46,7 +70,6 @@ function signoffIdentity(action, { required = true } = {}) {
   } catch {
     // identity is best-effort
   }
-  const via = process.stdin.isTTY ? 'tty' : headless ? 'headless-env' : 'prompt';
   return { user, via };
 }
 
@@ -83,8 +106,47 @@ function parseFlags(args) {
   return { flags, positional };
 }
 
+// A flag given without a value parses as `true`. Anything that reaches a path
+// join or a port number needs the string form or nothing — `aos run session
+// --run` used to crash with a Node type error.
+function strFlag(value) {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+// What the review gate concluded, after the fact. `forced` is called out
+// loudly: a run that shipped past its own gate should read that way forever.
+function printReviewOutcome(meta) {
+  const counts = meta.review || {};
+  const detail = counts.total
+    ? `${counts.total} finding(s): ` +
+      ['fixed', 'dismissed', 'deferred', 'open']
+        .filter((s) => counts[s])
+        .map((s) => `${counts[s]} ${s}`)
+        .join(', ')
+    : 'no findings';
+  if (meta.adversarial_review === 'forced') {
+    console.log(`⚠ Adversarial review gate FORCED (review state: ${counts.state || 'unknown'}) — recorded in the audit`);
+  } else if (meta.adversarial_review === 'clean') {
+    console.log('✔ Adversarial review: hunted, nothing found');
+  } else if (meta.adversarial_review === 'resolved') {
+    console.log(`✔ Adversarial review: ${detail}`);
+  } else if (meta.adversarial_review === 'not-required') {
+    console.log('ℹ Adversarial review not required by policy');
+  } else if (['absent', 'invalid', 'open'].includes(meta.adversarial_review)) {
+    // Reachable in warn mode, or in gate mode when --force jumped past the
+    // gated edge (finish --state done). Either way the warning must happen —
+    // warn's whole promise is that it does; don't name the mode, we can't
+    // tell which path it was from here.
+    console.log(
+      `⚠ Adversarial review ${meta.adversarial_review} — recorded, not blocking this finish.\n` +
+        '  Run /aos-verify and record review.json before shipping.'
+    );
+  }
+}
+
 function requireProject(flags = {}) {
-  const p = flags.project ? getProject(flags.project) : findProjectByCwd(process.cwd());
+  const id = strFlag(flags.project);
+  const p = id ? getProject(id) : findProjectByCwd(process.cwd());
   if (!p) {
     console.error(
       'No AOS project matches this directory. Run `aos init` here first, or pass --project <id>.'
@@ -97,12 +159,14 @@ function requireProject(flags = {}) {
 const HELP = `aos — Agent Operations Stack
 
 Usage:
-  aos init [--name <name>]          Register this repo as an AOS project (skills + hooks + spec)
+  aos init [--name <name>] [--hooks-only]   Register this repo (--hooks-only: context + gates + audit, no pipeline skills)
   aos status                        All projects: runs, states, leverage ratio, tokens
+  aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
   aos context [--project <id>]      Print the project context pack (what agents load)
   aos run start --ticket <id> [--title <t>]   Start a run (becomes the active run)
   aos run approve                   Approve the active run's plan (human step when plan_gate: ask)
-  aos run finish [--state <s>]      Finish active run (default state: awaiting-review)
+  aos run review [--run <id>]       Validate the run's adversarial review (review.json) — what the finish gate checks
+  aos run finish [--state <s>]      Finish active run (default: awaiting-review); blocked by an unsatisfied review gate (--force overrides, audited)
   aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
   aos run list                      List runs for this project
   aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
@@ -124,7 +188,8 @@ async function main() {
 
   switch (cmd) {
     case 'init': {
-      const { project, home, detection } = init(process.cwd(), { name: flags.name });
+      const hooksOnly = Boolean(flags['hooks-only']);
+      const { project, home, detection } = init(process.cwd(), { name: strFlag(flags.name), hooksOnly });
       console.log(`✔ Registered project "${project.name}" (${project.id})`);
       console.log(`✔ Spec scaffolded at ${home}`);
       if (detection?.pack) {
@@ -140,11 +205,22 @@ async function main() {
             `  Add contracts to policy.yaml (or run /aos-onboard and let the agent author them).`
         );
       }
-      console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard)`);
+      if (hooksOnly) {
+        console.log(`✔ Skills skipped (--hooks-only) — nothing added to .claude/skills/`);
+      } else {
+        console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard)`);
+      }
       console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens, learnings)`);
-      console.log(`\nNext: start a Claude Code session here and run /aos-onboard — it fills the`);
-      console.log(`context pack from the repo, mines git history for decisions, and reviews policy.yaml.`);
-      console.log(`Then work tickets with /aos-ticket <ticket>.`);
+      if (hooksOnly) {
+        console.log(`\nThat's the whole install: every new session in this repo now loads the context`);
+        console.log(`pack, gates risky commands and writes, and records an audit trail — no skill`);
+        console.log(`invocation, nothing to remember. Fill in ${path.join(home, 'context', 'pack.md')}.`);
+        console.log(`Add the ticket pipeline later with: aos init`);
+      } else {
+        console.log(`\nNext: start a Claude Code session here and run /aos-onboard — it fills the`);
+        console.log(`context pack from the repo, mines git history for decisions, and reviews policy.yaml.`);
+        console.log(`Then work tickets with /aos-ticket <ticket>.`);
+      }
       break;
     }
     case 'status':
@@ -179,7 +255,11 @@ async function main() {
           process.exitCode = 1;
           break;
         }
-        approvePlan(p.id, active, signoffIdentity('aos run approve', { required: false }));
+        approvePlan(
+          p.id,
+          active,
+          signoffIdentity('aos run approve', { required: false, projectId: p.id, ticket: 'plan-approve' })
+        );
         console.log(`✔ Plan approved for ${active} — implementation writes are no longer plan-gated`);
       } else if (sub === 'finish') {
         const active = getActiveRun(p.id);
@@ -188,15 +268,29 @@ async function main() {
           process.exitCode = 1;
           break;
         }
-        const meta = finishRun(p.id, active, flags.state || 'awaiting-review');
+        let meta;
+        try {
+          meta = finishRun(p.id, active, strFlag(flags.state) || 'awaiting-review', {
+            force: Boolean(flags.force),
+          });
+        } catch (e) {
+          // The review gate's message is already formatted for the human (and
+          // for the agent that has to fix the file) — print it, add nothing.
+          console.error(e.name === 'ReviewGateError' ? e.message : String(e.message || e));
+          process.exitCode = 1;
+          break;
+        }
         console.log(`✔ Run ${active} → ${meta.state}`);
-        if (meta.adversarial_review === 'absent') {
+        printReviewOutcome(meta);
+        // awaiting-review is a queue of one with no reader unless somebody
+        // drains it now. Point at the in-session close rather than leaving the
+        // run for a dashboard visit that does not happen.
+        if (meta.state === 'awaiting-review') {
           console.log(
-            '⚠ No adversarial review recorded in verification.md — run /aos-verify before shipping\n' +
-              '  (or set verification.adversarial_review: false in policy.yaml if intentional).'
+            `\nNext, in this session: summarize the change and the review findings for the human,\n` +
+              `then close it with \`aos run state done --run ${active}\` (or shipped).\n` +
+              `The gate turns that into a permission prompt — approving it is the human sign-off.`
           );
-        } else if (meta.adversarial_review === 'present') {
-          console.log('✔ Adversarial review recorded in verification.md');
         }
         // FYI, not a gate: the standard pipeline writes learnings AFTER
         // finish (learn stage), and the Stop hook backstops the session end.
@@ -206,11 +300,35 @@ async function main() {
               'before the session ends (the Stop hook will remind you).'
           );
         }
+      } else if (sub === 'review') {
+        // The gate's own verdict, on demand: lets the agent fix review.json
+        // against the real validator instead of discovering it at finish.
+        const target = strFlag(flags.run) || getActiveRun(p.id);
+        if (!target) {
+          console.error('No active run. Use: aos run review --run <id>');
+          process.exitCode = 1;
+          break;
+        }
+        const review = reviewState(p.id, target);
+        const file = reviewPath(p.id, target);
+        const problems = reviewProblemLines(review, file);
+        console.log(`Run ${target} — adversarial review: ${review.state} (policy: ${review.mode})`);
+        if (problems.length) {
+          console.log('');
+          console.log(problems.join('\n'));
+          // Non-blocking states (warn/off) still report, but must not fail CI.
+          if (review.mode === 'gate') process.exitCode = 1;
+        } else if (review.state === 'clean') {
+          console.log(`✔ Valid — a hunt with no findings (scope recorded in ${file})`);
+        } else if (review.state === 'resolved') {
+          const c = reviewCounts(review.findings);
+          console.log(`✔ Valid — ${c.total} finding(s), all dispositioned`);
+        }
       } else if (sub === 'state') {
         // --run <id> targets any run — the review action (done/shipped) is
         // taken AFTER finish clears the active pointer, so "active only"
         // would make awaiting-review a state with no way out.
-        const target = flags.run || getActiveRun(p.id);
+        const target = strFlag(flags.run) || getActiveRun(p.id);
         if (!target) {
           console.error('No active run. Target a finished one with: aos run state <state> --run <id>');
           process.exitCode = 1;
@@ -219,7 +337,10 @@ async function main() {
         const nextState = positional[1] || 'in-progress';
         let signer = null;
         if (nextState === 'done' || nextState === 'shipped') {
-          signer = signoffIdentity(`aos run state ${nextState}`);
+          signer = signoffIdentity(`aos run state ${nextState}`, {
+            projectId: p.id,
+            ticket: 'review-close',
+          });
           if (!signer) break;
         }
         try {
@@ -228,6 +349,16 @@ async function main() {
             by: signer,
           });
           console.log(`✔ Run ${target} → ${meta.state}${flags.force ? ' (forced)' : ''}`);
+          // The close is human-signed, so the human should see what they
+          // signed: a run closed while its review never cleared says so here.
+          if (
+            ['done', 'shipped'].includes(meta.state) &&
+            ['absent', 'invalid', 'open', 'forced'].includes(meta.adversarial_review)
+          ) {
+            console.log(
+              `⚠ Closed with adversarial review: ${meta.adversarial_review} — recorded in meta and audit.`
+            );
+          }
         } catch (e) {
           console.error(String(e.message || e));
           process.exitCode = 1;
@@ -236,7 +367,7 @@ async function main() {
         // The session bound to a run — recorded by the post-tool hook at
         // `run start`. Lets a fleet/primary agent resume the exact crewmate
         // that worked a run: claude --resume $(aos run session --run <id>)
-        const target = flags.run || getActiveRun(p.id);
+        const target = strFlag(flags.run) || getActiveRun(p.id);
         if (!target) {
           console.error('No active run. Use: aos run session --run <id>');
           process.exitCode = 1;
@@ -269,7 +400,7 @@ async function main() {
     }
     case 'verify': {
       const p = requireProject(flags);
-      const { verdict, results, adversarial_review } = verifyContracts(p.id, process.cwd());
+      const { verdict, results, review_mode } = verifyContracts(p.id, process.cwd());
       for (const r of results) {
         console.log(`${r.pass ? '✅' : '❌'} ${r.name}${r.required ? ' (required)' : ''} — ${r.ms}ms`);
         if (!r.pass) console.log(r.output.split('\n').slice(-15).join('\n'));
@@ -281,10 +412,45 @@ async function main() {
       } else {
         console.log(`\nContract verdict: ${verdict.toUpperCase()}`);
       }
-      if (adversarial_review) {
-        console.log('Adversarial review required: spawn a skeptic subagent per /aos-verify.');
+      if (review_mode !== 'off') {
+        const active = getActiveRun(p.id);
+        const where = active ? reviewPath(p.id, active) : "the run's review.json";
+        // The tail of the message must match the mode — "will not close" is a
+        // lie under warn, and a false threat teaches agents to ignore real ones.
+        console.log(
+          review_mode === 'gate'
+            ? `Adversarial review required: spawn a skeptic subagent per /aos-verify, then record its\nfindings in ${where} — \`aos run finish\` will not close the run without it.`
+            : `Adversarial review expected (warn mode): spawn a skeptic subagent per /aos-verify and\nrecord its findings in ${where} — finish will warn, not block.`
+        );
       }
       process.exit(verdict === 'fail' ? 1 : 0);
+      break;
+    }
+    case 'cost': {
+      const since = parseSince(flags.since);
+      if (Number.isNaN(since)) {
+        console.error(`Unreadable --since "${flags.since}". Use 7d / 24h / 2w, or a date like 2026-07-01.`);
+        process.exitCode = 1;
+        break;
+      }
+      const by = String(flags.by || 'project').toLowerCase();
+      const GROUPINGS = ['project', 'run', 'model', 'contract'];
+      if (!GROUPINGS.includes(by)) {
+        console.error(`Unknown --by "${by}". One of: ${GROUPINGS.join(', ')}.`);
+        process.exitCode = 1;
+        break;
+      }
+      const projects = flags.all
+        ? loadRegistry().projects
+        : [strFlag(flags.project) ? getProject(strFlag(flags.project)) : findProjectByCwd(process.cwd())].filter(Boolean);
+      if (!projects.length) {
+        console.error(
+          'No AOS project matches this directory. Run `aos init` here, pass --project <id>, or use --all.'
+        );
+        process.exitCode = 1;
+        break;
+      }
+      printCost({ projects, since, by, sinceLabel: since === null ? null : flags.since });
       break;
     }
     case 'find': {
@@ -323,7 +489,7 @@ async function main() {
       break;
     }
     case 'console': {
-      const port = Number(flags.port || 4560);
+      const port = Number(strFlag(flags.port) || 4560);
       serveConsole(port);
       break;
     }

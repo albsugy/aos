@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fullState, projectSummary } from '../status.js';
 import { runDir, runMeta } from '../run.js';
+import { reviewMode } from '../review.js';
 import { projectDir, readIfExists, tailLines } from '../paths.js';
+import { readSessions } from '../sessions.js';
 import { getProject } from '../registry.js';
 import { loadPolicy } from '../policy.js';
 import { costOf } from '../pricing.js';
@@ -41,18 +43,9 @@ function projectDetail(projectId) {
   if (!p) return null;
   const dir = projectDir(projectId);
   const policy = loadPolicy(projectId);
-  const sessions = (readIfExists(path.join(dir, 'sessions.jsonl')) || '')
-    .split('\n')
-    .filter(Boolean)
-    .slice(-40)
-    .map((l) => {
-      try {
-        return JSON.parse(l);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+  // Deduplicated: a resumed session appears once, with its true total (see
+  // sessions.js) — the sparkline plotted the same session repeatedly before.
+  const sessions = readSessions(projectId).slice(-40);
   let playbooks = [];
   try {
     playbooks = fs.readdirSync(path.join(dir, 'playbooks')).filter((f) => f.endsWith('.md'));
@@ -70,7 +63,8 @@ function projectDetail(projectId) {
     sessions,
     policy: {
       plan_gate: policy.plan_gate,
-      adversarial_review: policy.verification?.adversarial_review !== false,
+      adversarial_review: reviewMode(projectId) !== 'off',
+      adversarial_review_mode: reviewMode(projectId),
       forbidden: (policy.tiers?.forbidden || []).length,
       gated: (policy.tiers?.gated || []).length,
       protected_paths: (policy.tiers?.protected_paths || []).length,

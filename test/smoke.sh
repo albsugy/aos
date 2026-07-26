@@ -18,6 +18,18 @@ mkdir -p "$REPO"
 pass() { echo "✅ $1"; }
 fail() { echo "❌ $1"; exit 1; }
 
+active_run_dir() {
+  local project="${1:-demo}"
+  echo "$AOS_HOME/projects/$project/runs/$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/$project/state.json")"
+}
+# `aos run finish` is gated on the adversarial review. Sections that aren't
+# testing that gate satisfy it the way a real skeptic would — a hunt that
+# found nothing. The gate itself is tested in its own section below.
+review_active() {
+  printf '%s' '{"reviewer":"skeptic subagent","scope":["src/demo.js","acceptance criteria"],"findings":[]}' \
+    > "$(active_run_dir "${1:-demo}")/review.json"
+}
+
 cd "$REPO"
 git init -q -b main
 
@@ -112,6 +124,7 @@ $AOS verify 2>/dev/null | grep -q "nothing was verified" && pass "verify: no con
 grep -q '"verification": "fail"' "$RUN_DIR/meta.json" && pass "verify: no contracts → no free pass recorded" || fail "zero-contract verify granted a pass"
 
 # --- finish + status + find ---
+review_active
 $AOS run finish >/dev/null
 $AOS status | grep -q "awaiting-review" && pass "status shows awaiting-review" || fail "status"
 # the review action: a FINISHED run (no active pointer) must be closable via --run
@@ -186,6 +199,69 @@ hook_out "$IN_HOOKSPATH" | grep -q '"permissionDecision":"ask"'  && pass "gate: 
 hook_out "$IN_SUBRM"     | grep -q '"permissionDecision":"deny"' && pass "gate: recursive root delete in command substitution → deny" || fail "subshell rm bypass"
 hook_out "$IN_QUOTED_FORCE" | grep -q '"permissionDecision":"ask"' && pass "gate: forbidden string inside quotes → ask, not deny" || fail "quoted mention still hard-denied"
 
+# --- working-tree guard: the destructive-git accident that actually happens ---
+# None of these names the file it overwrites, so neither the regex tiers nor
+# the write heuristic saw them before. All are `ask`, never deny.
+bash_in() { echo '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"'"$1"'"},"session_id":"s1"}'; }
+# `git checkout X` is a branch switch or a destructive path restore depending on
+# what X IS, so the guard asks the working tree rather than guessing from the
+# name. Give it a tree to ask about.
+mkdir -p "$REPO/src" && : > "$REPO/src/app.js" && : > "$REPO/Makefile"
+for CMD in "git reset --hard" "git clean -fdx" "git checkout -- ." "git checkout ." \
+           "git restore src/" "git switch --discard-changes main" "git branch -D feat" \
+           "git stash drop" "npm test && git checkout -- ." "git -C . reset --hard" \
+           "git rm -r src/" "git rm -f x" "git worktree remove --force wt" \
+           "git submodule deinit -f mod" "sudo git -C /repo clean -fdx" "FOO=1 env git clean -f" \
+           "git checkout src/app.js" "git checkout HEAD src/app.js" "git branch -Df feat" \
+           "git stash -q drop" "sudo -E git reset --hard" "sudo -u root git clean -fd" \
+           "sudo -i git clean -fdx" "env -u FOO git reset --hard" "time -p git clean -f" \
+           "xargs -n 1 git checkout --" "nohup git reset --merge" \
+           "git checkout Makefile" "git checkout HEAD src/app.js 2>&1" "git checkout src"; do
+  hook_out "$(bash_in "$CMD")" | grep -q '"permissionDecision":"ask"' \
+    || fail "worktree guard missed: $CMD"
+done
+pass "gate: destructive git → ask (reset/clean/checkout/restore/switch/branch/stash)"
+# Non-destructive neighbours must stay silent or the guard is unusable
+for CMD in "git checkout main" "git checkout -b feature" "git restore --staged file.js" \
+           "git reset --soft HEAD~1" "git stash" "git status" "git diff HEAD" \
+           "git rm file.txt" "git rm --cached -r x" "git worktree remove wt" \
+           "cat notes-about-git-reset--hard.md" "git checkout feature/login" "git checkout v1.0.0" \
+           "git checkout -b feature main" "git checkout @{-1}" \
+           "git checkout main 2>&1" "git checkout main >/dev/null" "git checkout -q main >/dev/null 2>&1"; do
+  [ -z "$(hook_out "$(bash_in "$CMD")")" ] || fail "worktree guard false positive: $CMD"
+done
+pass "gate: safe git → allow (branch switch, --staged restore, soft reset, plain stash)"
+# Name shape cannot decide branch-vs-path — a branch may be called fix/typo.md
+# and a directory may be called src. Existence in the working tree decides.
+for CMD in "git checkout fix/typo.md" "git checkout release/2.0.1" "git checkout deleted-file.js"; do
+  [ -z "$(hook_out "$(bash_in "$CMD")")" ] || fail "branch-shaped ref gated as a path: $CMD"
+done
+pass "gate: a ref that names nothing on disk is a ref, whatever it looks like"
+# The guard is opt-out, and the opt-out actually works
+cp "$AOS_HOME/projects/demo/policy.yaml" "$WORK/policy-backup.yaml"
+printf 'version: 1\ntiers:\n  protect_worktree: false\n' > "$AOS_HOME/projects/demo/policy.yaml"
+[ -z "$(hook_out "$(bash_in "git reset --hard")")" ] \
+  && pass "gate: protect_worktree false disables the guard" || fail "protect_worktree opt-out ignored"
+cp "$WORK/policy-backup.yaml" "$AOS_HOME/projects/demo/policy.yaml"
+# Destructive git counts as a write, so it can't sidestep the protected paths
+hook_out "$(bash_in "git checkout -- .claude/settings.json")" | grep -q '"permissionDecision":"ask"' \
+  && pass "gate: git checkout of .claude/settings.json → ask (write path)" || fail "git checkout hook-disarm bypass"
+
+# --- write detection: GNU-prefixed and busybox applets are the same programs ---
+# `gsed -i` is the macOS/Homebrew spelling; treating it as a non-writer made it
+# a bypass for every check built on commandWritesFiles. Probed through the
+# protected-path gate, which only fires on commands that write.
+for CMD in "gsed -i s/a/b/ .claude/settings.json" "busybox sed -i s/a/b/ .claude/settings.json" \
+           "gcp evil .claude/settings.json"; do
+  hook_out "$(bash_in "$CMD")" | grep -q '"permissionDecision":"ask"' || fail "alias write missed: $CMD"
+done
+pass "writes: gsed/busybox sed/gcp reach the protected-path gate"
+# ...without folding tools that merely start with g into their stripped names
+for CMD in "grep -i settings .claude/settings.json" "gh pr view 1"; do
+  [ -z "$(hook_out "$(bash_in "$CMD")")" ] || fail "alias false positive: $CMD"
+done
+pass "writes: grep/gh not mistaken for GNU-prefixed writers"
+
 # --- file-write gates: self-protection + script laundering ---
 IN_SETTINGS='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/.claude/settings.json","content":"{}"},"session_id":"s1"}'
 IN_POLICY='{"cwd":"'$REPO'","tool_name":"Edit","tool_input":{"file_path":"'$AOS_HOME'/projects/demo/policy.yaml","new_string":"tiers: {}"},"session_id":"s1"}'
@@ -193,6 +269,15 @@ IN_LAUNDER='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$RE
 IN_OKWRITE='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/src/ok.js","content":"export {}"},"session_id":"s1"}'
 hook_out "$IN_SETTINGS" | grep -q '"permissionDecision":"ask"'  && pass "gate: write .claude/settings.json → ask" || fail "settings write not gated"
 hook_out "$IN_POLICY"   | grep -q '"permissionDecision":"ask"'  && pass "gate: write policy.yaml → ask (self-protection)" || fail "policy write not gated"
+# forging a sign-off ticket is forging a human's approval to close a run
+IN_TICKET='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$AOS_HOME'/projects/demo/signoff.json","content":"{}"},"session_id":"s1"}'
+hook_out "$IN_TICKET"   | grep -q '"permissionDecision":"ask"'  && pass "gate: write signoff.json → ask (no forged sign-off)" || fail "signoff ticket forgeable"
+# self-protection must survive a wrapper's own flags — `sudo -E` used to make
+# tokens[0] a flag, so nothing downstream saw sed/git at all
+for CMD in "sudo -E sed -i s/a/b/ .claude/settings.json" "sudo -E git checkout -- .claude/settings.json"; do
+  hook_out "$(bash_in "$CMD")" | grep -q '"permissionDecision":"ask"' || fail "wrapper-flag bypass: $CMD"
+done
+pass "gate: sudo -E <write to a protected path> → ask (wrapper flags skipped)"
 hook_out "$IN_LAUNDER"  | grep -q '"permissionDecision":"deny"' && pass "gate: script with forbidden command → deny (no laundering)" || fail "script laundering not caught"
 [ -z "$(hook_out "$IN_OKWRITE")" ] && pass "gate: normal file write → allow (silent)" || fail "normal write gated"
 
@@ -254,6 +339,7 @@ grep -q '"cache_read_tokens":100' "$AOS_HOME/projects/demo/sessions.jsonl" && pa
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: cache reads attributed to bound run" || fail "cache reads not on run"
 printf '%s' '{"cwd":"'"$REPO"'","session_id":"sB","transcript_path":"'"$TRANS"'"}' | $AOS hook session-end
 grep -q '"cache_read": 100' "$RUN2_DIR/meta.json" && pass "tokens: foreign session tokens not attributed to run" || fail "foreign tokens leaked into run"
+review_active
 $AOS run finish >/dev/null
 # Settlement is once-only: a second SessionEnd for the same bound session must
 # not double-count the already-settled run.
@@ -269,6 +355,7 @@ RUN2B_DIR="$AOS_HOME/projects/demo/runs/$RUN2B"
 # bind with the session's usage-so-far (TRANS = 15 in) as the baseline
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-2b"},"session_id":"sC","transcript_path":"'"$TRANS"'"}' | $AOS hook post-tool
 $AOS run approve >/dev/null
+review_active
 $AOS run finish >/dev/null
 # the post-tool hook for `aos run finish` settles the delta: 30 - 15 = 15 in
 # (checked via node, not grep — tokens_baseline also contains "input": 15)
@@ -280,6 +367,77 @@ printf '%s' '{"cwd":"'"$REPO"'","session_id":"sC","transcript_path":"'"$TRANS2"'
 [ "$(run_tokens "$RUN2B_DIR/meta.json")" = "15 7" ] && pass "tokens: session-end after settle is a no-op" || fail "session-end re-credited a settled run"
 node -e 'const m=require(process.argv[1]);process.exit(m.state_times && m.state_times["awaiting-review"]?0:1)' "$RUN2B_DIR/meta.json" \
   && pass "runs: state_times recorded at finish (cycle time derivable)" || fail "state_times missing"
+
+# --- session totals: a resumed session is counted once, not once per ending ---
+# SessionEnd fires again on resume / clear / logout, each time re-summing the
+# WHOLE transcript, so the same cumulative total lands in sessions.jsonl
+# repeatedly. Summing every line inflated real projects by 2-14x.
+DEDUP_REPO="$WORK/dedup-repo"; mkdir -p "$DEDUP_REPO"; (cd "$DEDUP_REPO" && git init -q -b main)
+(cd "$DEDUP_REPO" && $AOS init --name dedup >/dev/null)
+DTRANS="$WORK/dedup-transcript.jsonl"
+echo '{"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":70,"cache_read_input_tokens":400,"output_tokens":30}}}' > "$DTRANS"
+cat "$DTRANS" "$DTRANS" > "$WORK/dedup-transcript2.jsonl"   # resumed: 140 in / 60 out / 800 cache
+sess_end() { printf '%s' '{"cwd":"'"$DEDUP_REPO"'","session_id":"'"$1"'","transcript_path":"'"$2"'"}' | $AOS hook session-end; }
+dedup_tokens() { $AOS status | grep -A4 '(dedup)' | grep 'tokens:'; }
+sess_end sR "$DTRANS"
+sess_end sR "$WORK/dedup-transcript2.jsonl"   # resumed, transcript grew, SessionEnd again
+sess_end sR "$WORK/dedup-transcript2.jsonl"   # a third ending, no new usage
+[ "$(grep -c . "$AOS_HOME/projects/dedup/sessions.jsonl")" = "3" ] \
+  && pass "sessions: every SessionEnd still appends (log stays an event sequence)" || fail "session log not append-only"
+dedup_tokens | grep -q "140 in / 60 out" \
+  && pass "sessions: resumed session counted once at its true total (not 3x)" || fail "session tokens double-counted: $(dedup_tokens)"
+dedup_tokens | grep -q "800 cache-read" \
+  && pass "sessions: cache reads deduplicated too" || fail "cache reads double-counted: $(dedup_tokens)"
+# a shrinking transcript (rotated/truncated) must not erase the larger total
+sess_end sR "$DTRANS"
+dedup_tokens | grep -q "140 in / 60 out" \
+  && pass "sessions: a smaller later ending cannot under-report the session" || fail "truncated transcript lost tokens"
+# distinct sessions still add up
+sess_end sS "$DTRANS"
+dedup_tokens | grep -q "210 in / 90 out" \
+  && pass "sessions: distinct sessions still sum" || fail "distinct sessions not summed: $(dedup_tokens)"
+
+# --- unbound runs: repeated SessionEnd must not multiply their tokens ---
+# An unbound run legitimately collects usage from several sessions, but each
+# session's transcript total is cumulative and SessionEnd fires repeatedly.
+(cd "$DEDUP_REPO" && $AOS run start --ticket "LIN-UB" >/dev/null)
+UB_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/dedup/state.json")
+UB_DIR="$AOS_HOME/projects/dedup/runs/$UB_RUN"
+ub_tokens() { node -e 'const m=require(process.argv[1]);console.log(m.tokens.input,m.tokens.output)' "$UB_DIR/meta.json"; }
+sess_end sX "$DTRANS"; sess_end sX "$DTRANS"; sess_end sX "$DTRANS"
+[ "$(ub_tokens)" = "70 30" ] && pass "tokens: unbound run counts one session once, not once per ending" || fail "unbound run double-counted ($(ub_tokens))"
+sess_end sX "$WORK/dedup-transcript2.jsonl"   # same session, transcript grew
+[ "$(ub_tokens)" = "140 60" ] && pass "tokens: unbound run credits only the growth" || fail "unbound growth wrong ($(ub_tokens))"
+sess_end sY "$DTRANS"                          # a genuinely different session still adds
+[ "$(ub_tokens)" = "210 90" ] && pass "tokens: unbound run still sums distinct sessions" || fail "unbound distinct session lost ($(ub_tokens))"
+
+# --- a REFUSED `run finish` must not settle the run's tokens ---
+# The review gate refusing is the designed common path; settling there would
+# freeze the total mid-work and stamp a fraction of the real cost into outcome.md.
+(cd "$DEDUP_REPO" && $AOS run start --ticket "LIN-RF" >/dev/null)
+RF_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/dedup/state.json")
+RF_DIR="$AOS_HOME/projects/dedup/runs/$RF_RUN"
+printf '%s' '{"cwd":"'"$DEDUP_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-RF"},"session_id":"sZZ"}' | $AOS hook post-tool
+(cd "$DEDUP_REPO" && $AOS run finish >/dev/null 2>&1) && fail "finish succeeded without a review" || true
+printf '%s' '{"cwd":"'"$DEDUP_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sZZ","transcript_path":"'"$DTRANS"'"}' | $AOS hook post-tool
+node -e 'const m=require(process.argv[1]);process.exit(m.tokens_settled?1:0)' "$RF_DIR/meta.json" \
+  && pass "tokens: a refused finish leaves the run unsettled" || fail "refused finish settled the run"
+# ...and the same holds from `blocked`, which is parked, not finished
+(cd "$DEDUP_REPO" && $AOS run state blocked --run "$RF_RUN" >/dev/null)
+(cd "$DEDUP_REPO" && $AOS run finish >/dev/null 2>&1) && fail "blocked finish succeeded without a review" || true
+printf '%s' '{"cwd":"'"$DEDUP_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sZZ","transcript_path":"'"$DTRANS"'"}' | $AOS hook post-tool
+node -e 'const m=require(process.argv[1]);process.exit(m.tokens_settled?1:0)' "$RF_DIR/meta.json" \
+  && pass "tokens: a finish refused from blocked leaves the run unsettled" || fail "blocked+refused finish settled the run"
+(cd "$DEDUP_REPO" && $AOS run state in-progress --run "$RF_RUN" >/dev/null)
+review_active dedup
+(cd "$DEDUP_REPO" && $AOS run finish >/dev/null)
+printf '%s' '{"cwd":"'"$DEDUP_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sZZ","transcript_path":"'"$WORK/dedup-transcript2.jsonl"'"}' | $AOS hook post-tool
+node -e 'const m=require(process.argv[1]);process.exit(m.tokens_settled&&m.tokens.input===140?0:1)' "$RF_DIR/meta.json" \
+  && pass "tokens: the finish that succeeds settles the full amount" || fail "successful finish settled wrong"
+
+# --- leverage ratio: a rate needs a sample; below it, show the fraction ---
+$AOS status | grep -q "clean-first-pass: .*runs (too few to rate)" \
+  && pass "status: small samples report the fraction, not a percentage" || fail "leverage percentage shown on a tiny sample"
 
 # --- cost estimation: per-model buckets → $ at API rates ---
 TRANSM="$WORK/transcript-model.jsonl"
@@ -293,21 +451,114 @@ grep -q '"models"' "$AOS_HOME/projects/demo/sessions.jsonl" && pass "cost: per-m
 node -e 'const m=require(process.argv[1]);const b=m.tokens.models["claude-sonnet-4-6"];process.exit(b&&b.input===10&&b.cache_write_5m===5?0:1)' "$RUN2C_DIR/meta.json" \
   && pass "cost: per-model buckets attributed to run (cache writes split out)" || fail "run model buckets wrong"
 $AOS status | grep -q "est. at API rates" && pass "cost: status shows estimated cost" || fail "status cost missing"
+review_active
 $AOS run finish >/dev/null
 
-# --- adversarial review: evidence-of-process recorded at finish ---
+# --- adversarial review gate: structured findings, enforced at finish ---
+# The gate is the one quality claim AOS enforces rather than reports: a run
+# cannot reach awaiting-review while its review is missing, malformed, or has
+# an unresolved finding.
 $AOS run start --ticket "LIN-3" >/dev/null
-RUN3=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
-RUN3_DIR="$AOS_HOME/projects/demo/runs/$RUN3"
-FINISH_OUT=$($AOS run finish)
-echo "$FINISH_OUT" | grep -q "No adversarial review" && pass "finish: warns when adversarial review absent" || fail "no absent warning"
-grep -q '"adversarial_review": "absent"' "$RUN3_DIR/meta.json" && pass "finish: records adversarial_review=absent" || fail "absent not recorded"
+RUN3_DIR=$(active_run_dir)
+NO_REVIEW=$($AOS run finish 2>&1) && fail "finish succeeded with no adversarial review" || true
+echo "$NO_REVIEW" | grep -q "adversarial review gate is not satisfied" && pass "review gate: no review.json → finish REFUSED" || fail "gate did not refuse"
+echo "$NO_REVIEW" | grep -q '"scope"' && pass "review gate: refusal prints the schema to write" || fail "refusal is not actionable"
+grep -q '"state": "in-progress"' "$RUN3_DIR/meta.json" && pass "review gate: refused finish leaves the run open" || fail "state moved despite refusal"
+
+# malformed → refused with per-field errors (the message must be enough to fix the file by)
+printf '%s' '{"reviewer":"x","findings":[{"severity":"urgent","summary":"nope","status":"wontfix"}]}' > "$RUN3_DIR/review.json"
+BAD_REVIEW=$($AOS run finish 2>&1) && fail "finish accepted a malformed review" || true
+echo "$BAD_REVIEW" | grep -q "severity: must be one of" && pass "review gate: malformed review → per-field errors" || fail "no per-field errors"
+echo "$BAD_REVIEW" | grep -q "scope: required" && pass "review gate: a review must say what it hunted through" || fail "scope not required"
+
+# a disposition that says nothing is not a disposition
+printf '%s' '{"reviewer":"skeptic subagent","scope":["src/gate.js"],"findings":[{"severity":"low","summary":"a real enough finding to state","status":"dismissed","resolution":"no"}]}' > "$RUN3_DIR/review.json"
+THIN=$($AOS run finish 2>&1) && fail "finish accepted an empty resolution" || true
+echo "$THIN" | grep -q 'resolution: required for status "dismissed"' && pass "review gate: empty disposition rejected" || fail "thin resolution accepted"
+
+# an OPEN finding blocks — this is the part that is a gate rather than a record
+cat > "$RUN3_DIR/review.json" <<'EOF'
+{
+  "reviewer": "skeptic subagent",
+  "scope": ["src/gate.js", "acceptance criterion 2"],
+  "findings": [
+    { "severity": "high", "summary": "the gate never fires on the shell path", "location": "src/gate.js:12", "status": "open" }
+  ]
+}
+EOF
+OPEN_OUT=$($AOS run finish 2>&1) && fail "finish accepted an open finding" || true
+echo "$OPEN_OUT" | grep -q "still open" && pass "review gate: open finding blocks the finish" || fail "open finding did not block"
+echo "$OPEN_OUT" | grep -q "src/gate.js:12" && pass "review gate: refusal names the open finding" || fail "open finding not named"
+$AOS run review >/dev/null 2>&1 && fail "aos run review exited 0 with an open finding" || pass "review gate: aos run review reports the same verdict, non-zero"
+
+# resolving it unblocks — and the dispositions are recorded, not just the fact of a review
+cat > "$RUN3_DIR/review.json" <<'EOF'
+{
+  "reviewer": "skeptic subagent",
+  "scope": ["src/gate.js", "acceptance criterion 2"],
+  "findings": [
+    { "severity": "high", "summary": "the gate never fires on the shell path", "location": "src/gate.js:12", "status": "fixed", "resolution": "extended the check to Bash redirects and tee" },
+    { "severity": "low", "summary": "the error message says file when it means path", "status": "dismissed", "resolution": "cosmetic, and the wording matches the docs" }
+  ]
+}
+EOF
+$AOS run review | grep -q "all dispositioned" && pass "review gate: aos run review validates a complete review" || fail "valid review not accepted"
+FIN3=$($AOS run finish)
+echo "$FIN3" | grep -q "1 fixed, 1 dismissed" && pass "finish: prints the dispositions" || fail "dispositions not printed"
+grep -q '"adversarial_review": "resolved"' "$RUN3_DIR/meta.json" && pass "finish: records adversarial_review=resolved" || fail "resolved not recorded"
+grep -q '"total": 2' "$RUN3_DIR/meta.json" && pass "finish: records the finding counts in meta" || fail "counts not recorded"
+
+# a genuine hunt that found nothing is a legitimate result
 $AOS run start --ticket "LIN-4" >/dev/null
-RUN4=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/demo/state.json")
-RUN4_DIR="$AOS_HOME/projects/demo/runs/$RUN4"
-printf '## Adversarial review\n\nSkeptic hunted the acceptance criteria and edge cases; found nothing unmet.\n' > "$RUN4_DIR/verification.md"
+RUN4_DIR=$(active_run_dir)
+review_active
 $AOS run finish >/dev/null
-grep -q '"adversarial_review": "present"' "$RUN4_DIR/meta.json" && pass "finish: records adversarial_review=present" || fail "present not recorded"
+grep -q '"adversarial_review": "clean"' "$RUN4_DIR/meta.json" && pass "finish: empty findings + scope → clean" || fail "clean hunt not recorded"
+
+# --force is the escape hatch, and it is audited — skipping the review is visible forever
+$AOS run start --ticket "LIN-4b" >/dev/null
+RUN4B_DIR=$(active_run_dir)
+FORCED=$($AOS run finish --force)
+echo "$FORCED" | grep -q "FORCED" && pass "review gate: --force finishes but says so" || fail "forced finish not announced"
+grep -q '"adversarial_review": "forced"' "$RUN4B_DIR/meta.json" && pass "review gate: forced state recorded in meta" || fail "forced state not recorded"
+grep -q '"review_forced":true' "$RUN4B_DIR/audit.jsonl" && pass "review gate: force audited" || fail "forced finish not audited"
+
+# the other way into awaiting-review must clear the same gate, or the review is
+# one command away from being skipped
+$AOS run start --ticket "LIN-4c" >/dev/null
+BYPASS=$($AOS run state awaiting-review 2>&1) && fail "run state reached awaiting-review with no review" || true
+echo "$BYPASS" | grep -q "cannot reach awaiting-review" && pass "review gate: aos run state awaiting-review is gated too" || fail "state path bypasses the review gate"
+$AOS run state awaiting-review --force >/dev/null && pass "review gate: --force overrides on the state path too" || fail "forced state transition refused"
+
+# policy opt-out: `warn` keeps the pre-gate behaviour (record, never block)
+WARN_REPO="$WORK/warn-repo"; mkdir -p "$WARN_REPO"
+( cd "$WARN_REPO" && git init -q -b main && $AOS init --name warnproj >/dev/null )
+cat > "$AOS_HOME/projects/warnproj/policy.yaml" <<'EOF'
+version: 1
+verification:
+  adversarial_review: warn
+EOF
+( cd "$WARN_REPO" && $AOS run start --ticket "W-1" >/dev/null )
+WARN_FIN=$( cd "$WARN_REPO" && $AOS run finish )
+pass "review gate: adversarial_review=warn does not block"
+# warn's whole promise is that the warning still happens — a silent warn mode
+# is indistinguishable from off (regression caught in review, now pinned)
+echo "$WARN_FIN" | grep -q "recorded, not blocking" && pass "review gate: warn mode WARNS at finish" || fail "warn mode finished silently"
+grep -rq '"adversarial_review": "absent"' "$AOS_HOME/projects/warnproj/runs" && pass "review gate: warn mode still records the absence" || fail "warn mode recorded nothing"
+( cd "$WARN_REPO" && $AOS verify 2>/dev/null ) | grep -q "warn, not block" && pass "verify: warn mode message says warn, not required" || fail "verify misreports warn as a hard gate"
+
+# --force straight to done (skipping awaiting-review entirely) must be VISIBLE:
+# review state stamped in meta, in the audit line, and shown to the signing human
+$AOS run start --ticket "LIN-4d" >/dev/null
+RUN4D_DIR=$(active_run_dir)
+CLOSE_OUT=$($AOS run state "done" --force)
+echo "$CLOSE_OUT" | grep -q "Closed with adversarial review: absent" && pass "review gate: forced close warns the signing human" || fail "forced close was silent"
+grep -q '"adversarial_review": "absent"' "$RUN4D_DIR/meta.json" && pass "review gate: forced close stamps meta (not stuck pending)" || fail "forced close left adversarial_review=pending"
+grep -q '"adversarial_review":"absent"' "$RUN4D_DIR/audit.jsonl" && pass "review gate: forced close audited with review state" || fail "forced close audit has no review state"
+# finish --force must actually force the transition its error message advertises
+$AOS run start --ticket "LIN-4e" >/dev/null
+$AOS run finish --state "done" 2>/dev/null && fail "illegal finish transition accepted without force" || true
+$AOS run finish --state "done" --force >/dev/null && pass "review gate: finish --force forces the transition too" || fail "finish --force did not force the transition"
 
 # --- learnings capture: finish reminder, Stop-hook extraction, SessionEnd debt ---
 grep -q "hook stop" "$REPO/.claude/settings.json" && pass "init: Stop hook wired" || fail "Stop hook not wired"
@@ -319,6 +570,7 @@ printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos 
 for F in a b c; do
   printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Edit","tool_input":{"file_path":"src/'"$F"'.js"},"session_id":"sE"}' | $AOS hook post-tool
 done
+review_active
 FINISH5=$($AOS run finish)
 echo "$FINISH5" | grep -q "No learnings recorded" && pass "finish: reminds when no learnings yet" || fail "no learnings reminder"
 grep -q '"learnings_recorded": "absent"' "$RUN5_DIR/meta.json" && pass "finish: records learnings_recorded=absent" || fail "learnings absent not recorded"
@@ -347,6 +599,7 @@ RUN6_DIR="$AOS_HOME/projects/demo/runs/$RUN6"
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-6"},"session_id":"sF"}' | $AOS hook post-tool
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Read","tool_input":{"file_path":"'"$AOS_HOME"'/projects/demo/learnings.md"},"session_id":"sF"}' | $AOS hook post-tool
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"grep gate '"$AOS_HOME"'/projects/demo/context/decisions.md"},"session_id":"sF"}' | $AOS hook post-tool
+review_active
 $AOS run finish >/dev/null
 grep -q '"learnings_recorded": "absent"' "$RUN6_DIR/meta.json" && pass "finish: reads of learnings.md don't count as capture" || fail "read counted as memory write"
 # a learnings append (via shell redirect) clears the whole path: reminder, stop, and debt
@@ -355,10 +608,15 @@ RUN7=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1
 RUN7_DIR="$AOS_HOME/projects/demo/runs/$RUN7"
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-7"},"session_id":"sG"}' | $AOS hook post-tool
 printf '%s' '{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"echo learned >> '"$AOS_HOME"'/projects/demo/learnings.md"},"session_id":"sG"}' | $AOS hook post-tool
+review_active
 $AOS run finish >/dev/null
 grep -q '"learnings_recorded": "present"' "$RUN7_DIR/meta.json" && pass "finish: records learnings_recorded=present" || fail "learnings present not recorded"
+# The run is still at awaiting-review, so the review nudge fires — but the
+# learnings ask must not, and the two are independent.
 STOP4=$(printf '%s' '{"cwd":"'"$REPO"'","session_id":"sG"}' | $AOS hook stop)
-[ -z "$STOP4" ] && pass "stop: learnings written → no block" || fail "stop blocked despite learnings"
+echo "$STOP4" | grep -q "nothing was recorded to learnings.md" && fail "stop asked for learnings despite the write" \
+  || pass "stop: learnings written → no learnings ask"
+echo "$STOP4" | grep -q "awaiting-review" && pass "stop: the review ask is independent of the learnings ask" || fail "review ask missing"
 # session-end records the memory write, which retires the older debt at session-start
 printf '%s' '{"cwd":"'"$REPO"'","session_id":"sG"}' | $AOS hook session-end
 tail -1 "$AOS_HOME/projects/demo/sessions.jsonl" | grep -q '"memory_write":true' && pass "session-end: records memory write" || fail "memory write not recorded"
@@ -382,7 +640,209 @@ $AOS run state shipped --force >/dev/null
 grep -q '"state": "shipped"' "$RUN8_DIR/meta.json" && pass "state: --force overrides (escape hatch)" || fail "force override failed"
 grep -q '"forced":true' "$RUN8_DIR/audit.jsonl" && pass "state: forced transition audited" || fail "forced transition not audited"
 $AOS run state in-progress --force >/dev/null
+review_active
 $AOS run finish >/dev/null
+
+# --- in-session sign-off: the gate prompt IS the human's approval ---
+# Requiring a TTY put the sign-off in the one place the human never is — a
+# second terminal — so runs stayed at awaiting-review forever. The gate now
+# mints a single-use ticket when it asks, and the CLI accepts that as sign-off.
+SIGN_REPO="$WORK/signoff-repo"; mkdir -p "$SIGN_REPO"; (cd "$SIGN_REPO" && git init -q -b main)
+(cd "$SIGN_REPO" && $AOS init --name signoff >/dev/null)
+sign_start() {  # start a run and bind it to a session, the way the pipeline does
+  (cd "$SIGN_REPO" && $AOS run start --ticket "$1" >/dev/null)
+  printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket '"$1"'"},"session_id":"'"$2"'"}' | $AOS hook post-tool
+  node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/signoff/state.json"
+}
+RUNS=$(sign_start "LIN-S" sT)
+RUNS_DIR="$AOS_HOME/projects/signoff/runs/$RUNS"
+review_active signoff
+(cd "$SIGN_REPO" && $AOS run finish) | grep -q "close it with" \
+  && pass "finish: points at the in-session close, not a dashboard" || fail "finish gives no close instruction"
+
+# Stop: the run is at awaiting-review and this session is the last one that
+# knows what it did — surface the close here, not in a dashboard tomorrow.
+STOP_REV=$(printf '%s' '{"cwd":"'"$SIGN_REPO"'","session_id":"sT"}' | $AOS hook stop)
+echo "$STOP_REV" | grep -q "sitting at awaiting-review" && pass "stop: surfaces the open review before the session ends" || fail "stop did not surface the review"
+echo "$STOP_REV" | grep -q "prompt IS the human" && pass "stop: tells the agent the prompt is the sign-off" || fail "stop nudge missing sign-off instruction"
+STOP_REV2=$(printf '%s' '{"cwd":"'"$SIGN_REPO"'","session_id":"sT"}' | $AOS hook stop)
+[ -z "$STOP_REV2" ] && pass "stop: review nudge fires once per session" || fail "review nudge repeated"
+
+sign_gate() {  # the PreToolUse gate seeing the close command — mints the ticket
+  printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state '"$1"' --run '"$RUNS"'"},"session_id":"sT"}' | $AOS hook pre-tool
+}
+close_run() { (cd "$SIGN_REPO" && unset AOS_ALLOW_HEADLESS_APPROVE && $AOS run state "$1" --run "$RUNS" </dev/null) 2>&1; }
+
+# no TTY, no gate prompt, no CI override → refuse, and say where to sign off
+OUT_NOSIGN=$(close_run "done" || true)
+echo "$OUT_NOSIGN" | grep -q "needs a human sign-off" && pass "close: refused with no sign-off of any kind" || fail "unsigned close accepted"
+echo "$OUT_NOSIGN" | grep -q "interactive terminal" && pass "close: refusal still names the terminal route" || fail "refusal missing terminal route"
+
+# the gate asks → the human approves the prompt → the same command now closes
+sign_gate "done" | grep -q '"permissionDecision":"ask"' && pass "close: gate asks before the close runs" || fail "close not gated"
+# flag order must not decide whether the gate fires — `--run X done` is equally
+# valid CLI, and missing it left the agent in an unbreakable refusal loop
+printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state --run '"$RUNS"' done"},"session_id":"sT"}' | $AOS hook pre-tool \
+  | grep -q '"permissionDecision":"ask"' && pass "close: gate fires whatever the flag order" || fail "flag order evaded the sign-off gate"
+printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state in-progress --run '"$RUNS"'"},"session_id":"sT"}' | $AOS hook pre-tool \
+  | grep -q 'review-close' && fail "reopening a run demanded sign-off" || pass "close: reopening stays ungated"
+close_run "done" >/dev/null
+grep -q '"state": "done"' "$RUNS_DIR/meta.json" && pass "close: gate-prompt approval closes the run in-session" || fail "gate ticket not accepted"
+grep -q '"via": "gate-prompt"' "$RUNS_DIR/meta.json" && pass "close: sign-off route recorded as gate-prompt" || fail "sign-off route not recorded"
+
+# single-use: the same approval cannot close a second time
+(cd "$SIGN_REPO" && $AOS run state awaiting-review --run "$RUNS" >/dev/null)
+close_run "done" >/dev/null 2>&1 && fail "consumed ticket reused" || pass "close: sign-off ticket is single-use"
+# and a plan-approval prompt is not a close approval
+printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sT"}' | $AOS hook pre-tool >/dev/null
+close_run "done" >/dev/null 2>&1 && fail "plan-approve ticket closed a run" || pass "close: tickets are bound to their action"
+
+# review_capture: false opts out (last — it replaces the policy wholesale)
+RUNU=$(sign_start "LIN-U" sU)
+review_active signoff
+(cd "$SIGN_REPO" && $AOS run finish >/dev/null)
+printf 'version: 1\nreview_capture: false\n' > "$AOS_HOME/projects/signoff/policy.yaml"
+STOP_OFF=$(printf '%s' '{"cwd":"'"$SIGN_REPO"'","session_id":"sU"}' | $AOS hook stop)
+echo "$STOP_OFF" | grep -q "sitting at awaiting-review" && fail "review_capture false still nudged ($RUNU)" \
+  || pass "stop: review_capture false disables the nudge"
+
+# --- scope gate: the plan declares its files, drift asks ---
+# Self-activating: a plan with no Files section gates nothing, so no existing
+# project changes behaviour. Declaring the section is the opt-in.
+SCOPE_REPO="$WORK/scope-repo"; mkdir -p "$SCOPE_REPO/src" "$SCOPE_REPO/docs"
+(cd "$SCOPE_REPO" && git init -q -b main && $AOS init --name scoped >/dev/null)
+(cd "$SCOPE_REPO" && $AOS run start --ticket "LIN-SC" >/dev/null)
+SCOPE_RUN_DIR=$(active_run_dir scoped)
+scope_write() {
+  printf '%s' '{"cwd":"'"$SCOPE_REPO"'","tool_name":"Write","tool_input":{"file_path":"'"$SCOPE_REPO"'/'"$1"'","content":"x"},"session_id":"sV"}' | $AOS hook pre-tool
+}
+[ -z "$(scope_write src/anything.js)" ] && pass "scope: no plan.md → nothing gated" || fail "scope gated without a plan"
+cat > "$SCOPE_RUN_DIR/plan.md" <<'PLAN'
+# Plan
+## Approach
+Tighten the gate.
+## Files
+- `src/gate.js` — extend the check to Bash redirects
+- src/policy.js
+- docs/ (the tier table)
+- test/**/*.sh
+- Add tests: test/labelled.sh
+- Do not touch config/production.yaml
+- No changes to src/untouchable.js
+- Add a helper for flag clusters
+## Risks
+None worth noting.
+PLAN
+[ -z "$(scope_write src/gate.js)" ] && pass "scope: declared file → allow" || fail "declared file gated"
+[ -z "$(scope_write docs/tiers.md)" ] && pass "scope: file under a declared directory → allow" || fail "declared directory gated"
+[ -z "$(scope_write test/deep/x.sh)" ] && pass "scope: glob match → allow" || fail "declared glob gated"
+scope_write src/other.js | grep -q '"permissionDecision":"ask"' && pass "scope: undeclared file → ask" || fail "scope drift not gated"
+scope_write src/other.js | grep -q "outside the scope plan.md declared" && pass "scope: reason names the plan and the declared list" || fail "scope reason unhelpful"
+# a labelled path (`Add tests: test/x.sh`) is a real declaration, not prose
+[ -z "$(scope_write test/labelled.sh)" ] && pass "scope: 'Label: path' lines still count as declared" || fail "labelled path dropped"
+# ...but prose that FORBIDS a file must never be read as declaring it — a scope
+# gate that grants what the plan excludes is worse than no scope gate at all
+for CMD in config/production.yaml src/untouchable.js; do
+  scope_write "$CMD" | grep -q '"permissionDecision":"ask"' || fail "negation prose granted scope: $CMD"
+done
+pass "scope: 'Do not touch X' does not declare X"
+# the repo-relative path comes from the REPO root, not the session's cwd — a
+# session started in a subdirectory used to invert the gate entirely
+mkdir -p "$SCOPE_REPO/packages/web"
+scope_sub() {
+  printf '%s' '{"cwd":"'"$SCOPE_REPO"'/packages/web","tool_name":"Write","tool_input":{"file_path":"'"$SCOPE_REPO"'/'"$1"'","content":"x"},"session_id":"sV"}' | $AOS hook pre-tool
+}
+[ -z "$(scope_sub src/gate.js)" ] && pass "scope: declared file allowed from a subdirectory session" || fail "subdir session flagged a declared file"
+scope_sub src/other.js | grep -q '"permissionDecision":"ask"' && pass "scope: drift still caught from a subdirectory session" || fail "subdir session missed scope drift"
+# writes into the run folder and project memory stay open
+printf '%s' '{"cwd":"'"$SCOPE_REPO"'","tool_name":"Write","tool_input":{"file_path":"'"$SCOPE_RUN_DIR"'/outcome.md","content":"x"},"session_id":"sV"}' | $AOS hook pre-tool \
+  | grep -q 'plan-scope' && fail "run folder gated by scope" || pass "scope: the run's own files stay writable"
+# and the gate is switchable
+printf 'version: 1\nscope_gate: false\n' > "$AOS_HOME/projects/scoped/policy.yaml"
+[ -z "$(scope_write src/other.js)" ] && pass "scope: scope_gate false disables it" || fail "scope_gate opt-out ignored"
+
+# --- dry run: record what would gate, enforce nothing, and say so loudly ---
+printf 'version: 1\ndry_run: true\n' > "$AOS_HOME/projects/scoped/policy.yaml"
+DRY_PUSH='{"cwd":"'$SCOPE_REPO'","tool_name":"Bash","tool_input":{"command":"git push origin main"},"session_id":"sV"}'
+[ -z "$(printf '%s' "$DRY_PUSH" | $AOS hook pre-tool)" ] && pass "dry-run: gate emits no decision (tool proceeds)" || fail "dry-run still enforced"
+grep -rq '"dry_run":true' "$AOS_HOME/projects/scoped/" && pass "dry-run: the suppressed decision is audited" || fail "dry-run decision not recorded"
+$AOS status | grep -q "DRY RUN — gates are recording, not enforcing" && pass "status: dry run is called out loudly" || fail "dry run not surfaced in status"
+$AOS status | grep -q "ask:git-push" && pass "status: dry run breaks down what it suppressed" || fail "dry run breakdown missing"
+(cd "$SCOPE_REPO" && $AOS doctor >/dev/null 2>&1) && fail "doctor passed while gates were off" || pass "doctor: dry run is a failure, not a note"
+# doctor exits 1 here by design, so capture before grepping (pipefail)
+DOCTOR_DRY=$( (cd "$SCOPE_REPO" && $AOS doctor 2>&1) || true )
+echo "$DOCTOR_DRY" | grep -q "RECORDED, not enforced" && pass "doctor: says exactly what dry run means" || fail "doctor dry-run message unclear"
+# dry run must not make closing a run the one thing it makes HARDER: the gate
+# never prompts, so no ticket can exist, and requiring one would deadlock.
+(cd "$SCOPE_REPO" && $AOS run start --ticket "LIN-DR" >/dev/null)
+DR_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/scoped/state.json")
+review_active scoped
+(cd "$SCOPE_REPO" && $AOS run finish >/dev/null)
+(cd "$SCOPE_REPO" && unset AOS_ALLOW_HEADLESS_APPROVE && $AOS run state "done" --run "$DR_RUN" </dev/null >/dev/null) \
+  && pass "dry-run: a run can still be closed" || fail "dry run deadlocked the close"
+grep -q '"via": "dry-run"' "$AOS_HOME/projects/scoped/runs/$DR_RUN/meta.json" \
+  && pass "dry-run: the close records that no human was actually asked" || fail "dry-run close route not recorded"
+
+# --- cost: attribution, groupings, and the price tag on the run ---
+$AOS cost --all | grep -q "Estimated cost at API list prices" && pass "cost: reports at list prices" || fail "cost command broken"
+$AOS cost --all | grep -q "Session spend" && pass "cost: separates session spend from run spend" || fail "cost conflates session and run spend"
+for BY in run model contract; do
+  $AOS cost --all --by "$BY" >/dev/null || fail "cost --by $BY failed"
+done
+pass "cost: run / model / contract groupings all render"
+$AOS cost --all --since 7d | grep -q "since 7d" && pass "cost: --since windows the report" || fail "--since ignored"
+$AOS cost --since nonsense >/dev/null 2>&1 && fail "unreadable --since accepted" || pass "cost: unreadable --since refused"
+$AOS cost --by wat >/dev/null 2>&1 && fail "unknown --by accepted" || pass "cost: unknown --by refused"
+# the price tag is stamped after tokens settle, not at finish (they aren't final yet)
+COST_REPO="$WORK/cost-repo"; mkdir -p "$COST_REPO"; (cd "$COST_REPO" && git init -q -b main)
+(cd "$COST_REPO" && $AOS init --name costed >/dev/null && $AOS run start --ticket "LIN-C" >/dev/null)
+COST_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/costed/state.json")
+COST_DIR="$AOS_HOME/projects/costed/runs/$COST_RUN"
+echo "# Outcome" > "$COST_DIR/outcome.md"
+printf '%s' '{"cwd":"'"$COST_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run start --ticket LIN-C"},"session_id":"sW"}' | $AOS hook post-tool
+review_active costed
+(cd "$COST_REPO" && $AOS run finish >/dev/null)
+printf '%s' '{"cwd":"'"$COST_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sW","transcript_path":"'"$TRANSM"'"}' | $AOS hook post-tool
+grep -q '## Cost' "$COST_DIR/outcome.md" && pass "cost: outcome.md carries the run's price tag" || fail "outcome.md not stamped"
+grep -q 'aos:cost' "$COST_DIR/outcome.md" && pass "cost: the stamp is marked so it can be replaced, not duplicated" || fail "cost stamp unmarked"
+STAMPS_BEFORE=$(grep -c 'aos:cost' "$COST_DIR/outcome.md")
+printf '%s' '{"cwd":"'"$COST_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sW","transcript_path":"'"$TRANSM"'"}' | $AOS hook post-tool
+[ "$(grep -c 'aos:cost' "$COST_DIR/outcome.md")" = "$STAMPS_BEFORE" ] && pass "cost: re-stamping replaces, never duplicates" || fail "cost stamp duplicated"
+grep -q "# Outcome" "$COST_DIR/outcome.md" && pass "cost: the agent's own outcome.md content survives stamping" || fail "cost stamp clobbered outcome.md"
+# content appended BELOW the stamp (reviewer notes on a reopened run) must
+# survive a re-stamp too — replacing marker-to-EOF silently deleted it
+printf '\n## Reviewer notes\n\nLooks good to me.\n' >> "$COST_DIR/outcome.md"
+printf '%s' '{"cwd":"'"$COST_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sW","transcript_path":"'"$TRANSM"'"}' | $AOS hook post-tool
+grep -q "## Reviewer notes" "$COST_DIR/outcome.md" && pass "cost: re-stamping preserves content below the stamp" || fail "re-stamp deleted content below it"
+[ "$(grep -c 'aos:cost' "$COST_DIR/outcome.md")" = "2" ] && pass "cost: exactly one delimited stamp remains" || fail "stamp markers duplicated"
+# a malformed marker pair (END before START) must not append forever
+printf '<!-- /aos:cost -->\n\n# Outcome\n' > "$COST_DIR/outcome.md"
+for _ in 1 2 3; do
+  printf '%s' '{"cwd":"'"$COST_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sW","transcript_path":"'"$TRANSM"'"}' | $AOS hook post-tool
+done
+[ "$(grep -c 'aos:cost' "$COST_DIR/outcome.md")" = "2" ] \
+  && pass "cost: malformed markers converge on one stamp, not an endless append" || fail "malformed markers appended repeatedly"
+
+
+# --- init --hooks-only: the layer that works without invoking anything ---
+HO_REPO="$WORK/hooks-only-repo"; mkdir -p "$HO_REPO"; (cd "$HO_REPO" && git init -q -b main)
+(cd "$HO_REPO" && $AOS init --name hooksonly --hooks-only >/dev/null)
+[ -d "$HO_REPO/.claude/skills" ] && fail "--hooks-only installed skills" || pass "init --hooks-only: no skills installed"
+grep -q "hook pre-tool" "$HO_REPO/.claude/settings.json" && pass "init --hooks-only: hooks still wired" || fail "--hooks-only skipped hooks"
+[ -f "$AOS_HOME/projects/hooksonly/policy.yaml" ] && pass "init --hooks-only: policy scaffolded (it IS the gate)" || fail "--hooks-only skipped policy"
+[ -f "$AOS_HOME/projects/hooksonly/context/pack.md" ] && pass "init --hooks-only: context pack scaffolded (it IS the memory)" || fail "--hooks-only skipped pack"
+(cd "$HO_REPO" && $AOS init --name hooksonly >/dev/null)
+[ -d "$HO_REPO/.claude/skills" ] && pass "init: a later full init adds the pipeline skills" || fail "upgrade from hooks-only failed"
+
+# --- CLI robustness: a value-less flag must not reach path.join as `true` ---
+for SUB in "run session" "run review" "run state done"; do
+  # shellcheck disable=SC2086  # SUB is a deliberate two-word subcommand
+  OUT_BAREFLAG=$( (cd "$REPO" && $AOS $SUB --run </dev/null) 2>&1 || true )
+  echo "$OUT_BAREFLAG" | grep -q "must be of type string" && fail "aos $SUB --run crashed on a bare flag"
+done
+pass "cli: --run with no value degrades instead of throwing a type error"
+$AOS doctor >/dev/null 2>&1 || true   # doctor must never throw either
+pass "cli: doctor survives a fully-populated home"
 
 # --- context: template nudge, learnings overflow, budgeted pack ---
 CTX_REPO="$WORK/ctx-repo"; mkdir -p "$CTX_REPO"
@@ -467,6 +927,59 @@ AOS_HOME="$IMPORT_HOME" node --input-type=module \
 # --- doctor ---
 $AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "doctor exit code"
 $AOS doctor 2>/dev/null | grep -q "All clear" && pass "doctor: reports all clear" || fail "doctor output"
+$AOS doctor 2>/dev/null | grep -q "hook command resolves" && pass "doctor: verifies the hook command actually resolves" || fail "hook resolution not checked"
+
+# --- fail-open: a broken hook must never break the session, but must leave a trace ---
+# Every hook swallows its own errors and exits 0 (a broken gate allows rather
+# than blocks). That is deliberate — and it is exactly why the trace matters:
+# without it, a crashing gate is indistinguishable from a quiet one.
+BROKEN_OUT=$(printf 'not json' | $AOS hook pre-tool 2>&1)
+[ -z "$BROKEN_OUT" ] && pass "fail-open: crashing hook emits no decision (Claude Code proceeds)" || fail "broken hook wrote output"
+printf 'not json' | $AOS hook pre-tool >/dev/null 2>&1 && pass "fail-open: crashing hook still exits 0" || fail "broken hook exited non-zero"
+for H in post-tool session-start session-end stop; do
+  printf 'not json' | $AOS hook "$H" >/dev/null 2>&1 || fail "hook $H exited non-zero on malformed input"
+done
+pass "fail-open: every hook entry point survives malformed input"
+grep -q '"hook":"pre-tool"' "$AOS_HOME/hook-errors.log" && pass "fail-open: the swallowed failure is logged" || fail "hook failure not logged"
+# (captured, not piped: doctor exits 1 here and the suite runs under pipefail)
+DOC_ERRS=$($AOS doctor 2>/dev/null || true)
+echo "$DOC_ERRS" | grep -q "hook failure(s) logged" && pass "doctor: surfaces silently-failed hooks" || fail "doctor missed hook-errors.log"
+$AOS doctor >/dev/null 2>&1 && fail "doctor exited 0 with logged hook failures" || pass "doctor: logged hook failures → exit 1"
+rm -f "$AOS_HOME/hook-errors.log"
+
+# --- silently-absent gate: the hook command no longer resolves ---
+# The launcher ends in `|| true` so a moved or uninstalled aos can never break a
+# session — which is precisely what makes it dangerous: every gate turns off and
+# nothing looks wrong. Both halves are tested: the shell contract holds, and
+# doctor detects the condition.
+# shellcheck disable=SC2016  # $HOME must stay literal — the shell in the hook expands it
+GONE_CMD='"$HOME/nonexistent-aos-launcher/aos" hook pre-tool 2>/dev/null || aos hook pre-tool 2>/dev/null || true'
+GONE_OUT=$(env PATH=/nonexistent-bin /bin/bash -c "$GONE_CMD" </dev/null 2>&1)
+[ -z "$GONE_OUT" ] && pass "missing binary: hook chain stays silent" || fail "missing-aos hook emitted output"
+env PATH=/nonexistent-bin /bin/bash -c "$GONE_CMD" </dev/null >/dev/null 2>&1 \
+  && pass "missing binary: hook chain exits 0 (session unbroken, gates OFF)" || fail "missing-aos hook broke the session"
+# doctor is the only thing standing between that and an invisible loss of gating
+GONE_REPO="$WORK/gone-repo"; mkdir -p "$GONE_REPO"
+( cd "$GONE_REPO" && git init -q -b main && $AOS init --name goneproj >/dev/null )
+# shellcheck disable=SC2016  # the $HOME inside the rewritten hook command is literal
+node -e '
+  const fs = require("fs"); const p = process.argv[1];
+  const s = JSON.parse(fs.readFileSync(p, "utf8"));
+  for (const ev of Object.keys(s.hooks)) {
+    for (const entry of s.hooks[ev]) {
+      for (const h of entry.hooks || []) {
+        h.command = h.command.replace(/^"[^"]+"/, "\"$HOME/nonexistent-aos-launcher/aos\"");
+      }
+    }
+  }
+  fs.writeFileSync(p, JSON.stringify(s, null, 2));
+' "$GONE_REPO/.claude/settings.json"
+# a PATH with node but deliberately no aos — the `|| aos` fallback must not resolve either
+NODE_ONLY="$WORK/node-only-bin"; mkdir -p "$NODE_ONLY"
+ln -sf "$(command -v node)" "$NODE_ONLY/node"
+GONE_DOC=$( cd "$GONE_REPO" && PATH="$NODE_ONLY" $AOS doctor 2>&1 || true )
+echo "$GONE_DOC" | grep -q "SILENTLY OFF" && pass "doctor: detects wired-but-unresolvable hooks" || fail "unresolvable hook command not detected"
+( cd "$GONE_REPO" && PATH="$NODE_ONLY" $AOS doctor >/dev/null 2>&1 ) && fail "doctor exited 0 with dead hook commands" || pass "doctor: dead hook command → exit 1"
 
 # --- console API + security ---
 # extra run docs (findings.md, reviews/*.md) must be served alongside the canonical four

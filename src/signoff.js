@@ -1,0 +1,57 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { projectDir, readJson, writeJson, nowIso } from './paths.js';
+
+// In-session human sign-off.
+//
+// Requiring a TTY to close a run was right about WHO may close one and wrong
+// about WHERE: the human is in the Claude Code session, not a second terminal,
+// so the close needed a context switch and runs piled up at awaiting-review
+// instead. The gate already stops `aos run state done` and shows the human the
+// exact command, so it mints a single-use ticket when it asks and the CLI
+// consumes it as sign-off.
+//
+// What the ticket proves: the command was gated, then it ran — a sequence that
+// cannot occur without someone approving the prompt. What it does not prove:
+// that no agent invoked `aos hook pre-tool` to mint one itself. That is the
+// deliberately-adversarial model the hook layer already declines to cover, and
+// such an agent would simply pass --force instead.
+const TICKET_FILE = 'signoff.json';
+// Short enough that an approval can't be banked for later, long enough to
+// survive the agent narrating its summary between the prompt and the command.
+const TICKET_TTL_MS = 5 * 60 * 1000;
+
+function ticketPath(projectId) {
+  return path.join(projectDir(projectId), TICKET_FILE);
+}
+
+// Called by the PreToolUse gate, at the moment it decides to ask.
+export function recordSignoffTicket(projectId, { action, command, session }) {
+  try {
+    writeJson(ticketPath(projectId), {
+      action,
+      command: String(command || '').slice(0, 300),
+      session: session || null,
+      ts: nowIso(),
+    });
+  } catch {
+    // A ticket that can't be written just falls back to the TTY requirement —
+    // never let this break the gate.
+  }
+}
+
+// Single-use: the ticket is removed whether or not it matched, so a stale or
+// mismatched approval can never be spent on a later command.
+export function consumeSignoffTicket(projectId, action) {
+  const file = ticketPath(projectId);
+  const ticket = readJson(file, null);
+  try {
+    fs.unlinkSync(file);
+  } catch {
+    // already gone (or never existed)
+  }
+  if (!ticket || ticket.action !== action) return null;
+  const age = Date.now() - Date.parse(ticket.ts || '');
+  if (!Number.isFinite(age) || age < 0 || age > TICKET_TTL_MS) return null;
+  return ticket;
+}
