@@ -4,3 +4,9 @@ node_modules/
 
 # generated per-machine by `aos init` (absolute hook paths)
 .claude/
+
+# per-machine agent tooling, not part of AOS: skill installers vendor whole
+# upstream repos in here, which would publish third-party code (and its
+# licensing) inside this one.
+.agents/
+skills-lock.json
