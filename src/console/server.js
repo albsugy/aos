@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fullState, projectSummary } from '../status.js';
 import { runDir, runMeta } from '../run.js';
-import { reviewMode } from '../review.js';
+import { reviewMode, reviewState } from '../review.js';
 import { projectDir, readIfExists, tailLines } from '../paths.js';
 import { readSessions } from '../sessions.js';
 import { getProject } from '../registry.js';
@@ -165,6 +165,12 @@ function runDetail(projectId, runId) {
     plan: readIfExists(path.join(dir, 'plan.md')),
     outcome: readIfExists(path.join(dir, 'outcome.md')),
     verification: readIfExists(path.join(dir, 'verification.md')),
+    // The adversarial review, parsed by the same code the finish gate uses —
+    // it is the one quality claim AOS enforces, and the console could not show
+    // it at all while extraDocs only enumerated markdown. Sending the validated
+    // shape (not raw JSON) keeps the console and the gate from ever disagreeing
+    // about what a review says.
+    review: reviewState(projectId, runId),
     docs: extraDocs(dir),
   };
 }

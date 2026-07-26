@@ -981,11 +981,34 @@ GONE_DOC=$( cd "$GONE_REPO" && PATH="$NODE_ONLY" $AOS doctor 2>&1 || true )
 echo "$GONE_DOC" | grep -q "SILENTLY OFF" && pass "doctor: detects wired-but-unresolvable hooks" || fail "unresolvable hook command not detected"
 ( cd "$GONE_REPO" && PATH="$NODE_ONLY" $AOS doctor >/dev/null 2>&1 ) && fail "doctor exited 0 with dead hook commands" || pass "doctor: dead hook command → exit 1"
 
+# --- console: the review vocabulary must not drift from the gate ---
+# The console counted `adversarial_review === 'present'`, a pre-0.11 value.
+# When the gate started emitting clean/resolved/open/invalid/forced instead,
+# every run finished under the new schema silently vanished from the coverage
+# stat — including `forced`, the one an operator most needs to see. Nothing
+# failed, the number just quietly stopped being true. So: every state the gate
+# can stamp must be named somewhere in the console.
+# shellcheck disable=SC2016  # the $ inside the node script must not expand here
+node -e '
+  const fs = require("fs");
+  const ui = fs.readFileSync(process.argv[1], "utf8");
+  const states = ["clean", "resolved", "open", "invalid", "absent", "forced", "not-required", "present"];
+  const missing = states.filter((st) => !ui.includes(`"${st}"`) && !ui.includes(`\x27${st}\x27`));
+  if (missing.length) {
+    console.error("console does not handle review state(s): " + missing.join(", "));
+    process.exit(1);
+  }
+' "$ROOT/src/console/ui.html" \
+  && pass "console: handles every review state the gate can stamp" || fail "console review vocabulary drifted from review.js"
+
 # --- console API + security ---
 # extra run docs (findings.md, reviews/*.md) must be served alongside the canonical four
 printf '# Findings\n\nRoot cause: flux capacitor.\n' > "$RUN_DIR/findings.md"
 mkdir -p "$RUN_DIR/reviews"
 printf '# Arch review\n\nLooks sound.\n' > "$RUN_DIR/reviews/arch.md"
+# a review with a real finding, so the served payload is the parsed shape and
+# not just an empty envelope
+printf '%s' '{"reviewer":"skeptic subagent","scope":["src/demo.js"],"findings":[{"severity":"high","summary":"the gate never fires on the shell path","location":"src/demo.js:12","status":"fixed","resolution":"extended the check to redirects and tee"}]}' > "$RUN_DIR/review.json"
 # a symlink planted in the run folder must NOT be served (file disclosure guard)
 ln -s /etc/hosts "$RUN_DIR/leak.md"
 # neither must a hardlink (same filesystem — link to AOS state)
@@ -1008,8 +1031,19 @@ case "$DETAIL" in *'"reviews/arch.md"'*) pass "console API: reviews/ docs enumer
 case "$DETAIL" in *'"leak.md"'*) kill $CONSOLE_PID; fail "symlinked doc was served (file disclosure)" ;; *) pass "console security: symlinked docs skipped";; esac
 case "$DETAIL" in *'"hardleak.md"'*) kill $CONSOLE_PID; fail "hardlinked doc was served (file disclosure)" ;; *) pass "console security: hardlinked docs skipped";; esac
 case "$DETAIL" in *'"dir_display"'*) pass "console API: home-relative display path present" ;; *) kill $CONSOLE_PID; fail "dir_display missing";; esac
+# The adversarial review is the one quality claim the finish gate enforces, so
+# the console must be able to show it — extraDocs only enumerates markdown, and
+# review.json lived entirely outside the console until it was sent explicitly.
+case "$DETAIL" in *'"review"'*) pass "console API: the run's adversarial review is served" ;; *) kill $CONSOLE_PID; fail "review not served";; esac
+case "$DETAIL" in *'skeptic subagent'*) kill $CONSOLE_PID; fail "raw reviewer string leaked instead of parsed state";; *) : ;; esac
+case "$DETAIL" in *'never fires on the shell path'*) pass "console API: review findings included" ;; *) kill $CONSOLE_PID; fail "review findings missing";; esac
+# leverage_sample is what lets the console tell "no finished runs" apart from
+# "too few to rate" — collapsing them made it report "no data" for projects
+# that had finished runs.
+case "$STATE" in *'"leverage_sample"'*) pass "console API: leverage sample exposed" ;; *) kill $CONSOLE_PID; fail "leverage_sample missing";; esac
 PROJ=$(curl -s "http://127.0.0.1:$PORT/api/project?project=demo")
 case "$PROJ" in *'"policy"'*) pass "console API: project detail";; *) kill $CONSOLE_PID; fail "console project detail";; esac
+case "$PROJ" in *'"adversarial_review_mode"'*) pass "console API: review mode is the tri-state, not a boolean" ;; *) kill $CONSOLE_PID; fail "adversarial_review_mode missing";; esac
 PMISS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/project?project=nope")
 [ "$PMISS" = "404" ] && pass "console API: unknown project → 404" || { kill $CONSOLE_PID; fail "unknown project ($PMISS)"; }
 UI=$(curl -s "http://127.0.0.1:$PORT/")

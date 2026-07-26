@@ -140,6 +140,7 @@
   .lev .bar { width: 60px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
   .lev .bar i { display: block; height: 100%; background: var(--s-good); }
   .lev .n { font: 600 12px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .lev .unrated { font: 11px var(--sans); color: var(--ink-3); }
 
   .empty { padding: 34px 20px; text-align: center; color: var(--ink-3); font: italic 15px/1.6 var(--serif); }
   .empty code { font-style: normal; font-size: 12.5px; }
@@ -188,6 +189,22 @@
   details.mem summary:hover { color: var(--ink); }
   details.mem summary .cnt { margin-left: auto; color: var(--ink-4); font: 11px var(--mono); }
   details.mem .inner { padding: 0 18px 16px 26px; }
+  .alarm { display: flex; flex-direction: column; gap: 4px; margin: 0 0 18px; padding: 12px 16px; border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--s-block) 45%, var(--rule)); background: color-mix(in srgb, var(--s-block) 9%, var(--surface));
+    color: var(--s-block); font-size: 12.5px; line-height: 1.5; }
+  .alarm span { color: var(--ink-2); }
+  .alarm code { font: 11.5px var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .rvhead { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+  .rvcount { font: 11px var(--sans); color: var(--ink-3); }
+  .rvres { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+  .tag.high, .tag.medium, .tag.low, .tag.fixed, .tag.dismissed, .tag.deferred, .tag.open,
+  .tag.clean, .tag.resolved, .tag.invalid, .tag.forced, .tag.absent { text-transform: none; }
+  .tag.high, .tag.open, .tag.invalid, .tag.forced, .tag.absent { color: var(--s-block); background: color-mix(in srgb, var(--s-block) 10%, var(--surface)); }
+  .tag.medium, .tag.deferred { color: var(--s-await); background: color-mix(in srgb, var(--s-await) 11%, var(--surface)); }
+  .tag.fixed, .tag.clean, .tag.resolved { color: var(--s-good); background: color-mix(in srgb, var(--s-good) 11%, var(--surface)); }
+  .tag.low, .tag.dismissed { color: var(--ink-3); }
+  .tag.high i, .tag.open i, .tag.invalid i, .tag.forced i, .tag.medium i, .tag.deferred i,
+  .tag.fixed i, .tag.clean i, .tag.resolved i { background: currentColor; }
   .kv { display: flex; justify-content: space-between; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
   .kv:last-child { border-bottom: none; }
   .kv .k { color: var(--ink-3); }
@@ -330,10 +347,44 @@ const STATE_TIP = {
 };
 const VERIFY_TIP = { pass: 'All required contracts passed', fail: 'A required contract failed', pending: 'Not verified yet' };
 function chip(val, tip) { return `<span class="tag ${esc(val)}" title="${esc(tip || '')}"><i></i>${esc(val)}</span>`; }
-function leverage(v) {
-  if (v === null || v === undefined) return '<span class="tag pending" title="No finished runs yet"><i></i>no data</span>';
-  return `<span class="lev" title="Share of finished runs that passed verification on the first attempt"><span class="bar"><i style="width:${v}%"></i></span><span class="n">${v}%</span></span>`;
+/* Three states, not two. `leverage` is null both when nothing has finished AND
+   when too few runs have finished to support a percentage, and collapsing those
+   made the console report "no data" for projects with finished runs. */
+function leverage(p) {
+  const s = p.leverage_sample || { clean: 0, total: 0 };
+  if (!s.total) return '<span class="tag pending" title="No finished runs yet"><i></i>no runs yet</span>';
+  if (p.leverage === null || p.leverage === undefined) {
+    return `<span class="lev" title="${s.clean} of ${s.total} finished runs passed verification first time — too few runs to quote a rate"><span class="n">${s.clean}/${s.total}</span><span class="unrated">clean first pass</span></span>`;
+  }
+  return `<span class="lev" title="Share of finished runs that passed verification on the first attempt (${s.clean} of ${s.total})"><span class="bar"><i style="width:${p.leverage}%"></i></span><span class="n">${p.leverage}%</span></span>`;
 }
+
+/* The review states a finished run can carry. `present` is pre-0.11 and still
+   appears on older runs; the gate now emits clean/resolved/open/invalid/forced.
+   Counting only `present` silently dropped every run finished under the new
+   schema — including `forced`, the one an operator most needs to see. */
+const REVIEW_RECORDED = new Set(['present', 'clean', 'resolved']);
+const REVIEW_MISSING = new Set(['absent', 'invalid', 'open']);
+/* A project in dry_run looks perfectly healthy from inside a session, because
+   nothing ever prompts. The console is where that has to be impossible to miss:
+   `aos status` shouts about it and `aos doctor` fails on it, and this was the
+   one surface that stayed silent. */
+function dryRunBanner(p) {
+  if (!p.dry_run) return '';
+  const by = Object.entries(p.dry_run.byAction || {}).sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${n}x ${k}`).join(' · ');
+  return `<div class="alarm" role="status"><b>Dry run — gates are recording, not enforcing.</b>
+    <span>${p.dry_run.total} decision${p.dry_run.total === 1 ? '' : 's'} suppressed${by ? ` · ${esc(by)}` : ''}.
+    Nothing is blocked and nothing prompts. Set <code>dry_run: false</code> in policy.yaml to enforce.</span></div>`;
+}
+
+/* Keeps usernames out of screenshots, the same reason the run view shows
+   ~/.aos/... rather than the absolute path. */
+function homeRel(pathStr) {
+  const m = /^(\/(?:Users|home)\/[^/]+)(\/.*)?$/.exec(String(pathStr || ''));
+  return m ? '~' + (m[2] || '') : pathStr;
+}
+
 function needsYou(p) { return p.runs.filter(r => r.state === 'awaiting-review' || r.state === 'blocked').length; }
 /* runs are sorted by created — an older run touched later must still win */
 function lastActivity(p) { return p.runs.reduce((m, r) => (!m || r.updated > m ? r.updated : m), null); }
@@ -566,7 +617,7 @@ function renderOverview() {
     const last = lastActivity(p);
     html += `<a class="pcard" href="#/p/${encodeURIComponent(p.id)}">
       <div class="top"><span class="name">${esc(p.name)}</span><span class="age" title="${esc(last || '')}">${last ? rel(last) : ''}</span></div>
-      <div class="row">${leverage(p.leverage)}${p.activeRun ? `<span class="active">● ${esc(p.activeRun)}</span>` : ''}</div>
+      <div class="row">${leverage(p)}${p.dry_run ? '<span class="tag blocked" title="Gates are recording, not enforcing">dry run</span>' : ''}${p.activeRun ? `<span class="active">● ${esc(p.activeRun)}</span>` : ''}</div>
       <div class="row">${counts || '<span class="tag pending"><i></i>no runs</span>'}</div>
       <div class="tok" title="Fresh input · output tokens across sessions">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out</div>
     </a>`;
@@ -581,15 +632,15 @@ function renderProject(r) {
   const d = projCache.get(r.id); // may be undefined while loading
   const open = p.runs.filter(x => ['in-progress', 'blocked', 'awaiting-review'].includes(x.state));
 
-  let html = `<div class="phead"><h1>${esc(p.name)}</h1>
-    <span class="repo" title="${esc((p.repos || []).join('\n'))}">${esc((p.repos || [])[0] || '')}</span>
+  let html = dryRunBanner(p) + `<div class="phead"><h1>${esc(p.name)}</h1>
+    <span class="repo" title="${esc((p.repos || []).join('\n'))}">${esc(homeRel((p.repos || [])[0] || ''))}</span>
     ${p.activeRun ? `<a class="active" href="#/p/${encodeURIComponent(p.id)}/r/${encodeURIComponent(p.activeRun)}">● active: ${esc(p.activeRun)}</a>` : ''}
   </div>`;
 
   const cycles = p.runs.map(cycleMs).filter(Boolean).sort((a, b) => a - b);
   const medianCycle = cycles.length ? cycles[Math.floor(cycles.length / 2)] : null;
   html += `<div class="kpis">
-    <div class="kpi"><div class="l">Leverage</div><div class="v">${p.leverage === null ? '<small>no finished runs</small>' : p.leverage + '<small>%</small>'}</div><div class="sub">clean-first-pass rate</div></div>
+    <div class="kpi"><div class="l">Leverage</div><div class="v">${(() => { const s = p.leverage_sample || { clean: 0, total: 0 }; if (!s.total) return '<small>no finished runs</small>'; if (p.leverage === null) return `${s.clean}<small>/${s.total}</small>`; return p.leverage + '<small>%</small>'; })()}</div><div class="sub">${(p.leverage_sample && p.leverage_sample.total && p.leverage === null) ? 'clean first pass · too few to rate' : 'clean-first-pass rate'}</div></div>
     <div class="kpi" title="${medianCycle ? 'Median time from run start to awaiting-review' : ''}"><div class="l">Runs</div><div class="v">${p.runs.length}</div><div class="sub">${open.length} open${medianCycle ? ` · median cycle ${fmtDur(medianCycle)}` : ''}</div></div>
     <div class="kpi" title="Fresh input + output; cache reads listed separately${p.cost_usd !== null ? '. Cost estimated at API list prices from per-model usage (subscription users: API-equivalent value)' : ''}"><div class="l">Tokens</div><div class="v">${fmtTok(p.tokens.input + p.tokens.output)}</div><div class="sub">${fmtTok(p.tokens.input)} in · ${fmtTok(p.tokens.output)} out${p.tokens.cache_read ? ` · ${fmtTok(p.tokens.cache_read)} cached` : ''}${p.cost_usd !== null ? ` · ≈${fmtUsd(p.cost_usd)} est.` : ''}</div></div>
     <div class="kpi"><div class="l">Tokens / session</div>${spark(d && d.sessions)}</div>
@@ -660,13 +711,23 @@ function renderProject(r) {
     const pol = d.policy;
     // Coverage: share of finished runs where a review was actually recorded
     // (not-required and pre-tracking runs excluded).
-    const reviewed = p.runs.filter(x => x.adversarial_review === 'present').length;
-    const reviewable = reviewed + p.runs.filter(x => x.adversarial_review === 'absent').length;
+    const reviewed = p.runs.filter(x => REVIEW_RECORDED.has(x.adversarial_review)).length;
+    const forced = p.runs.filter(x => x.adversarial_review === 'forced').length;
+    // `forced` counts against coverage, never toward it: the run shipped past
+    // its own gate. `not-required` and `pending` are excluded from both.
+    const reviewable = reviewed + forced + p.runs.filter(x => REVIEW_MISSING.has(x.adversarial_review)).length;
+    // gate | warn | off — `warn` records the review state without blocking, so
+    // reporting it as "required" is a false promise. Older servers send only
+    // the boolean; fall back to it rather than showing nothing.
+    const rmode = pol.adversarial_review_mode || (pol.adversarial_review ? 'gate' : 'off');
+    const RMODE = { gate: ['✓ enforced', 'A run cannot reach awaiting-review without a satisfied review'],
+                    warn: ['⚠ warn only', 'The review state is recorded but never blocks a finish'],
+                    off: ['off', 'No adversarial review expected'] }[rmode] || ['off', ''];
     // Per-contract failure counts from each run's last verify attempt.
     const contractFails = {};
     for (const x of p.runs) for (const c of x.contracts || []) if (!c.pass) contractFails[c.name] = (contractFails[c.name] || 0) + 1;
     html += `<div class="kv"><span class="k" title="ask: implementation writes stay gated until aos run approve">plan gate</span><span class="v">${chip(pol.plan_gate === 'ask' ? 'ask' : 'auto')}</span></div>`;
-    html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v">${pol.adversarial_review ? '✓ required' : 'off'}${reviewable ? ` · <span title="Recorded in ${reviewed} of ${reviewable} finished runs">${Math.round(reviewed / reviewable * 100)}% coverage</span>` : ''}</span></div>`;
+    html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v"><span title="${esc(RMODE[1])}">${RMODE[0]}</span>${reviewable ? ` · <span title="A usable review is recorded in ${reviewed} of ${reviewable} finished runs">${Math.round(reviewed / reviewable * 100)}% coverage</span>` : ''}${forced ? ` · <span style="color:var(--s-block)" title="${forced} run(s) finished past the review gate with --force">${forced} forced</span>` : ''}</span></div>`;
     html += `<div class="kv"><span class="k">rules</span><span class="v">${pol.forbidden} forbidden · ${pol.gated} gated · ${pol.protected_paths} protected</span></div>`;
     html += `<div class="kv"><span class="k" title="✗ counts: runs whose latest verify attempt failed this contract">contracts</span><span class="v">${pol.contracts.length ? pol.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''}${contractFails[c.name] ? ` <span style="color:var(--s-block)">(${contractFails[c.name]}✗)</span>` : ''}`).join(' · ') : 'none configured'}</span></div>`;
     if (pol.contracts.some(c => c.required)) html += `<div class="kv"><span class="k"></span><span class="v" style="color:var(--ink-4)">* required to pass</span></div>`;
@@ -721,8 +782,12 @@ function renderRun(r) {
 
 /* ── run tabs: targeted pane rendering ───────────────────── */
 function runTabs(d) {
+  const rv = d.review;
   const tabs = [
     ['outcome', 'Outcome', d.outcome],
+    // The adversarial review is the one quality claim the finish gate enforces,
+    // so it gets a first-class tab rather than living only in the run folder.
+    ['review', 'Review', rv && rv.mode !== 'off' && rv.state !== 'absent' ? 'y' : ''],
     ['verification', 'Verification', d.verification],
     ['audit', 'Audit', (d.audit || []).length ? 'y' : ''],
     ['ticket', 'Ticket', d.ticket],
@@ -736,6 +801,62 @@ function runTabs(d) {
   return tabs;
 }
 
+/* review.json as the gate sees it. Severity and disposition are the two things
+   an operator scans for, so both are chips; `open` and `forced` are the states
+   that mean a run reached review with a known problem, and they read as such. */
+const REVIEW_STATE_TIP = {
+  clean: 'A genuine hunt that found nothing',
+  resolved: 'Every finding has a disposition',
+  open: 'Findings are still unresolved — the finish gate refuses this',
+  invalid: 'review.json is present but not usable',
+  absent: 'No adversarial review was recorded',
+  forced: 'Finished past the review gate with --force',
+  'not-required': 'Policy does not require an adversarial review',
+};
+const DISPOSITION_CLASS = { fixed: 'pass', dismissed: 'pending', deferred: 'ask', open: 'blocked' };
+const SEVERITY_CLASS = { high: 'blocked', medium: 'ask', low: 'pending' };
+
+function renderReview(d) {
+  const rv = d.review || {};
+  const stamped = d.meta && d.meta.adversarial_review;
+  if (rv.mode === 'off') return `<div class="empty">Adversarial review is not required by this project's policy.</div>`;
+  if (rv.state === 'absent') {
+    // Runs finished before the review.json gate recorded only that a review
+    // happened, never what it found. Say that, rather than implying none did.
+    if (stamped === 'present') {
+      return `<div class="empty">This run predates structured reviews — it recorded that a review happened, but not what it found.
+        <br><small>Narrative detail, if any, is under Verification.</small></div>`;
+    }
+    return `<div class="empty">No adversarial review recorded — <span class="mono">review.json</span> does not exist in this run.
+      <br><small>Run <span class="mono">/aos-verify</span> to have a skeptic subagent hunt the work and record what it found.</small></div>`;
+  }
+  let html = `<div class="rvhead">${chip(rv.state, REVIEW_STATE_TIP[rv.state] || '')}`;
+  if (stamped === 'forced') html += chip('forced', REVIEW_STATE_TIP.forced);
+  html += `<span class="rvcount">${(rv.findings || []).length} finding${(rv.findings || []).length === 1 ? '' : 's'}</span></div>`;
+
+  if (rv.state === 'invalid') {
+    html += `<div class="empty" style="text-align:left">review.json is not a usable review:<ul style="margin:8px 0 0 18px">` +
+      (rv.errors || []).map(e => `<li>${esc(e)}</li>`).join('') + `</ul></div>`;
+    return html;
+  }
+  if (!(rv.findings || []).length) {
+    return html + `<div class="empty">A hunt with no findings. That is a legitimate result — the scope it covered is recorded in review.json.</div>`;
+  }
+  const order = { high: 0, medium: 1, low: 2 };
+  const findings = [...rv.findings].sort((a, b) =>
+    (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || (order[a.severity] ?? 3) - (order[b.severity] ?? 3));
+  html += `<div class="tscroll"><table><thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Disposition</th></tr></thead><tbody>`;
+  for (const f of findings) {
+    html += `<tr>
+      <td>${chip(f.severity, '')}</td>
+      <td>${esc(f.summary)}${f.resolution ? `<div class="rvres">${esc(f.resolution)}</div>` : ''}</td>
+      <td class="mono">${f.location ? esc(f.location) : '<span style="color:var(--ink-4)">—</span>'}</td>
+      <td>${chip(f.status, f.status === 'open' ? 'Unresolved — this blocks the finish gate' : '')}</td>
+    </tr>`;
+  }
+  return html + `</tbody></table></div>`;
+}
+
 function renderTabZone(d) {
   const tabs = runTabs(d);
   if (!ui.runTab || !tabs.find(([k]) => k === ui.runTab)) {
@@ -745,7 +866,9 @@ function renderTabZone(d) {
     `<button class="tab ${ui.runTab === k ? 'on' : ''}" onclick="switchTab('${encU(k)}')">${esc(label)}${k === 'audit' ? `<span class="n">${d.audit_total ?? (d.audit || []).length}</span>` : has ? '' : `<span class="n" title="Not written yet">–</span>`}</button>`
   ).join('') + `</div>`;
 
-  if (ui.runTab === 'audit') {
+  if (ui.runTab === 'review') {
+    html += renderReview(d);
+  } else if (ui.runTab === 'audit') {
     const kinds = [['all', 'All'], ['gate', 'Gates'], ['verify', 'Verify'], ['lifecycle', 'Lifecycle']];
     let audit = [...(d.audit || [])].sort((a, b) => (String(a.ts) < String(b.ts) ? 1 : -1));
     if (ui.auditFilter === 'gate') audit = audit.filter(a => a.event === 'gate');
