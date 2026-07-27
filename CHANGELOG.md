@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.11.1 — 2026-07-27
+
+Fixes to 0.11.0, which shipped with a sign-off gap and a console that
+misreported its own numbers. **Upgrade from 0.11.0.**
+
+### Fixed
+
+- **A run could be closed with no sign-off.** `aos run finish --state
+  done|shipped` reaches the same terminal state as `aos run state done|shipped`,
+  but only the latter was gated and only the latter recorded `closed_by` — so a
+  run could reach `done` with no prompt, no approver, and a record saying nobody
+  closed it. Reachable without `--force`. Both spellings now take the same
+  sign-off route and the policy's close rule matches both; plain `aos run finish`
+  (to `awaiting-review`) is not a close and stays ungated.
+- **Sign-off tickets were minted where nobody is prompted.** Claude Code fires
+  `PreToolUse` in every permission mode and honours `deny` even under
+  `--dangerously-skip-permissions`, so the forbidden tier always held — but an
+  `ask` only reaches a human in a prompting mode. In `bypassPermissions`,
+  `acceptEdits`, `auto` and `dontAsk` the ticket asserted an approval nobody
+  gave. None is minted in those modes now, and every gate decision records the
+  `permission_mode` it was taken under.
+- **The console reported two things that were not true.** Leverage read "no
+  finished runs" beside a panel reading "RUNS 5"; review coverage counted
+  `adversarial_review === 'present'`, a pre-0.11 value, so every run finished
+  under the new schema — including `forced` — silently vanished from the stat.
+  `warn` mode displayed as "✓ required". A project in `dry_run` looked fully
+  protected. All four corrected, with a test that fails if the console stops
+  naming any review state the gate can stamp.
+- **`review.json` could not be viewed at all** — the run API enumerated markdown
+  only. Runs gained a Review tab rendering findings, dispositions and locations,
+  parsed by the same code the finish gate uses.
+- **`aos run link` applied a partial change on rejection**, and `--pr` with no
+  value reported success while linking nothing. All inputs are validated before
+  meta.json is touched. A malformed `%` in a ticket URL no longer kills
+  `run start`.
+- **The close audit line contradicted meta.json** on the review state: a run
+  stamped `forced` was audited as `absent`. The audit now records what meta
+  actually says.
+- Touched-file paths render home-relative in the console, matching the repo path
+  and run folder.
+
+### New
+
+- **Runs record where the change lives**: `branch` (read off `.git/HEAD`, no
+  subprocess), `ticket_url` when `--ticket` is given a tracker URL, `pr_url` via
+  **`aos run link`**, and `files` — what the run actually touched, reconstructed
+  from its own audit trail. Only http(s) URLs are accepted, at capture and again
+  at render.
+- **The run page says what is waiting on you and how to do it**: `/aos-approve`,
+  the direct close command, and `claude --resume <session>`, each copyable, with
+  the PR link first. Plus a Record panel showing sign-off identity and route,
+  per-run contract results, the state timeline and the bound session.
+- Runs table gained a Review column so `forced` is scannable; the Policy panel
+  shows the 0.11 guards; run rows are keyboard-reachable.
+
 ## 0.11.0 — 2026-07-26
 
 The adversarial review stops being a checkbox, a silently-absent gate stops
