@@ -14,6 +14,13 @@ misreported its own numbers. **Upgrade from 0.11.0.**
   closed it. Reachable without `--force`. Both spellings now take the same
   sign-off route and the policy's close rule matches both; plain `aos run finish`
   (to `awaiting-review`) is not a close and stays ungated.
+- **A sign-off approval was not bound to what it approved.** The ticket recorded
+  the action but not the target, so a prompt shown for `--run A` authorized
+  closing `--run B` for the next five minutes. An approval is for a specific
+  thing or it is not an approval; tickets now carry the run they were shown for.
+  (Found as a flaky test: an early gate assertion left a live ticket that let a
+  later "must refuse without sign-off" case succeed, intermittently, depending
+  on how fast the suite ran.)
 - **Sign-off tickets were minted where nobody is prompted.** Claude Code fires
   `PreToolUse` in every permission mode and honours `deny` even under
   `--dangerously-skip-permissions`, so the forbidden tier always held — but an

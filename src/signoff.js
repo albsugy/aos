@@ -46,7 +46,14 @@ export function recordSignoffTicket(projectId, { action, command, session, mode 
 
 // Single-use: the ticket is removed whether or not it matched, so a stale or
 // mismatched approval can never be spent on a later command.
-export function consumeSignoffTicket(projectId, action) {
+//
+// `target` binds the ticket to the run it approves. Without it, a prompt shown
+// for one run authorized closing any other run for the next five minutes — the
+// gate asks about `--run A`, and a close of `--run B` inside the window spent
+// that approval. An approval is for a specific thing or it is not an approval.
+// A ticket whose command names no run (the active-run form, and plan approval)
+// is unbound and matches whatever the caller is closing.
+export function consumeSignoffTicket(projectId, action, target = null) {
   const file = ticketPath(projectId);
   const ticket = readJson(file, null);
   try {
@@ -57,5 +64,9 @@ export function consumeSignoffTicket(projectId, action) {
   if (!ticket || ticket.action !== action) return null;
   const age = Date.now() - Date.parse(ticket.ts || '');
   if (!Number.isFinite(age) || age < 0 || age > TICKET_TTL_MS) return null;
+  if (target) {
+    const named = /--run[=\s]+(\S+)/.exec(ticket.command || '');
+    if (named && named[1] !== target) return null;
+  }
   return ticket;
 }

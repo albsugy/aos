@@ -38,7 +38,7 @@ const [, , cmd, ...rest] = process.argv;
 // gate is already showing them the command; making them open a second terminal
 // meant runs stayed at awaiting-review forever. Approving the prompt is the
 // same human act — now it counts, and what it was is recorded either way.
-function signoffIdentity(action, { required = true, projectId = null, ticket = null } = {}) {
+function signoffIdentity(action, { required = true, projectId = null, ticket = null, target = null } = {}) {
   const headless = process.env.AOS_ALLOW_HEADLESS_APPROVE === '1';
   // Under dry_run the gate never prompts, so no ticket can ever exist — and
   // requiring one would make closing a run the single thing dry run makes
@@ -47,7 +47,7 @@ function signoffIdentity(action, { required = true, projectId = null, ticket = n
   const dryRun = projectId ? loadPolicy(projectId).dry_run === true : false;
   let via = null;
   if (process.stdin.isTTY) via = 'tty';
-  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket)) via = 'gate-prompt';
+  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket, target)) via = 'gate-prompt';
   else if (dryRun) via = 'dry-run';
   else if (headless) via = 'headless-env';
 
@@ -287,6 +287,7 @@ async function main() {
           finisher = signoffIdentity(`aos run finish --state ${finishState}`, {
             projectId: p.id,
             ticket: 'review-close',
+            target: active,
           });
           if (!finisher) break;
         }
@@ -364,6 +365,7 @@ async function main() {
           signer = signoffIdentity(`aos run state ${nextState}`, {
             projectId: p.id,
             ticket: 'review-close',
+            target,
           });
           if (!signer) break;
         }

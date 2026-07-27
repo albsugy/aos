@@ -693,6 +693,14 @@ grep -q '"via": "gate-prompt"' "$RUNS_DIR/meta.json" && pass "close: sign-off ro
 # single-use: the same approval cannot close a second time
 (cd "$SIGN_REPO" && $AOS run state awaiting-review --run "$RUNS" >/dev/null)
 close_run "done" >/dev/null 2>&1 && fail "consumed ticket reused" || pass "close: sign-off ticket is single-use"
+# an approval shown for one run must not authorize closing a different one —
+# without this the gate could ask about run A and a close of run B inside the
+# five-minute window would spend that approval
+sign_gate_other() {
+  printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state done --run some-other-run"},"session_id":"sT"}' | $AOS hook pre-tool >/dev/null
+}
+sign_gate_other
+close_run "done" >/dev/null 2>&1 && fail "a ticket for another run closed this one" || pass "close: an approval is bound to the run it was shown for"
 # and a plan-approval prompt is not a close approval
 printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run approve"},"session_id":"sT"}' | $AOS hook pre-tool >/dev/null
 close_run "done" >/dev/null 2>&1 && fail "plan-approve ticket closed a run" || pass "close: tickets are bound to their action"
