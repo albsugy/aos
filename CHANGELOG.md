@@ -26,11 +26,10 @@ template, then `aos doctor`.
   branch after the fact — a PR cannot be auto-detected without a network call.
   Only http(s) URLs are accepted, at capture and again at render.
 - **Runs record what they touched.** `meta.files` is reconstructed from the
-  run's own audit trail at finish — repo-relative, excluding the run's own
-  bookkeeping writes — so "what did this actually change" no longer means
-  reading audit.jsonl. Shell writes are counted, never parsed into filenames.
-
-
+  run's own audit trail at finish — relative to the repo where they sit inside
+  it, excluding the run's own bookkeeping writes — so "what did this actually
+  change" no longer means reading audit.jsonl. Shell writes are counted, never
+  parsed into filenames.
 - **`aos cost`** — what the agent actually cost, at API list prices, from the
   per-model buckets AOS already records. Grouped by project (default), `run`,
   `model`, or `contract`; windowed with `--since 7d|24h|2w|<date>`.
@@ -92,8 +91,12 @@ template, then `aos doctor`.
   (`closed_by` / `approved_by`), per-run contract results, the state timeline,
   the bound session, and whether learnings were captured were all recorded in
   meta.json and none of them were displayed.
-
-
+- **Closing a run is gated whichever command gets there.** `aos run finish
+  --state done|shipped` reaches the same terminal state as `aos run state
+  done|shipped`, but only the latter was gated and only the latter recorded
+  `closed_by`. A run could be closed with no prompt, no sign-off and a record
+  saying nobody closed it. Both commands now take the same route, and the
+  policy's close rule matches both.
 - **Session token accounting was double-counting, by a lot.** Claude Code fires
   SessionEnd more than once for the same session — resume, `/clear` and logout
   each end a session whose transcript keeps growing — and every firing appended

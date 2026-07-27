@@ -685,7 +685,7 @@ sign_gate "done" | grep -q '"permissionDecision":"ask"' && pass "close: gate ask
 printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state --run '"$RUNS"' done"},"session_id":"sT"}' | $AOS hook pre-tool \
   | grep -q '"permissionDecision":"ask"' && pass "close: gate fires whatever the flag order" || fail "flag order evaded the sign-off gate"
 printf '%s' '{"cwd":"'"$SIGN_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run state in-progress --run '"$RUNS"'"},"session_id":"sT"}' | $AOS hook pre-tool \
-  | grep -q 'review-close' && fail "reopening a run demanded sign-off" || pass "close: reopening stays ungated"
+  | grep -q 'reserved for the human' && fail "reopening a run demanded sign-off" || pass "close: reopening stays ungated"
 close_run "done" >/dev/null
 grep -q '"state": "done"' "$RUNS_DIR/meta.json" && pass "close: gate-prompt approval closes the run in-session" || fail "gate ticket not accepted"
 grep -q '"via": "gate-prompt"' "$RUNS_DIR/meta.json" && pass "close: sign-off route recorded as gate-prompt" || fail "sign-off route not recorded"
@@ -740,6 +740,57 @@ STOP_OFF=$(printf '%s' '{"cwd":"'"$SIGN_REPO"'","session_id":"sU"}' | $AOS hook 
 echo "$STOP_OFF" | grep -q "sitting at awaiting-review" && fail "review_capture false still nudged ($RUNU)" \
   || pass "stop: review_capture false disables the nudge"
 
+# --- closing a run is gated whichever command gets there ---
+# `run finish --state done` reaches the same terminal state as `run state done`.
+# Gating only one of them let a run close with no prompt, no sign-off, and a
+# record saying nobody closed it.
+CLOSE_REPO="$WORK/close-repo"; mkdir -p "$CLOSE_REPO"
+(cd "$CLOSE_REPO" && git init -q -b main && $AOS init --name closer >/dev/null)
+(cd "$CLOSE_REPO" && $AOS run start --ticket "CL-1" >/dev/null)
+CLOSE_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/closer/state.json")
+review_active closer
+(cd "$CLOSE_REPO" && $AOS run state awaiting-review >/dev/null)
+# the gate must see BOTH spellings of a close
+for CMD in "aos run finish --state done" "aos run finish --state shipped" "aos run state done --run $CLOSE_RUN"; do
+  printf '%s' '{"cwd":"'"$CLOSE_REPO"'","tool_name":"Bash","tool_input":{"command":"'"$CMD"'"},"session_id":"sC"}' | $AOS hook pre-tool \
+    | grep -q 'reserved for the human' || fail "close not gated: $CMD"
+done
+pass "close: the gate sees run finish --state done|shipped as well as run state"
+# plain `run finish` (to awaiting-review) is NOT a close and must stay ungated
+printf '%s' '{"cwd":"'"$CLOSE_REPO"'","tool_name":"Bash","tool_input":{"command":"aos run finish"},"session_id":"sC"}' | $AOS hook pre-tool \
+  | grep -q 'reserved for the human' && fail "plain run finish demanded sign-off" || pass "close: plain run finish stays ungated"
+# and the CLI refuses without one, then records who closed it when given one.
+# The gate calls above minted a ticket — clear it, or this tests nothing.
+rm -f "$AOS_HOME/projects/closer/signoff.json"
+OUT_UNSIGNED=$( (cd "$CLOSE_REPO" && unset AOS_ALLOW_HEADLESS_APPROVE && $AOS run finish --state "done" </dev/null) 2>&1 || true )
+echo "$OUT_UNSIGNED" | grep -q "needs a human sign-off" && pass "close: run finish --state done refuses without sign-off" || fail "unsigned finish-close accepted"
+(cd "$CLOSE_REPO" && $AOS run finish --state "done" >/dev/null)   # AOS_ALLOW_HEADLESS_APPROVE is set suite-wide
+grep -q '"closed_by"' "$AOS_HOME/projects/closer/runs/$CLOSE_RUN/meta.json" \
+  && pass "close: run finish --state done records who closed it" || fail "closed_by missing after finish-close"
+# the audit line must agree with what meta actually says about the review
+(cd "$CLOSE_REPO" && $AOS run start --ticket "CL-2" >/dev/null)
+CLOSE_RUN2=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$AOS_HOME/projects/closer/state.json")
+(cd "$CLOSE_REPO" && $AOS run finish --force >/dev/null)
+(cd "$CLOSE_REPO" && $AOS run state "done" --run "$CLOSE_RUN2" >/dev/null)
+# shellcheck disable=SC2016  # the node script's own $ must not expand here
+node -e '
+  const fs = require("fs"), path = require("path");
+  const [runDir, projDir] = process.argv.slice(1);
+  const m = require(path.join(runDir, "meta.json"));
+  // finish clears activeRun, so the close line lands in the PROJECT log rather
+  // than the run folder — check both.
+  const lines = [path.join(runDir, "audit.jsonl"), path.join(projDir, "audit.jsonl")]
+    .flatMap((f) => { try { return fs.readFileSync(f, "utf8").trim().split("\n"); } catch { return []; } })
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const close = lines.reverse().find((l) => l.event === "run-state" && l.state === "done" && l.run === m.run);
+  if (!close) { console.error("no close audit line found for " + m.run); process.exit(1); }
+  if (close.adversarial_review !== m.adversarial_review) {
+    console.error(`audit says ${close.adversarial_review}, meta says ${m.adversarial_review}`);
+    process.exit(1);
+  }
+' "$AOS_HOME/projects/closer/runs/$CLOSE_RUN2" "$AOS_HOME/projects/closer" \
+  && pass "close: the audit line records what meta actually says (forced stays forced)" || fail "close audit contradicts meta"
+
 # --- run provenance: branch, ticket link, PR link, files touched ---
 # Reviewing a run means reading its diff. Without a branch and a PR the console
 # can only describe the change, so the branch is read off .git/HEAD at start
@@ -757,6 +808,13 @@ case "$PROV_RUN" in *lin-482*) pass "provenance: run folder named from the ticke
 # a PR cannot be auto-detected (no network calls), so it is linked explicitly
 (cd "$PROV_REPO" && $AOS run link --pr "https://github.com/acme/app/pull/91" >/dev/null)
 [ "$(prov_meta pr_url)" = "https://github.com/acme/app/pull/91" ] && pass "provenance: PR link attached" || fail "pr_url not stored"
+# a rejected link must leave NOTHING behind — validating inside the mutator
+# persisted the fields that passed and then threw, with no audit line
+(cd "$PROV_REPO" && $AOS run link --pr "ftp://x/y" --branch other-branch >/dev/null 2>&1) && fail "ftp URL accepted" || true
+[ "$(prov_meta branch)" = "feat/limits" ] && pass "provenance: a rejected link applies nothing at all" || fail "partial link write ($(prov_meta branch))"
+# a valueless flag must not report success while linking nothing
+OUT_BARE=$( (cd "$PROV_REPO" && $AOS run link --pr) 2>&1 || true )
+echo "$OUT_BARE" | grep -q "Nothing to link" && pass "provenance: --pr with no value is refused, not silently ignored" || fail "bare --pr reported success"
 # a url that would become a click target in the console must never be stored
 (cd "$PROV_REPO" && $AOS run link --pr "javascript:alert(1)" >/dev/null 2>&1) && fail "javascript: URL accepted" || pass "provenance: non-http(s) URLs refused"
 [ "$(prov_meta pr_url)" = "https://github.com/acme/app/pull/91" ] && pass "provenance: a refused link leaves the old one intact" || fail "rejected url clobbered pr_url"
@@ -771,6 +829,11 @@ review_active prov
 node -e 'const m=require(process.argv[1]);process.exit(JSON.stringify(m.files)===JSON.stringify(["src/upload.js"])?0:1)' "$PROV_DIR/meta.json" \
   && pass "provenance: files touched are repo-relative and exclude run bookkeeping" || fail "files wrong: $(prov_meta files)"
 [ "$(prov_meta bash_writes)" = "1" ] && pass "provenance: shell writes are counted, not guessed at" || fail "bash_writes wrong ($(prov_meta bash_writes))"
+# a tracker URL with a stray percent is legal and must not take the command down
+PCT_REPO="$WORK/pct-repo"; mkdir -p "$PCT_REPO"
+(cd "$PCT_REPO" && git init -q -b main && $AOS init --name pct >/dev/null)
+(cd "$PCT_REPO" && $AOS run start --ticket "https://jira.example.com/browse/AB-1?done=50%" >/dev/null 2>&1) \
+  && pass "provenance: a malformed percent in a ticket URL does not crash run start" || fail "run start died on a percent"
 
 # --- scope gate: the plan declares its files, drift asks ---
 # Self-activating: a plan with no Files section gates nothing, so no existing
@@ -1110,6 +1173,28 @@ case "$STATE" in *'"leverage_sample"'*) pass "console API: leverage sample expos
 PROJ=$(curl -s "http://127.0.0.1:$PORT/api/project?project=demo")
 case "$PROJ" in *'"policy"'*) pass "console API: project detail";; *) kill $CONSOLE_PID; fail "console project detail";; esac
 case "$PROJ" in *'"adversarial_review_mode"'*) pass "console API: review mode is the tri-state, not a boolean" ;; *) kill $CONSOLE_PID; fail "adversarial_review_mode missing";; esac
+case "$PROJ" in *'"scope_gate"'*) pass "console API: the 0.11 guards are in the policy digest" ;; *) kill $CONSOLE_PID; fail "scope_gate missing from policy digest";; esac
+case "$PROJ" in *'"protect_worktree"'*) : ;; *) kill $CONSOLE_PID; fail "protect_worktree missing from policy digest";; esac
+# the runs table must be reachable without a mouse — an onclick <tr> is not
+UI_HTML=$(curl -s "http://127.0.0.1:$PORT/")
+case "$UI_HTML" in *'role="link"'*) pass "console UI: run rows expose a link role" ;; *) kill $CONSOLE_PID; fail "run rows have no role";; esac
+case "$UI_HTML" in *"event.key==='Enter'"*) pass "console UI: run rows are keyboard-activated" ;; *) kill $CONSOLE_PID; fail "run rows are mouse-only";; esac
+# Column order: the review cell must sit under the Review header. Inserting it
+# one <td> too early shifted every value right and put review states under
+# "Verify" — invisible to any assertion that only checks presence.
+node -e '
+  const ui = require("fs").readFileSync(process.argv[1], "utf8");
+  // Scope to the row template — searching the whole file matches the
+  // reviewCell() function declaration further down and always "passes".
+  const row = /class="rowlink[\s\S]*?<\/tr>/.exec(ui);
+  const head = /<th>Verify<\/th>\s*<th[^>]*>Review<\/th>/.test(ui);
+  if (!row) { console.error("runs-table row template not found"); process.exit(1); }
+  const v = row[0].indexOf("VERIFY_TIP"), r = row[0].indexOf("reviewCell(");
+  if (v < 0 || r < 0) { console.error("verify/review cells not found in the row"); process.exit(1); }
+  if (!head) { console.error("Review header does not follow Verify"); process.exit(1); }
+  if (r < v) { console.error("review cell renders before the verify cell — every value shifts a column"); process.exit(1); }
+' "$ROOT/src/console/ui.html" \
+  && pass "console UI: the review column sits under its own header" || { kill $CONSOLE_PID; fail "review cell/header order mismatch"; }
 PMISS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/project?project=nope")
 [ "$PMISS" = "404" ] && pass "console API: unknown project → 404" || { kill $CONSOLE_PID; fail "unknown project ($PMISS)"; }
 UI=$(curl -s "http://127.0.0.1:$PORT/")

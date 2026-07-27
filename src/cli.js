@@ -7,7 +7,7 @@ import { ensureHome, projectDir } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
-import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun } from './run.js';
+import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun, CLOSING_STATES } from './run.js';
 import { parseTicket } from './vcs.js';
 import { reviewState, reviewPath, reviewProblemLines, reviewCounts } from './review.js';
 import { verifyContracts } from './verify.js';
@@ -277,11 +277,25 @@ async function main() {
           process.exitCode = 1;
           break;
         }
+        const finishState = strFlag(flags.state) || 'awaiting-review';
+        // `--state done|shipped` ends the run, so it needs the same human
+        // sign-off `aos run state` demands. Gating only one of the two commands
+        // that reach a closing state left the other closing runs with no
+        // recorded approver at all.
+        let finisher = null;
+        if (CLOSING_STATES.has(finishState)) {
+          finisher = signoffIdentity(`aos run finish --state ${finishState}`, {
+            projectId: p.id,
+            ticket: 'review-close',
+          });
+          if (!finisher) break;
+        }
         let meta;
         try {
-          meta = finishRun(p.id, active, strFlag(flags.state) || 'awaiting-review', {
+          meta = finishRun(p.id, active, finishState, {
             force: Boolean(flags.force),
             repoRoot: process.cwd(),
+            by: finisher,
           });
         } catch (e) {
           // The review gate's message is already formatted for the human (and
@@ -383,7 +397,7 @@ async function main() {
           process.exitCode = 1;
           break;
         }
-        if (!flags.pr && !flags['ticket-url'] && !flags.branch) {
+        if (!strFlag(flags.pr) && !strFlag(flags['ticket-url']) && !strFlag(flags.branch)) {
           console.error('Nothing to link. Pass --pr <url>, --ticket-url <url>, and/or --branch <name>.');
           process.exitCode = 1;
           break;
@@ -472,7 +486,7 @@ async function main() {
         process.exitCode = 1;
         break;
       }
-      const by = String(flags.by || 'project').toLowerCase();
+      const by = String(strFlag(flags.by) || 'project').toLowerCase();
       const GROUPINGS = ['project', 'run', 'model', 'contract'];
       if (!GROUPINGS.includes(by)) {
         console.error(`Unknown --by "${by}". One of: ${GROUPINGS.join(', ')}.`);

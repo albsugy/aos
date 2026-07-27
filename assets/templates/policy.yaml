@@ -73,7 +73,7 @@ tiers:
     # Closing a review works the same way: an agent (e.g. /aos-approve) reviews
     # the awaiting-review run and proposes the close; approving the prompt IS
     # your sign-off.
-    - pattern: '\baos(\.mjs)?\s+run\s+state\b[^|;&]*\b(done|shipped)\b'
+    - pattern: '\baos(\.mjs)?\s+run\s+(state|finish)\b[^|;&]*\b(done|shipped)\b'
       action: review-close
       reason: Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off
   # File writes are gated too. Built-in (always on): .claude/settings.json,

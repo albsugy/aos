@@ -56,7 +56,7 @@ export const DEFAULT_POLICY = {
       // Same pattern for closing a review: an agent may review the run and
       // PROPOSE done/shipped, but the permission prompt is the human sign-off.
       {
-        pattern: '\\baos(\\.mjs)?\\s+run\\s+state\\b[^|;&]*\\b(done|shipped)\\b',
+        pattern: '\\baos(\\.mjs)?\\s+run\\s+(state|finish)\\b[^|;&]*\\b(done|shipped)\\b',
         action: 'review-close',
         reason: 'Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off',
       },

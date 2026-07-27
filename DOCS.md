@@ -183,7 +183,9 @@ machine**, not free text: `in-progress ↔ blocked`, `in-progress → awaiting-r
 like `in-progress → shipped`, which would skip review entirely — are rejected;
 `--force` overrides and is recorded in the audit.
 
-**Sign-off identity.** Closing a run (`aos run state done|shipped`) and approving
+**Sign-off identity.** Closing a run — `aos run state done|shipped` or
+`aos run finish --state done|shipped`, which reach the same terminal state and
+are gated identically — and approving
 a plan (`aos run approve`) both record who signed off and how — `closed_by` /
 `approved_by`, carrying the OS user, the route, and a timestamp — in the run's
 meta and audit. Five routes, strongest first:
@@ -463,7 +465,8 @@ there is no prompt to approve.
   recursive delete of root/home.
 - **Default gated** — `git push`, `gh pr merge`, `deploy` (anchored so
   `cat docs/deploy.md` doesn't trip it), and the two sign-off commands
-  `aos run approve` and `aos run state done|shipped` (both are yours to give —
+  `aos run approve` and either spelling of a close (`run state done|shipped`,
+  `run finish --state done|shipped`) — all yours to give (
   the prompt *is* the approval, and approving it mints the sign-off ticket the
   CLI records).
 - **Command aliasing** — the program a token invokes is resolved before any check:

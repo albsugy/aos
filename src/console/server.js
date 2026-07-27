@@ -65,6 +65,12 @@ function projectDetail(projectId) {
       plan_gate: policy.plan_gate,
       adversarial_review: reviewMode(projectId) !== 'off',
       adversarial_review_mode: reviewMode(projectId),
+      // The 0.11 gates. Without these the panel described a policy the project
+      // no longer had — and `dry_run` in particular has to be visible, since a
+      // recording-not-enforcing project looks healthy from every other angle.
+      scope_gate: policy.scope_gate !== false,
+      protect_worktree: policy.tiers?.protect_worktree !== false,
+      dry_run: policy.dry_run === true,
       forbidden: (policy.tiers?.forbidden || []).length,
       gated: (policy.tiers?.gated || []).length,
       protected_paths: (policy.tiers?.protected_paths || []).length,

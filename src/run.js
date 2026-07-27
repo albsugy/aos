@@ -117,6 +117,9 @@ export function startRun(projectId, { ticket, title, planGate, repoRoot = null, 
 // Reopen paths (awaiting-review/done → in-progress, done → awaiting-review)
 // stay legal because humans do change their minds; `shipped` is terminal.
 export const RUN_STATES = ['in-progress', 'blocked', 'awaiting-review', 'done', 'shipped'];
+// States that end a run. Reaching one is the act a human signs off on,
+// whichever command gets there.
+export const CLOSING_STATES = new Set(['done', 'shipped']);
 const RUN_TRANSITIONS = {
   'in-progress': ['blocked', 'awaiting-review'],
   blocked: ['in-progress', 'awaiting-review'],
@@ -157,6 +160,7 @@ export function setRunState(projectId, runId, state, { force = false, by = null 
     : closing
       ? { ...reviewState(projectId, runId), blocked: false }
       : null;
+  let stamped = null;
   const meta = mutateRunMeta(projectId, runId, (m) => {
     m.state = state;
     // A close only fills the snapshot in when the gated edge never ran
@@ -165,6 +169,10 @@ export function setRunState(projectId, runId, state, { force = false, by = null 
       m.adversarial_review = review.blocked ? 'forced' : review.state;
       m.review = { state: review.state, ...reviewCounts(review.findings) };
     }
+    // What meta actually ends up saying — the audit must agree with it. Auditing
+    // the freshly computed state instead made the close line contradict the run
+    // it described (meta `forced`, audit `absent`).
+    stamped = m.adversarial_review;
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
     if (by && closing) m.closed_by = { ...by, ts: nowIso() };
@@ -177,7 +185,7 @@ export function setRunState(projectId, runId, state, { force = false, by = null 
     run: runId,
     state,
     forced: force || undefined,
-    adversarial_review: review ? (review.blocked ? 'forced' : review.state) : undefined,
+    adversarial_review: stamped || undefined,
     review_forced: review?.blocked || undefined,
     by: by || undefined,
   });
@@ -395,7 +403,7 @@ function assertReviewGate(projectId, runId, force) {
   return { ...review, blocked };
 }
 
-export function finishRun(projectId, runId, state = 'awaiting-review', { force = false, repoRoot = null } = {}) {
+export function finishRun(projectId, runId, state = 'awaiting-review', { force = false, repoRoot = null, by = null } = {}) {
   const current = runMeta(projectId, runId);
   if (!current) throw new Error(`Unknown run: ${runId}`);
   // assertTransition's own error advises --force, so the flag must actually
@@ -428,6 +436,10 @@ export function finishRun(projectId, runId, state = 'awaiting-review', { force =
     m.learnings_recorded = learnings_recorded;
     m.state_times = m.state_times || {};
     if (!m.state_times[state]) m.state_times[state] = nowIso();
+    // `run finish --state done|shipped` reaches a closing state, so it records
+    // the same sign-off `run state` does. Without this the two commands that
+    // reach the same state disagreed about whether anyone closed it.
+    if (by && CLOSING_STATES.has(state)) m.closed_by = { ...by, ts: nowIso() };
   });
   if (!meta) throw new Error(`Unknown run: ${runId}`);
   appendAudit(projectId, {
@@ -438,6 +450,7 @@ export function finishRun(projectId, runId, state = 'awaiting-review', { force =
     adversarial_review,
     review_forced: blocked || undefined,
     learnings_recorded,
+    by: by || undefined,
   });
   if (getActiveRun(projectId) === runId) setActiveRun(projectId, null);
   return meta;
@@ -479,27 +492,20 @@ export function touchedFiles(projectId, runId, repoRoot = null) {
 // starting point — and nothing can auto-detect it without a network call the
 // CLI refuses to make, so the pipeline records it after opening the PR.
 export function linkRun(projectId, runId, { pr, ticket, branch } = {}) {
-  const rejected = [];
-  const meta = mutateRunMeta(projectId, runId, (m) => {
-    let changed = false;
-    for (const [field, value] of [['pr_url', pr], ['ticket_url', ticket]]) {
-      if (value === undefined || value === null) continue;
-      const url = safeUrl(value);
-      if (!url) {
-        rejected.push(`${field === 'pr_url' ? '--pr' : '--ticket-url'} must be an http(s) URL`);
-        continue;
-      }
-      m[field] = url;
-      changed = true;
-    }
-    if (branch) {
-      m.branch = String(branch).slice(0, 200);
-      changed = true;
-    }
-    return changed ? undefined : false;
-  });
+  // Validate everything FIRST. Rejecting inside the mutator still persisted the
+  // fields that did validate and then threw, so a bad --pr left a half-applied
+  // change on disk with no audit line describing it.
+  const updates = {};
+  for (const [field, flag, value] of [['pr_url', '--pr', pr], ['ticket_url', '--ticket-url', ticket]]) {
+    if (value === undefined || value === null) continue;
+    const url = safeUrl(value);
+    if (!url) throw new Error(`${flag} must be an http(s) URL`);
+    updates[field] = url;
+  }
+  if (branch) updates.branch = String(branch).slice(0, 200);
+  if (!Object.keys(updates).length) throw new Error('Nothing to link.');
+  const meta = mutateRunMeta(projectId, runId, (m) => Object.assign(m, updates) && undefined);
   if (!meta) throw new Error(`Unknown run: ${runId}`);
-  if (rejected.length) throw new Error(rejected.join('; '));
   appendAudit(projectId, { event: 'run-link', run: runId, pr: meta.pr_url || undefined, branch: meta.branch || undefined });
   return meta;
 }

@@ -688,7 +688,7 @@ function renderProject(r) {
     html += `<div class="empty">No runs match this filter.</div>`;
   } else {
     html += `<div class="tscroll"><table><thead><tr>
-      <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th>
+      <th>Run</th><th>Ticket</th><th>State</th><th>Verify</th><th title="The adversarial review recorded at finish">Review</th>
       <th class="num" title="Total verification attempts (aos verify invocations)">Att.</th>
       <th class="num" title="Finished runs: start → review-ready. Open runs: elapsed so far (…)">Took</th>
       <th class="num" title="Fresh input + output tokens attributed to this run">Tokens</th><th class="num">Updated</th>
@@ -696,11 +696,14 @@ function renderProject(r) {
     for (const x of runs) {
       const dim = ['done', 'shipped'].includes(x.state) ? ' dim' : '';
       const dur = runDuration(x);
-      html += `<tr class="rowlink${dim}" onclick="go('#/p/${encU(p.id)}/r/${encU(x.run)}')">
+      const href = `#/p/${encU(p.id)}/r/${encU(x.run)}`;
+      html += `<tr class="rowlink${dim}" tabindex="0" role="link" aria-label="Open run ${esc(x.run)}"
+        onclick="go('${href}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('${href}')}">
         <td class="mono" title="${esc(x.run)}">${esc(shortRun(x.run))}</td>
         <td class="trunc" title="${esc(x.title || x.ticket || '')}">${esc(x.title || x.ticket || '—')}</td>
         <td>${chip(x.state, STATE_TIP[x.state])}</td>
         <td>${chip(x.verification, VERIFY_TIP[x.verification])}</td>
+        <td>${reviewCell(x)}</td>
         <td class="num">${x.verification_attempts || 0}</td>
         <td class="num" title="${dur ? (dur.ongoing ? 'Running for ' + fmtDur(dur.ms) + ' so far' : dur.approx ? APPROX_TIP : 'Start to review-ready') : ''}">${dur ? (dur.ongoing ? `<span style="color:var(--ink-3)">${fmtDur(dur.ms)}…</span>` : fmtDur(dur.ms) + (dur.approx ? '~' : '')) : '—'}</td>
         <td class="num" title="${x.cost_usd !== null && x.cost_usd !== undefined ? 'Estimated ' + fmtUsd(x.cost_usd) + ' at API rates' : ''}">${fmtTok((x.tokens?.input || 0) + (x.tokens?.output || 0))}${x.cost_usd !== null && x.cost_usd !== undefined ? ` <span style="color:var(--ink-4)">·</span> ${fmtUsd(x.cost_usd)}` : ''}</td>
@@ -751,6 +754,10 @@ function renderProject(r) {
     html += `<div class="kv"><span class="k" title="ask: implementation writes stay gated until aos run approve">plan gate</span><span class="v">${chip(pol.plan_gate === 'ask' ? 'ask' : 'auto')}</span></div>`;
     html += `<div class="kv"><span class="k" title="A skeptic subagent must try to refute the work">adversarial review</span><span class="v"><span title="${esc(RMODE[1])}">${RMODE[0]}</span>${reviewable ? ` · <span title="A usable review is recorded in ${reviewed} of ${reviewable} finished runs">${Math.round(reviewed / reviewable * 100)}% coverage</span>` : ''}${forced ? ` · <span style="color:var(--s-block)" title="${forced} run(s) finished past the review gate with --force">${forced} forced</span>` : ''}</span></div>`;
     html += `<div class="kv"><span class="k">rules</span><span class="v">${pol.forbidden} forbidden · ${pol.gated} gated · ${pol.protected_paths} protected</span></div>`;
+    html += `<div class="kv"><span class="k" title="Built-in structural guards over commands that destroy uncommitted work, and over writes outside the plan's declared file list">guards</span><span class="v">${
+      pol.protect_worktree === false ? '<span style="color:var(--s-block)">worktree off</span>' : 'worktree'} · ${
+      pol.scope_gate === false ? '<span style="color:var(--s-block)">scope off</span>' : 'scope'}${
+      pol.dry_run ? ' · <span style="color:var(--s-block)">DRY RUN — recording only</span>' : ''}</span></div>`;
     html += `<div class="kv"><span class="k" title="✗ counts: runs whose latest verify attempt failed this contract">contracts</span><span class="v">${pol.contracts.length ? pol.contracts.map(c => `${esc(c.name)}${c.required ? '*' : ''}${contractFails[c.name] ? ` <span style="color:var(--s-block)">(${contractFails[c.name]}✗)</span>` : ''}`).join(' · ') : 'none configured'}</span></div>`;
     if (pol.contracts.some(c => c.required)) html += `<div class="kv"><span class="k"></span><span class="v" style="color:var(--ink-4)">* required to pass</span></div>`;
   }
@@ -877,7 +884,7 @@ function runFacts(d) {
   if (m.files && m.files.length) {
     const shown = m.files.slice(0, 40);
     rows += `<div class="kv"><span class="k" title="Reconstructed from the run's audit trail at finish">files touched</span><span class="v files">${
-      shown.map(f => `<span class="mono">${esc(f)}</span>`).join('')}${
+      shown.map(f => `<span class="mono" title="${esc(f)}">${esc(homeRel(f))}</span>`).join('')}${
       m.files.length > shown.length ? `<span style="color:var(--ink-3)">+${m.files.length - shown.length} more</span>` : ''}${
       m.bash_writes ? `<span style="color:var(--ink-3)" title="Shell commands that wrote something — their targets are not parsed, because guessing would produce a list that looks authoritative and is wrong">+ ${m.bash_writes} shell write${m.bash_writes === 1 ? '' : 's'}</span>` : ''}</span></div>`;
   }
@@ -948,6 +955,17 @@ function runNeedsYou(d) {
       ${resume}</div>`;
   }
   return '';
+}
+
+/* The review a finished run carries, scannable in the table. `forced` is the
+   one an operator must never have to open a run to discover. */
+function reviewCell(x) {
+  const st = x.adversarial_review;
+  if (!st || st === 'pending') return '<span style="color:var(--ink-4)">—</span>';
+  if (st === 'not-required') return '<span style="color:var(--ink-4)" title="Policy does not require one">n/a</span>';
+  const counts = x.review || {};
+  const detail = counts.total ? `${counts.total} finding(s)` : '';
+  return chip(st, (REVIEW_STATE_TIP[st] || '') + (detail ? ` — ${detail}` : ''));
 }
 
 /* review.json as the gate sees it. Severity and disposition are the two things

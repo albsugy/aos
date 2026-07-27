@@ -50,5 +50,14 @@ export function parseTicket(value) {
   const url = safeUrl(raw);
   if (!url) return { id: raw || null, url: null };
   const tail = url.replace(/[/#?]+$/, '').split(/[/#?]/).filter(Boolean).pop() || 'ticket';
-  return { id: decodeURIComponent(tail).slice(0, 60), url };
+  // A lone or malformed `%` is legal in a URL and throws here. Losing the whole
+  // `run start` to a tracker link with a percent in it is not a trade worth
+  // making — fall back to the raw tail.
+  let id = tail;
+  try {
+    id = decodeURIComponent(tail);
+  } catch {
+    // keep the undecoded form
+  }
+  return { id: id.slice(0, 60), url };
 }
