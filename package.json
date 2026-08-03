@@ -15,7 +15,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "npm run test:source && npm run test:bundle",
+    "test": "npm run test:unit && npm run test:source && npm run test:bundle",
+    "test:unit": "node --test test/unit/*.test.js",
     "test:source": "bash test/smoke.sh",
     "test:bundle": "AOS_BIN=\"node $PWD/dist/aos.mjs\" bash test/smoke.sh",
     "build": "node scripts/build.mjs",

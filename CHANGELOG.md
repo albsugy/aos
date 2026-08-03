@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The test suite is two layers instead of one 1,300-line file.**
+  `test/smoke.sh` is now a driver: it builds the sandbox and sources
+  `test/sections/*.sh` in an explicit, load-bearing order (sections read the
+  state earlier ones leave behind), with shared helpers in `test/lib.sh`. A
+  section file that exists but isn't listed in the driver fails the run rather
+  than being silently skipped. Same assertions, same order, same idiom — 313
+  end-to-end checks before and after.
+
+### Added
+
+- **A unit layer for the pure functions** — `npm run test:unit`, using Node's
+  built-in `node --test`, no new dependencies. 70 assertions over the policy
+  helpers, scope matching, pricing, the review schema, sign-off tickets, the
+  registry, and the path primitives; runs in ~0.2s, so the fast feedback loop
+  no longer requires the full end-to-end sandbox. `npm test` is now unit →
+  source → bundle, and CI runs the unit job first.
+
 ## 0.12.0 — 2026-08-03
 
 Gate hardening — five wrapper programs and two ways of running a command from a

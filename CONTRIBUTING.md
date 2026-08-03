@@ -38,14 +38,29 @@ Run the CLI from source without installing: `node bin/aos.js <command>`.
   `assets/`, or the console, run `npm run build` and commit the updated `dist/`
   in the same change. A `dist-freshness` job fails the PR otherwise — the
   committed bundle must match what the source produces.
-- **Both test suites pass**, on macOS and Linux, Node 22 and 24.
-- **`shellcheck` is clean** for `install.sh`, `test/smoke.sh`, and
-  `scripts/release.sh`.
+- **All three suites pass** (`npm test` = unit, source, bundle), on macOS and
+  Linux, Node 22 and 24.
+- **`shellcheck -x` is clean** for `install.sh`, `test/smoke.sh`,
+  `test/lib.sh`, `test/sections/*.sh`, and `scripts/release.sh`.
 
-The smoke suite ([`test/smoke.sh`](test/smoke.sh)) is the contract — new
-behavior should come with an assertion there. There is no separate unit
-framework; keep tests as end-to-end shell checks against an isolated
-`AOS_HOME`.
+Two layers, and the split is deliberate:
+
+- **`npm run test:unit`** — `node --test test/unit/*.test.js`, the built-in
+  runner, no dependencies. For pure functions with many cases: the policy
+  engine's helpers, scope matching, pricing, the review schema, sign-off
+  tickets, the registry, the path primitives. Fast enough (well under a second)
+  to run on every save.
+- **`npm run test:source` / `test:bundle`** — the end-to-end contract. The
+  driver `test/smoke.sh` builds an isolated `AOS_HOME` and a throwaway repo,
+  then sources `test/sections/*.sh` **in the order listed in `SECTIONS`**.
+  That order is part of the fixture: sections read the project and run history
+  the earlier ones left behind. Shared helpers live in `test/lib.sh`;
+  section-local ones stay in their section.
+
+New behavior needs an assertion in one of them — end-to-end if it crosses a
+hook, the CLI, or the filesystem; unit if it's a function you can call. A new
+section file must be added to `SECTIONS` in the driver, which fails loudly if
+you forget.
 
 ## Style
 

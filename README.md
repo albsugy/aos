@@ -256,9 +256,10 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
 against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
-plus a dist-freshness gate and shellcheck. ~310 assertions, weighted toward the
-gate's adversarial bypass surface — that's where the value is, so that's where the tests
-are. There are no unit tests; every assertion is end-to-end.
+plus a dist-freshness gate and shellcheck. ~310 end-to-end assertions, weighted toward
+the gate's adversarial bypass surface — that's where the value is, so that's where the
+tests are — plus a unit layer (`node --test`, no dependencies) over the pure functions
+underneath them.
 
 ## License
 
