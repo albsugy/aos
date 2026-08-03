@@ -21,6 +21,11 @@ rules. AOS is the operator's layer around that: **portable memory, enforced
 guardrails, automatic audit, real verification, and a local console**, all stored
 as markdown/YAML/JSONL under your home directory.
 
+Spec Kit tells the agent what to build; AOS proves it followed the rules. AOS
+complements the spec and task tools — they produce the plan and the task
+breakdown; AOS enforces the gates, writes the audit, and verifies the result
+while the work happens.
+
 AOS is not an orchestration framework and not a platform. It's three thin parts:
 
 1. **The spec** — a file convention under `~/.aos/`: context packs, policies,
@@ -30,8 +35,9 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
    runs work through intake → plan → implement → verify → package → learn, with
    hooks that enforce policy and write audit *automatically*, without the agent
    having to remember to.
-3. **The console** — a local, read-only dashboard: decision queue, run states,
-   verification verdicts, token economics, and a leverage ratio.
+3. **The console** — a local, read-only window onto the ledger and the runs:
+   the decision queue, run states, verification verdicts, token economics, and
+   a leverage ratio.
 
 **Principles**
 
@@ -131,7 +137,6 @@ And from a terminal at any time:
 
 ```bash
 aos status              # all projects: runs, states, leverage ratio, tokens
-aos cost --since 7d     # what the last week cost, and how much of it went through runs
 aos console             # http://127.0.0.1:4560
 ```
 

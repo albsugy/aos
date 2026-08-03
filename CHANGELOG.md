@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.12.0 — 2026-08-03
+
+Gate hardening — five wrapper programs and two ways of running a command from a
+string were getting past the structural checks — plus bounded ledgers, a
+dist-freshness gate that actually exists, and docs that say what AOS is for next
+to the spec and task tools rather than competing with them.
+
+### Fixed
+
+- **The gate missed commands riding on five more wrappers.** `nice`, `timeout`,
+  `doas`, `stdbuf` and `setsid` read as unknown programs, so `nice rm -r -f ~`
+  sailed past every structural check while bare `rm -r -f ~` was denied. They
+  are unwrapped the way `sudo` is — per-wrapper option tables, plus the
+  duration operand in `timeout 30 cmd` — and get the wrapped command's verdict.
+- **`eval "cmd"` and `bash -c "cmd"` erased their own evidence.** Quote-stripping
+  removed the payload before the regex tiers ran, and the structural checks saw
+  `eval`/`bash`, not the command inside — `eval "rm -rf /"` and
+  `bash -c "rm -rf /"` were both allows. The payload of an `eval` segment, and
+  of `-c` on `bash`/`sh`/`zsh`/`dash`, is now evaluated through the same gate
+  (recursion-capped, escaped-quote nesting included), so `eval "ls"` still
+  doesn't prompt.
+- **`git -c core.hooksPath=/tmp push` bypassed the hook-rewiring gate** — the
+  check required the literal word `config`. The per-command `-c` form is
+  flagged the same way; an ordinary `-c user.email=…` stays clean.
+- **The dist-freshness gate the README advertised didn't exist.** Bundle-mode
+  `test:bundle` now fails fast ("dist is stale, run npm run build") when any
+  file under `src/` or `scripts/build.mjs` is newer than `dist/aos.mjs`,
+  instead of passing against yesterday's bundle.
+- **No more literal NUL bytes in the sources.** The glob placeholder in
+  `policy.js` and the console's markdown-fence sentinel were raw `\x00` bytes,
+  which made both files read as "data" to file(1) and choke UTF-8 tooling.
+  Both are escapes now (`\u0000`, private-use `\uE000`) — same runtime value,
+  byte-safe source.
+- **`sessions.jsonl` and per-run `audit.jsonl` grew without bound** while every
+  reader slurped them whole (`hook-errors.log` already had its 1MB cap). Both
+  rotate at 10MB — to `sessions.jsonl.1` and `audit.1.jsonl`, one generation.
+  Session totals and contract history read the rotated generation, so no total
+  silently resets at the boundary; the console's audit tail is display-only
+  and reads the current file as before.
+
+### Changed
+
+- **Positioning: AOS complements the spec and task tools, it doesn't replace
+  them.** Spec Kit, Taskmaster and BMAD produce the plan; they enforce it by
+  convention. AOS enforces what happens while the work is done — gates that are
+  hooks, audit that is automatic, contracts that must pass before a run closes.
+  README and DOCS now lead with that instead of a feature list.
+- **Cost tracking is documented, not advertised.** `aos cost` is worth having
+  next to the runs and the gates, but it isn't why you'd install AOS — dedicated
+  usage dashboards do it better from the same files. Removed from both
+  quickstarts; the full reference in DOCS is unchanged.
+- **Memory is described for what it is:** curated, diffable, deterministic
+  markdown — a tail of exactly what was written, not embeddings and not an
+  AI-compressed summary of what an agent once knew.
+- **The fleet hub is described as context inheritance, not orchestration.**
+  "Files and a `cd`" was already in the README; it now says what that buys —
+  every session that touches a registered repo inherits that repo's gates,
+  context, and audit — instead of half-apologising for the process supervision
+  it deliberately doesn't have.
+
 ## 0.11.1 — 2026-07-27
 
 Fixes to 0.11.0, which shipped with a sign-off gap and a console that

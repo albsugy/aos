@@ -9,6 +9,8 @@
 so they work without anybody invoking anything. Everything is markdown, YAML, and JSONL
 under your home directory. Open source (MIT), no network calls, no account.
 
+**Spec Kit tells the agent what to build; AOS proves it followed the rules.**
+
 ```bash
 npm i -g @albsugy/aos && cd your-repo && aos init --hooks-only
 ```
@@ -20,8 +22,8 @@ That's a complete install. From the next session on, in this repo:
 - **risky commands and writes are gated** — force-push and `rm -rf /` denied, `git push`,
   `deploy`, and `git reset --hard` asked, `.claude/settings.json` and `.git/hooks/`
   protected so the agent can't disarm its own guardrails;
-- **every tool call is audited** to `audit.jsonl`, and token spend is tracked per session
-  so `aos cost` can tell you what the week actually cost.
+- **every tool call is audited** to `audit.jsonl`, with token spend tracked per session
+  alongside.
 
 No skills, no pipeline, nothing to remember. If you later want the ticket workflow —
 plan approval, contract verification, an adversarial review that has to resolve, human
@@ -30,6 +32,12 @@ sign-off — run plain `aos init` and read on.
 The gates are hooks, so they hold whether or not the agent cooperates. The pipeline that
 uses them is markdown, so it holds only as well as the model follows it. This README is
 explicit about which is which — see [What's enforced](#whats-enforced-and-whats-convention).
+
+AOS sits next to the spec and task tools, not against them — Spec Kit, Taskmaster, BMAD
+and the like produce the plan and the task breakdown; AOS enforces what happens while the
+work is done: the commands gated, every action audited, the result verified against real
+contracts before a run can close. They decide what the work is; AOS proves it followed
+the rules.
 
 **Package:** [npmjs.com/package/@albsugy/aos](https://www.npmjs.com/package/@albsugy/aos)
 · **Full manual:** [DOCS.md](DOCS.md)
@@ -100,7 +108,6 @@ aos init                # registers the project, scaffolds ~/.aos/projects/<id>/
 /aos-ticket LIN-482     # runs the pipeline; ends awaiting your review
 
 aos status              # all projects: runs, states, leverage ratio, tokens, est. cost
-aos cost --since 7d     # what the week cost — and how much of it went through runs
 aos export              # write the context pack as AGENTS.md for Codex/Cursor/etc.
 aos console             # http://127.0.0.1:4560
 ```
@@ -168,7 +175,7 @@ determined to phone it in still can. Escape hatches are deliberate and loud —
 ```
 ~/.aos/
 ├── registry.yaml                  # project id → repo paths
-├── fleet/                         # optional hub for a cross-project agent (see below)
+├── fleet/                         # optional hub for cross-project sessions (see below)
 └── projects/<id>/
     ├── context/pack.md            # the brief every agent loads
     ├── context/decisions.md       # append-only decision log
@@ -182,9 +189,12 @@ determined to phone it in still can. Escape hatches are deliberate and loud —
         └── meta.json              # state, verification, review, attempts, tokens, bound session id
 ```
 
-**Memory, concretely:** `SessionStart` injects the pack plus the last ~40 decision lines
-and ~30 learning lines, inside a hard character budget that protects the newest entries
-from a bloated pack. That's a tail, not retrieval — there's no ranking or embedding, and
+**Memory, concretely:** the pack, decisions, and learnings are curated markdown —
+human-readable, diffable, auditable; `git init ~/.aos` gives you history. `SessionStart`
+injects the pack plus the last ~40 decision lines and ~30 learning lines, inside a hard
+character budget that protects the newest entries from a bloated pack. That's a tail, not
+retrieval — no embeddings, and no AI-compressed summary paraphrasing what an agent once
+knew into something it almost said; what loads is exactly what was written, and
 `aos find` is a substring search across the files. It compounds because it's append-only
 and always loaded, not because it's clever; when learnings outgrow the window, the session
 is told to compact them rather than letting old knowledge quietly stop loading.
@@ -212,16 +222,17 @@ the hooks are what hold when the model deviates.
 
 ## The fleet hub
 
-`aos fleet` scaffolds `~/.aos/fleet/` — an `AGENTS.md` (with a routing table generated from
-your registry), a `CLAUDE.md` pointing at it, and a `reports/` directory. Open a session
-there with any runtime that reads `AGENTS.md` and it starts as a cross-project agent that
-can route work and query every project via the CLI.
+`aos fleet` scaffolds `~/.aos/fleet/` — an `AGENTS.md` (with a project table generated
+from your registry), a `CLAUDE.md` pointing at it, and a `reports/` directory. Open a
+session there with any runtime that reads `AGENTS.md` and it starts with every project
+in context: what exists, where it lives, and the CLI verbs to query any of it.
 
-To be precise about what that is: **files and a `cd`**. There's no process supervision, no
-message passing, no scheduler — `aos fleet --launch` is a convenience that runs your
-runtime in that directory. The leverage comes from crewmate sessions inheriting context
-injection, gates, and audit the moment they touch a registered repo. AOS never executes
-agents by default; agents execute AOS.
+To be precise about what that is: **files and a `cd`**, deliberately. There's no process
+supervision, no message passing, no scheduler — `aos fleet --launch` is a convenience that
+runs your runtime in that directory. The leverage is inheritance: the moment a session
+touches a registered repo, that repo's hooks give it the same gates, context injection,
+and audit every session there gets. AOS never executes agents by default; agents execute
+AOS.
 
 ## Principles
 
@@ -245,7 +256,7 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
 against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
-plus a dist-freshness gate and shellcheck. ~175 assertions, weighted toward the
+plus a dist-freshness gate and shellcheck. ~310 assertions, weighted toward the
 gate's adversarial bypass surface — that's where the value is, so that's where the tests
 are. There are no unit tests; every assertion is end-to-end.
 
