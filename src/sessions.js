@@ -24,7 +24,12 @@ const MODEL_BUCKET_KEYS = ['input', 'output', 'cache_read', 'cache_write_5m', 'c
 // Raw parse, in file order, malformed lines skipped. For consumers that want
 // the event sequence rather than per-session totals.
 export function readSessionLines(projectId) {
-  const raw = readIfExists(sessionsPath(projectId));
+  // sessions.jsonl.1 is the previous generation (appendLineRotated). Reading
+  // only the current file would silently reset every total at the rotation
+  // boundary; reading .1 first keeps the event order, and the dedup in
+  // readSessions merges a session whose endings straddle the boundary.
+  const file = sessionsPath(projectId);
+  const raw = (readIfExists(file + '.1') || '') + (readIfExists(file) || '');
   if (!raw) return [];
   const out = [];
   for (const line of raw.split('\n')) {

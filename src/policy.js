@@ -115,8 +115,10 @@ const DANGEROUS_RM_TARGETS = new Set([
   '$HOME', '$HOME/', '$HOME/*', '${HOME}', '${HOME}/', '${HOME}/*',
 ]);
 // busybox/toybox are transparent the same way sudo is: the applet name is the
-// next token, so `busybox sed -i` must resolve to sed.
-const WRAPPER_BINS = /^(sudo|command|env|nohup|time|xargs|busybox|toybox)$/i;
+// next token, so `busybox sed -i` must resolve to sed. nice/timeout/doas/
+// stdbuf/setsid are transparent too — they run the command they wrap, so
+// `nice rm -r -f ~` must read as rm.
+const WRAPPER_BINS = /^(sudo|command|env|nohup|time|xargs|busybox|toybox|nice|timeout|doas|stdbuf|setsid)$/i;
 
 // Tools shipped under a `g` prefix by Homebrew's GNU coreutils (gsed, gawk,
 // gcp…). Only names whose stripped form is a real tool are folded, so `git`,
@@ -175,8 +177,17 @@ const WRAPPER_VALUE_OPTS = {
   env: /^(-u|--unset|-C|--chdir|-S|--split-string)$/,
   xargs: /^(-n|-I|-L|-P|-s|-E|-a|-d|--max-args|--replace|--max-lines|--max-procs|--max-chars|--delimiter|--arg-file|--eof)$/,
   time: /^(-o|-f|--output|--format)$/,
+  nice: /^(-n|--adjustment)$/,
+  timeout: /^(-k|-s|--kill-after|--signal)$/,
+  doas: /^(-u|-C)$/,
+  // stdbuf's buffering args attach to the flag (-o0) or follow it (-o 0).
+  stdbuf: /^(-i|-o|-e|--input|--output|--error)$/,
 };
 const NO_VALUE_OPTS = /^$/;
+
+// Wrappers with a positional operand between the flags and the program:
+// `timeout 30 cmd` puts the DURATION where the command is expected.
+const WRAPPER_OPERAND_SKIP = new Set(['timeout']);
 
 // Redirections are shell plumbing, not arguments to the program. Leaving them
 // in made `git checkout main 2>&1` look like `<tree-ish> <pathspec>` — two
@@ -207,7 +218,8 @@ function segmentTokens(segment) {
       tokens.shift();
       shifted = true;
     } else if (WRAPPER_BINS.test(head)) {
-      const valueOpts = WRAPPER_VALUE_OPTS[canonicalBin(head)] || NO_VALUE_OPTS;
+      const bin = canonicalBin(head);
+      const valueOpts = WRAPPER_VALUE_OPTS[bin] || NO_VALUE_OPTS;
       tokens.shift();
       // A wrapper's OWN flags sit between it and the program it runs. Not
       // skipping them left tokens[0] as a flag, so `sudo -E git reset --hard`
@@ -218,6 +230,7 @@ function segmentTokens(segment) {
         if (valueOpts.test(opt) && tokens.length && !tokens[0].startsWith('-')) tokens.shift();
       }
       if (tokens[0] === '--') tokens.shift();
+      if (WRAPPER_OPERAND_SKIP.has(bin) && tokens.length) tokens.shift();
       shifted = true;
     }
   }
@@ -418,16 +431,55 @@ export function gitDestructiveCheck(command, cwd) {
   return null;
 }
 
+// `eval "cmd"` RUNS cmd, and so does `bash -c "cmd"` (sh/zsh/dash alike): both
+// make the shell parse a string as a fresh command line. Quote-stripping
+// erases the quoted payload before the regex tiers see it, and the structural
+// checks saw "eval"/"bash", not the program inside — so `eval "rm -rf /"` and
+// `bash -c "rm -rf /"` were silent allows. Extract each payload and evaluate
+// it through the same path.
+const SHELL_C_BINS = /^(bash|sh|zsh|dash)$/;
+
+function evalPayloads(command) {
+  const out = [];
+  // \" survives tokenizing as a literal backslash-quote; the shell strips it
+  // before the inner parse, so strip it here too (`eval "eval \"rm…\""`).
+  const clean = (tokens) => tokens.map(unquote).join(' ').replace(/\\(["'])/g, '$1');
+  for (const segment of commandSegments(command)) {
+    const tokens = segmentTokens(segment);
+    if (tokens.length <= 1) continue;
+    const bin = canonicalBin(tokens[0]);
+    if (bin === 'eval') {
+      out.push(clean(tokens.slice(1)));
+    } else if (SHELL_C_BINS.test(bin)) {
+      // The payload is what follows -c (its own flag, or the last letter of a
+      // cluster: `bash -lc "cmd"`). Tokens after the payload are argv to it;
+      // sweeping them in only tightens the verdict, which is the safe side.
+      const i = tokens.findIndex((t) => /^-[A-Za-z]*c$/.test(t));
+      if (i > 0 && i < tokens.length - 1) out.push(clean(tokens.slice(i + 1)));
+    }
+  }
+  return out;
+}
+
+// Bounded: `eval 'eval "eval …"'` nests, and each level re-enters this
+// function — the cap keeps a pathological string from recursing forever.
+const EVAL_DEPTH_MAX = 3;
+
 // Returns { decision: 'allow' | 'ask' | 'deny', reason, action }
-export function evaluateCommand(policy, command, { cwd = null } = {}) {
+export function evaluateCommand(policy, command, { cwd = null, _depth = 0 } = {}) {
   const cmd = String(command || '');
+  if (_depth < EVAL_DEPTH_MAX) {
+    for (const payload of evalPayloads(cmd)) {
+      const verdict = evaluateCommand(policy, payload, { cwd, _depth: _depth + 1 });
+      if (verdict.decision !== 'allow') return verdict;
+    }
+  }
   const rm = dangerousRm(cmd);
   if (rm) return { decision: 'deny', action: 'forbidden', reason: rm.reason };
   // Forbidden (deny-level) regexes run against quote-stripped text so that a
   // command merely *mentioning* a forbidden string ("echo 'git push --force'")
-  // isn't hard-blocked. The real invocations are caught structurally above and
-  // below; anything hiding in quotes (bash -c "git push …") still lands in the
-  // gated tier, which scans the raw string — a human sees it either way.
+  // isn't hard-blocked. eval and bash -c payloads were already evaluated on
+  // their own above; what remains quoted here is data, not a command.
   const forbidden = matchRule(policy.tiers?.forbidden, stripQuoted(cmd));
   if (forbidden) {
     return {
@@ -535,7 +587,9 @@ export function evaluateBashProtected(command, { home, cwd = null } = {}) {
   const cmd = String(command || '');
   // git config core.hooksPath re-points hooks at an arbitrary directory — same
   // effect as writing .git/hooks/, with no file write for the heuristic to see.
-  if (/\bgit\b[^|;&]*\bconfig\b[^|;&]*hooksPath/i.test(cmd)) {
+  // The `-c key=val` per-command form (`git -c core.hooksPath=/tmp push`) is the
+  // same rewire for one invocation — the word `config` never appears in it.
+  if (/\bgit\b[^|;&]*\bconfig\b[^|;&]*hooksPath/i.test(cmd) || /\bgit\b[^|;&]*\s-c\s+\S*hooksPath/i.test(cmd)) {
     return {
       decision: 'ask',
       action: 'protected-path',
@@ -591,10 +645,10 @@ const PROTECTED_AOS_BASENAMES = new Set([
 function globToRegExp(glob) {
   const source = String(glob)
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, ' ')
+    .replace(/\*\*/g, '\u0000')
     .replace(/\*/g, '[^/]*')
     .replace(/\?/g, '[^/]')
-    .replace(/ /g, '.*');
+    .replace(/\u0000/g, '.*');
   return new RegExp(`^${source}$`, 'i');
 }
 

@@ -44,6 +44,28 @@ export function appendLine(p, line) {
   fs.appendFileSync(p, line.endsWith('\n') ? line : line + '\n');
 }
 
+// Rotation threshold for the append-only JSONL logs (sessions, audit). hook-
+// errors.log has its own older 1MB cap; the ledgers get more room because
+// readers aggregate them and rotation costs them a second file to read.
+export const LOG_ROTATE_BYTES = 10_000_000;
+
+// Bound an append-only JSONL log: once it passes LOG_ROTATE_BYTES the whole
+// file rolls to `rotated` and the line starts a fresh file. One generation
+// only — keeping every generation is unbounded growth wearing a rotation
+// costume. Aggregation readers must read the rotated file too or their totals
+// silently reset at the boundary (sessions.js and cost.js do; the console's
+// audit tail is display-only and deliberately does not).
+export function appendLineRotated(p, line, rotated = p + '.1') {
+  ensureDir(path.dirname(p));
+  try {
+    if (fs.statSync(p).size > LOG_ROTATE_BYTES) fs.renameSync(p, rotated);
+  } catch {
+    // missing (nothing to roll) or un-renamable — append anyway; enforcing
+    // the bound is never worth losing the audit line
+  }
+  fs.appendFileSync(p, line.endsWith('\n') ? line : line + '\n');
+}
+
 export function readJson(p, fallback = null) {
   const raw = readIfExists(p);
   if (raw === null) return fallback;

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { aosHome, projectDir, appendLine, nowIso, canonicalPath } from './paths.js';
+import { aosHome, projectDir, appendLine, appendLineRotated, nowIso, canonicalPath } from './paths.js';
 import { findProjectByCwd } from './registry.js';
 import os from 'node:os';
 import {
@@ -429,7 +429,8 @@ export async function hookSessionEnd() {
   // /clear and logout each end the same session): the sequence is what
   // buildContext reads for the learnings-debt marker. The totals here are
   // cumulative for the session, so readers must deduplicate — see sessions.js.
-  appendLine(
+  // Rotated at LOG_ROTATE_BYTES; readers fold in the .1 generation.
+  appendLineRotated(
     sessionsPath(project.id),
     JSON.stringify({
       ts: nowIso(),

@@ -82,7 +82,11 @@ function contractHistory(projectId, since) {
   };
   for (const run of listRuns(projectId)) {
     if (!after(run.created, since)) continue;
-    const raw = readIfExists(path.join(runDir(projectId, run.run), 'audit.jsonl'));
+    // audit.1.jsonl is the previous generation (see appendAudit): a run whose
+    // log rotated mid-life still has its early verify events, and a history
+    // that silently resets at the boundary is a wrong fail rate.
+    const dir = runDir(projectId, run.run);
+    const raw = (readIfExists(path.join(dir, 'audit.1.jsonl')) || '') + (readIfExists(path.join(dir, 'audit.jsonl')) || '');
     if (!raw) continue;
     const runUsd = costOf(run.tokens?.models).usd || 0;
     const failedHere = new Set();

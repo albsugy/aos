@@ -6,6 +6,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Override to test the compiled bundle: AOS_BIN="node $ROOT/dist/aos.mjs" bash test/smoke.sh
 AOS="${AOS_BIN:-node $ROOT/bin/aos.js}"
+
+# Bundle mode only: refuse to run against a stale dist. A green suite against
+# an old bundle proves nothing about the code that was just changed, and the
+# failure mode is invisible — pass marks on behavior that is no longer shipped.
+if [ -n "${AOS_BIN:-}" ]; then
+  STALE=$(find "$ROOT/src" "$ROOT/scripts/build.mjs" -type f -newer "$ROOT/dist/aos.mjs" -print -quit 2>/dev/null || true)
+  if [ ! -f "$ROOT/dist/aos.mjs" ] || [ -n "$STALE" ]; then
+    echo "❌ dist is stale ($STALE), run npm run build"
+    exit 1
+  fi
+fi
 WORK="$(mktemp -d)"
 export AOS_HOME="$WORK/aos-home"
 # The suite runs headless; sign-off commands (approve / state done|shipped)
@@ -261,6 +272,57 @@ for CMD in "grep -i settings .claude/settings.json" "gh pr view 1"; do
   [ -z "$(hook_out "$(bash_in "$CMD")")" ] || fail "alias false positive: $CMD"
 done
 pass "writes: grep/gh not mistaken for GNU-prefixed writers"
+
+# wrapper/eval bypasses: the wrapper is transparent, so the wrapped command
+# must get the bare command's verdict. nice/timeout/doas/stdbuf/setsid each
+# used to read as an unknown program and sail past every structural check.
+for CMD in "nice rm -r -f ~" "nice -n 10 rm -rf /" "timeout 30 rm -rf /" "timeout -k 5 30 rm -rf /" \
+           "doas rm -rf /" "doas -u root rm -rf /"; do
+  hook_out "$(bash_in "$CMD")" | grep -q '"permissionDecision":"deny"' || fail "wrapper rm bypass: $CMD"
+done
+pass "gate: nice/timeout/doas-wrapped rm -rf → deny (bare command's verdict)"
+for CMD in "stdbuf -o0 git clean -fdx" "stdbuf -o 0 git reset --hard" \
+           "setsid git reset --hard" "setsid -w git clean -fd" "doas -u root git reset --hard"; do
+  hook_out "$(bash_in "$CMD")" | grep -q '"permissionDecision":"ask"' || fail "wrapper git bypass: $CMD"
+done
+hook_out "$(bash_in "timeout 10 git push $FORCE_FLAG")" | grep -q '"permissionDecision":"deny"' \
+  || fail "timeout-wrapped force-push not denied"
+hook_out "$(bash_in "timeout 10 git push origin main")" | grep -q '"permissionDecision":"ask"' \
+  || fail "timeout-wrapped push not gated"
+pass "gate: timeout/stdbuf/setsid-wrapped git → gated like the bare form"
+# harmless wrapped commands must stay silent or the wrapper table is unusable
+for CMD in "nice ls" "timeout 30 ls" "setsid ls" "doas ls" "stdbuf -o0 ls"; do
+  [ -z "$(hook_out "$(bash_in "$CMD")")" ] || fail "wrapper false positive: $CMD"
+done
+pass "gate: wrapped read-only commands → allow (no wrapper false positives)"
+# eval's arguments ARE a command line; quote-stripping used to erase the
+# evidence before any check saw it. The inner command is evaluated through the
+# same path, so `eval "ls"` must not prompt either.
+IN_EVALRM='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"eval \"rm -rf /\""},"session_id":"s1"}'
+IN_EVALFP='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"eval \"git push '$FORCE_FLAG'\""},"session_id":"s1"}'
+IN_EVALNEST='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"eval \"eval \\\"rm -rf /\\\"\""},"session_id":"s1"}'
+IN_EVALLS='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"eval \"ls\""},"session_id":"s1"}'
+hook_out "$IN_EVALRM"   | grep -q '"permissionDecision":"deny"' && pass "gate: eval \"rm -rf /\" → deny (inner command evaluated)" || fail "eval rm bypass"
+hook_out "$IN_EVALFP"   | grep -q '"permissionDecision":"deny"' && pass "gate: eval force-push → deny" || fail "eval force-push bypass"
+hook_out "$IN_EVALNEST" | grep -q '"permissionDecision":"deny"' && pass "gate: nested eval with escaped quotes → deny" || fail "nested eval bypass"
+[ -z "$(hook_out "$IN_EVALLS")" ] && pass "gate: eval \"ls\" → allow (no eval false positive)" || fail "harmless eval gated"
+# bash/sh/zsh/dash -c is the same hole wearing a different flag: the payload
+# goes through the full gate and gets the bare command's verdict
+IN_BASHC_RM='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"bash -c \"rm -rf /\""},"session_id":"s1"}'
+IN_BASHLC='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"bash -lc \"git reset --hard\""},"session_id":"s1"}'
+IN_ZSHC_PUSH='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"zsh -c \"git push origin main\""},"session_id":"s1"}'
+IN_DASHC_LS='{"cwd":"'$REPO'","tool_name":"Bash","tool_input":{"command":"dash -c \"ls\""},"session_id":"s1"}'
+hook_out "$IN_BASHC_RM"  | grep -q '"permissionDecision":"deny"' && pass "gate: bash -c \"rm -rf /\" → deny (payload through the full gate)" || fail "bash -c rm bypass"
+hook_out "$(bash_in "sh -c 'git push $FORCE_FLAG'")" | grep -q '"permissionDecision":"deny"' && pass "gate: sh -c force-push → deny (bare command's verdict)" || fail "sh -c force-push bypass"
+hook_out "$IN_BASHLC"    | grep -q '"permissionDecision":"ask"'  && pass "gate: bash -lc destructive git → ask (cluster flag)" || fail "bash -lc bypass"
+hook_out "$IN_ZSHC_PUSH" | grep -q '"permissionDecision":"ask"'  && pass "gate: zsh -c push → ask" || fail "zsh -c push bypass"
+[ -z "$(hook_out "$IN_DASHC_LS")" ] && pass "gate: dash -c \"ls\" → allow (no -c false positive)" || fail "harmless -c payload gated"
+# `git -c core.hooksPath=…` is the same hook rewiring as `git config`, one
+# invocation at a time — and the word "config" never appears in it
+hook_out "$(bash_in "git -c core.hooksPath=/tmp/x push")" | grep -q '"permissionDecision":"ask"' \
+  && pass "gate: git -c core.hooksPath → ask (per-command hook rewiring)" || fail "git -c hooksPath bypass"
+[ -z "$(hook_out "$(bash_in "git -c user.email=a@b.c commit -m x")")" ] \
+  && pass "gate: git -c with an ordinary key → allow" || fail "git -c false positive"
 
 # --- file-write gates: self-protection + script laundering ---
 IN_SETTINGS='{"cwd":"'$REPO'","tool_name":"Write","tool_input":{"file_path":"'$REPO'/.claude/settings.json","content":"{}"},"session_id":"s1"}'
@@ -1051,6 +1113,18 @@ echo "$BARE_OUT" | grep -q "Verification is EMPTY" && pass "init: warns loudly w
 grep -Eq '(exec|spawn)\w*\([^)]{0,80}curl' "$ROOT/dist/aos.mjs" && fail "compiled bundle shells out to curl (possible curl|bash supply-chain risk)" || pass "no curl execution in compiled bundle — no remote-script execution"
 grep -Eq 'fetch\(|registry\.npmjs\.org' "$ROOT/dist/aos.mjs" && fail "compiled bundle accesses the network (fetch/registry) — should delegate to install.sh" || pass "no network access in compiled bundle — installer owns all outbound I/O"
 
+# --- no literal NUL bytes in the shipped sources ---
+# A raw \x00 placeholder made policy.js and ui.html read as "data" to file(1)
+# and choke UTF-8 tooling; the glob and markdown-fence sentinels use escapes
+# (\u0000 / private-use) now — same runtime value, byte-safe source.
+node -e '
+  const fs = require("fs");
+  for (const f of process.argv.slice(1)) {
+    if (fs.readFileSync(f).includes(0)) { console.error(f + " contains a literal NUL byte"); process.exit(1); }
+  }
+' "$ROOT/src/policy.js" "$ROOT/src/console/ui.html" \
+  && pass "sources: no literal NUL bytes (sentinels use escapes)" || fail "literal NUL byte in sources"
+
 # --- entry point: declared + importing the bundle is side-effect-free (no EntryPointError) ---
 node -e 'const p=require(process.argv[1]);process.exit(p.main&&p.exports?0:1)' "$ROOT/package.json" \
   && pass "entry point: package.json declares main + exports" || fail "package.json has no main/exports entry point"
@@ -1215,6 +1289,43 @@ TRAV=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/run?pr
 REBIND=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example.com" "http://127.0.0.1:$PORT/api/state")
 [ "$REBIND" = "403" ] && pass "console security: foreign Host → 403" || { kill $CONSOLE_PID; fail "rebinding not blocked ($REBIND)"; }
 kill $CONSOLE_PID 2>/dev/null
+
+# --- bounded growth: sessions.jsonl and audit.jsonl rotate at 10MB ---
+# Both ledgers were append-only-and-forever while every reader slurps the file
+# whole. The rotated generation (sessions.jsonl.1 / audit.1.jsonl) must still
+# count toward totals, or a rotation silently resets the project's numbers.
+ROT_REPO="$WORK/rot-repo"; mkdir -p "$ROT_REPO"; (cd "$ROT_REPO" && git init -q -b main)
+(cd "$ROT_REPO" && $AOS init --name rot >/dev/null)
+ROT_PROJ="$AOS_HOME/projects/rot"
+ROT_TRANS="$WORK/rot-transcript.jsonl"
+echo '{"message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":70,"cache_read_input_tokens":400,"output_tokens":30}}}' > "$ROT_TRANS"
+# sA's ending is in the file BEFORE it crosses the threshold; sB's lands after
+printf '%s' '{"cwd":"'"$ROT_REPO"'","session_id":"sA","transcript_path":"'"$ROT_TRANS"'"}' | $AOS hook session-end
+node -e 'require("fs").appendFileSync(process.argv[1], "x".repeat(10500000) + "\n")' "$ROT_PROJ/sessions.jsonl"
+printf '%s' '{"cwd":"'"$ROT_REPO"'","session_id":"sB","transcript_path":"'"$ROT_TRANS"'"}' | $AOS hook session-end
+[ -f "$ROT_PROJ/sessions.jsonl.1" ] && pass "rotation: sessions.jsonl rolls to .1 past the threshold" || fail "sessions.jsonl did not rotate"
+[ "$(grep -c . "$ROT_PROJ/sessions.jsonl")" = "1" ] && pass "rotation: the fresh sessions.jsonl holds only new lines" || fail "rotation did not start a fresh file"
+$AOS status | grep -A4 '(rot)' | grep -q "140 in / 60 out" \
+  && pass "rotation: status totals span the boundary (old generation still counts)" || fail "rotation reset session totals"
+(cd "$ROT_REPO" && $AOS cost) | grep -q "140" \
+  && pass "rotation: cost totals span the boundary too" || fail "rotation reset cost totals"
+
+# per-run audit.jsonl: same bound, and the display readers must not care
+(cd "$ROT_REPO" && $AOS run start --ticket "LIN-ROT" >/dev/null)
+ROT_RUN=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).activeRun)' "$ROT_PROJ/state.json")
+ROT_RUN_DIR="$ROT_PROJ/runs/$ROT_RUN"
+node -e 'require("fs").appendFileSync(process.argv[1], "x".repeat(10500000) + "\n")' "$ROT_RUN_DIR/audit.jsonl"
+printf '%s' '{"cwd":"'"$ROT_REPO"'","tool_name":"Write","tool_input":{"file_path":"src/b.js"},"session_id":"sA"}' | $AOS hook post-tool
+[ -f "$ROT_RUN_DIR/audit.1.jsonl" ] && pass "rotation: audit.jsonl rolls to audit.1.jsonl past the threshold" || fail "audit.jsonl did not rotate"
+grep -q '"tool":"Write"' "$ROT_RUN_DIR/audit.jsonl" && pass "rotation: the fresh audit.jsonl keeps recording" || fail "audit lost after rotation"
+$AOS status >/dev/null && pass "rotation: status works with rotated logs" || fail "status broke on rotated logs"
+ROT_PORT=45998
+$AOS console --port $ROT_PORT >/dev/null 2>&1 &
+ROT_CONSOLE_PID=$!
+sleep 1
+ROT_DETAIL=$(curl -s "http://127.0.0.1:$ROT_PORT/api/run?project=rot&run=$ROT_RUN")
+case "$ROT_DETAIL" in *'"audit"'*) pass "rotation: console serves a run whose audit rotated" ;; *) kill $ROT_CONSOLE_PID; fail "console broke on rotated audit";; esac
+kill $ROT_CONSOLE_PID 2>/dev/null
 
 # --- corrupt registry: reads degrade, writes refuse to clobber ---
 echo '{{{ not yaml' > "$AOS_HOME/registry.yaml"

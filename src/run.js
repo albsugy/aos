@@ -5,7 +5,7 @@ import {
   ensureDir,
   readJson,
   writeJson,
-  appendLine,
+  appendLineRotated,
   readIfExists,
   slugify,
   today,
@@ -521,23 +521,34 @@ export function listRuns(projectId) {
     .sort((a, b) => (a.created < b.created ? 1 : -1));
 }
 
+// audit.1.jsonl rather than audit.jsonl.1: globbing `*.jsonl` must keep
+// finding only live logs.
+function auditPath(projectId, runId = null) {
+  return path.join(runId ? runDir(projectId, runId) : projectDir(projectId), 'audit.jsonl');
+}
+
 // Audit lines go to the active run when one exists, else to the project log —
 // session exhaust outside a run is still worth keeping. A run bound to a
 // session only accepts that session's lines: a second concurrent session in
 // the same repo lands in the project log instead of polluting the run's
 // audit trail. Unbound runs (started from a terminal, not via a session)
 // keep the old accept-everything behavior.
+// Logs rotate to audit.1.jsonl at LOG_ROTATE_BYTES; only the contract-history
+// reader (cost.js) aggregates across the boundary — everything else reads the
+// current run's recent activity, which the fresh file still holds.
 export function appendAudit(projectId, entry) {
   const active = getActiveRun(projectId);
   const line = JSON.stringify({ ts: nowIso(), ...entry });
   if (active && fs.existsSync(runDir(projectId, active))) {
     const boundSession = runMeta(projectId, active)?.session;
     if (!boundSession || !entry.session || entry.session === boundSession) {
-      appendLine(path.join(runDir(projectId, active), 'audit.jsonl'), line);
+      const p = auditPath(projectId, active);
+      appendLineRotated(p, line, p.replace(/audit\.jsonl$/, 'audit.1.jsonl'));
       return;
     }
   }
-  appendLine(path.join(projectDir(projectId), 'audit.jsonl'), line);
+  const p = auditPath(projectId);
+  appendLineRotated(p, line, p.replace(/audit\.jsonl$/, 'audit.1.jsonl'));
 }
 
 export function readRunFile(projectId, runId, file) {

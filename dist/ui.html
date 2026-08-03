@@ -417,7 +417,7 @@ function md(src) {
   const fences = [];
   let s = String(src).replace(/\r/g, '').replace(/```\w*\n?([\s\S]*?)```/g, (m, code) => {
     fences.push(code.replace(/\n$/, ''));
-    return ` ${fences.length - 1} `;
+    return `\uE000${fences.length - 1}\uE000`;
   });
   s = esc(s);
   const out = [];
@@ -431,7 +431,7 @@ function md(src) {
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   for (const raw of s.split('\n')) {
     const t = raw.trim();
-    const fence = t.match(/^ (\d+) $/);
+    const fence = t.match(/^\uE000(\d+)\uE000$/);
     if (fence) { flushPara(); closeList(); closeTable(); out.push(`<pre class="codeblock">${esc(fences[+fence[1]])}</pre>`); continue; }
     if (/^\|.*\|$/.test(t)) {
       flushPara(); closeList();
