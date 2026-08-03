@@ -256,10 +256,11 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
 against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
-plus a dist-freshness gate and shellcheck. ~310 end-to-end assertions, weighted toward
-the gate's adversarial bypass surface — that's where the value is, so that's where the
-tests are — plus a unit layer (`node --test`, no dependencies) over the pure functions
-underneath them.
+plus a dist-freshness gate and shellcheck. The end-to-end suite reports 313 checks from
+361 assertion sites (a loop over a command matrix prints one line), weighted toward the
+gate's adversarial bypass surface — that's where the value is, so that's where the tests
+are. Under it sits a unit layer (`node --test`, no dependencies): 203 tests, including a
+125-case gate corpus and a seeded fuzzer over wrapper × payload × quoting combinations.
 
 ## License
 

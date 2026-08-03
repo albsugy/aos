@@ -10,7 +10,8 @@
   state earlier ones leave behind), with shared helpers in `test/lib.sh`. A
   section file that exists but isn't listed in the driver fails the run rather
   than being silently skipped. Same assertions, same order, same idiom — 313
-  end-to-end checks before and after.
+  end-to-end checks before and after (from 361 assertion sites: a loop over a
+  command matrix reports one line).
 
 ### Added
 
@@ -20,6 +21,26 @@
   registry, and the path primitives; runs in ~0.2s, so the fast feedback loop
   no longer requires the full end-to-end sandbox. `npm test` is now unit →
   source → bundle, and CI runs the unit job first.
+- **A case corpus for the Bash gate** — `test/fixtures/gate-cases.json`, 125
+  rows of `{command, expect, note}` covering every historical bypass, run
+  through the real engine in the order `hooks.js` applies it. Closing a hole is
+  now a one-line fixture edit instead of remembering to write a test. Commands
+  are stored as templates over a placeholder table because AOS's own gate
+  refuses to write a file containing the literal destructive forms.
+- **A `knownLimits` section in that corpus**, asserting what the gate does *not*
+  catch: command substitution inside a `-c` payload, variable indirection,
+  pipe-to-shell, herestrings, nesting past the recursion cap, and `xargs` taking
+  its targets from stdin. They are pinned as `allow` on purpose — if one starts
+  failing, the limit was closed and the docs need updating.
+- **A seeded fuzzer** (`test/unit/fuzz.test.js`): 20 wrapper prefixes × 6
+  destructive and 7 harmless payloads × 5 shell-string forms, plus chaining and
+  redirects, over a deterministic PRNG so any failure replays from the seed it
+  prints. Invariants: a destructive payload never returns `allow`, an ordinary
+  one never returns `deny`, the full wrapper × payload cross product is checked
+  exhaustively, degenerate input never throws, and pathological nesting
+  terminates. The invariants are scoped to the generated grammar — the
+  documented limits above are deliberately not generated, since asserting them
+  would claim a guarantee the gate has never made.
 
 ## 0.12.0 — 2026-08-03
 
