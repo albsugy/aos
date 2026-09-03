@@ -16,6 +16,7 @@ import { printStatus } from './status.js';
 import { printFind, printFindAll } from './search.js';
 import { fleetScaffold, fleetLaunch } from './fleet.js';
 import { buildContext } from './context.js';
+import { syncContextFile, contextStatus, diffContextFile, contextFilesFor } from './context-sync.js';
 import { loadPolicy } from './policy.js';
 import { serveConsole } from './console/server.js';
 import { runDoctor, printCapabilities } from './doctor.js';
@@ -316,6 +317,55 @@ async function main() {
       break;
     case 'context': {
       const p = requireProject(flags);
+      const sub = positional[0];
+      if (sub === 'sync' || sub === 'check' || sub === 'diff') {
+        // Portable context: regenerate / verify the per-agent files from the
+        // canonical memory. `check` is CI-gateable (exit 1 on drift).
+        const files = contextFilesFor(p.agents || []);
+        if (!files.length) {
+          console.log(
+            `No file-reading agents registered for "${p.id}" — its context reaches agents via SessionStart hooks.\n` +
+              `Register one with: aos init --agent codex|cursor|gemini`
+          );
+          break;
+        }
+        const repoRoot = (p.repos || []).find((r) => fs.existsSync(path.join(r, '.git'))) || (p.repos || [])[0] || process.cwd();
+        let bad = 0;
+        if (sub === 'sync') {
+          for (const file of files) {
+            const r = syncContextFile(p.id, p.name, repoRoot, file);
+            if (r.ok) console.log(`${r.changed ? '✔' : '•'} ${file} — ${r.changed ? 'written' : 'already current'}`);
+            else {
+              bad++;
+              console.error(`⚠ ${r.error}`);
+            }
+          }
+          if (bad) process.exitCode = 1;
+          else console.log(`Source of truth: ${projectDir(p.id)} — edit there, never the generated files.`);
+        } else if (sub === 'check') {
+          for (const file of files) {
+            const st = contextStatus(p.id, p.name, repoRoot, file);
+            const icon = { current: '✔', stale: '⚠', missing: '✗', foreign: '✗' }[st.state];
+            console.log(`${icon} ${file} — ${st.state}`);
+            if (st.state !== 'current') bad++;
+          }
+          if (bad) {
+            console.log(
+              `\n${bad} file(s) out of date — run \`aos context sync\` after editing the project memory.`
+            );
+            process.exitCode = 1;
+          } else {
+            console.log('\nAll generated context files are current.');
+          }
+        } else {
+          for (const file of files) {
+            const d = diffContextFile(p.id, p.name, repoRoot, file);
+            console.log(`── ${file} (${d.state})${d.lines.length ? '' : ' — no differences'}`);
+            for (const line of d.lines) console.log(line);
+          }
+        }
+        break;
+      }
       console.log(buildContext(p.id, p.name));
       break;
     }

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { addProject, getProject } from './registry.js';
+import { addProject, findProjectByCwd } from './registry.js';
 import { projectDir, ensureDir, readJson, writeJson, slugify, ASSETS } from './paths.js';
 import { detectRepo } from './detect.js';
 import { AGENT_CATALOG, detectAgents, parseAgentFlag } from './agents.js';
@@ -79,7 +79,10 @@ export function resolveAgents(repoRoot, agentFlagValue) {
     return detected.length ? detected : ['claude'];
   }
   if (parsed?.mode === 'set') return parsed.agents;
-  const existing = getProject(slugify(path.basename(path.resolve(repoRoot))));
+  // No flag: keep whatever this repo's project already uses. Resolved by cwd,
+  // not by a guessed id — a project registered with --name must not fork into
+  // a basename-id duplicate on re-init.
+  const existing = findProjectByCwd(repoRoot);
   if (existing?.agents?.length) return existing.agents;
   return ['claude'];
 }
@@ -90,7 +93,10 @@ export function resolveAgents(repoRoot, agentFlagValue) {
 // no hooks-only install without them. Only the pipeline skills are skipped.
 export function init(repoRoot, { name, hooksOnly = false, agent = null } = {}) {
   const resolved = path.resolve(repoRoot);
-  const id = slugify(name || path.basename(resolved));
+  // Re-init targets the project already registered for this repo (by cwd);
+  // only a genuinely new registration derives the id from the directory name.
+  const registered = findProjectByCwd(resolved);
+  const id = slugify(name || registered?.name || path.basename(resolved));
   const agents = resolveAgents(resolved, agent);
   const project = addProject({ id, name: name || path.basename(resolved), repo: resolved, agents });
   const { dir, detection } = scaffoldProjectHome(id, resolved);
