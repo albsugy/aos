@@ -1,13 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ensureDir } from '../paths.js';
+import { ensureDir, ASSETS } from '../paths.js';
 
 // Shared installer plumbing. Installers own each agent's config FILE; the
 // adapters own its wire protocol. Nothing here knows policy.
-
-export const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets');
 
 // The command embedded in hooks must survive `aos update`, reinstalls to a new
 // directory, and dev-checkout ↔ installed-package switches. So we embed the

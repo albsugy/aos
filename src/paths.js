@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The bundled assets directory. One level up from THIS module works in both
+// layouts: source (src/ → app root) and the single-file bundle
+// (dist/aos.mjs → app root).
+export const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 
 export function aosHome() {
   return process.env.AOS_HOME || path.join(os.homedir(), '.aos');

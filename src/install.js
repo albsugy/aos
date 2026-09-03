@@ -1,14 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { addProject, getProject } from './registry.js';
-import { projectDir, ensureDir, readJson, writeJson, slugify } from './paths.js';
+import { projectDir, ensureDir, readJson, writeJson, slugify, ASSETS } from './paths.js';
 import { detectRepo } from './detect.js';
 import { AGENT_CATALOG, detectAgents, parseAgentFlag } from './agents.js';
 import { syncContextFiles } from './context-sync.js';
-
-const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 
 // Inject detected contracts into the freshly-scaffolded policy without losing
 // the template's comments. Parsing as a Document keeps everything outside the
