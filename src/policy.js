@@ -67,6 +67,14 @@ export const DEFAULT_POLICY = {
   },
   verification: {
     adversarial_review: true,
+    // Executable findings (opt-in): when true, a high-severity finding must
+    // carry a `reproduce` command, `aos run review` executes it, and the
+    // review gate refuses (state "unproven") until every required execution
+    // matches its expectation — `open` findings must fail their command (the
+    // bug demonstrated), `fixed` findings must pass it (the fix demonstrated).
+    // Off by default: it raises the bar on review.json beyond what existing
+    // projects have written.
+    executable_findings: false,
     contracts: [],
   },
 };
@@ -78,6 +86,13 @@ export function policyPath(projectId) {
 export function loadPolicy(projectId) {
   const raw = readIfExists(policyPath(projectId));
   if (!raw) return DEFAULT_POLICY;
+  return loadPolicyText(raw);
+}
+
+// Parse policy text into a full policy object. Broken YAML falls back to the
+// defaults — same contract as loadPolicy, shared with `aos policy test`, which
+// reads a candidate file the project never installed.
+export function loadPolicyText(raw) {
   try {
     const parsed = YAML.parse(raw);
     if (!parsed || typeof parsed !== 'object') return DEFAULT_POLICY;
@@ -90,6 +105,22 @@ export function loadPolicy(projectId) {
   } catch {
     return DEFAULT_POLICY;
   }
+}
+
+// A candidate policy from an explicit file — `aos policy test --file`. The
+// file must exist and parse; silently falling back to defaults here would
+// replay against a policy the user never wrote.
+export function loadPolicyFile(file) {
+  const raw = readIfExists(file);
+  if (raw === null) throw new Error(`No such policy file: ${file}`);
+  const parsed = YAML.parse(raw); // throws on broken YAML — that is the point
+  if (!parsed || typeof parsed !== 'object') throw new Error(`${file}: not a policy document`);
+  return {
+    ...DEFAULT_POLICY,
+    ...parsed,
+    tiers: { ...DEFAULT_POLICY.tiers, ...(parsed.tiers || {}) },
+    verification: { ...DEFAULT_POLICY.verification, ...(parsed.verification || {}) },
+  };
 }
 
 function matchRule(rules, command) {

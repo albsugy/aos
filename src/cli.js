@@ -22,6 +22,7 @@ import { exportAgentsMd } from './export.js';
 import { consumeSignoffTicket } from './signoff.js';
 import { printCost, parseSince } from './cost.js';
 import { verifyProjectLedgers } from './run.js';
+import { runPolicyTest } from './policy-test.js';
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -175,6 +176,7 @@ Usage:
   aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
   aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
+  aos policy test [--file <p.yaml>] [--since 30d]   Policy CI — replay recorded agent traffic against a policy
   aos find <query> [--all]          Search project memory; --all sweeps every project
   aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
   aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
@@ -481,6 +483,65 @@ async function main() {
         );
       }
       process.exit(verdict === 'fail' ? 1 : 0);
+      break;
+    }
+    case 'policy': {
+      // `aos policy test` — Policy CI: replay recorded agent traffic against
+      // a policy (candidate via --file, else the current one) and report what
+      // would change. It is a report, not a gate: exit 0 with findings, exit 1
+      // only when the replay itself could not run (bad file, no project).
+      const sub = positional[0];
+      if (sub !== 'test') {
+        console.error('Usage: aos policy test [--file <policy.yaml>] [--since 30d] [--project <id>]');
+        process.exitCode = 1;
+        break;
+      }
+      const p = requireProject(flags);
+      const file = strFlag(flags.file);
+      const window = strFlag(flags.since) || '90d';
+      const since = parseSince(window);
+      if (Number.isNaN(since)) {
+        console.error(`Unreadable --since "${window}". Use 7d / 24h / 2w, or a date like 2026-07-01.`);
+        process.exitCode = 1;
+        break;
+      }
+      let result;
+      try {
+        result = runPolicyTest(p.id, { file, sinceMs: since ?? 0 });
+      } catch (e) {
+        console.error(e.message || e);
+        process.exitCode = 1;
+        break;
+      }
+      const origin = file ? path.resolve(file) : `${p.id}'s installed policy.yaml`;
+      console.log(
+        `Policy replay — ${result.unique.length} unique command(s) from ${result.scanned} recorded call(s), window ${window}`
+      );
+      console.log(`Candidate: ${origin}`);
+      if (result.truncated) {
+        console.log(
+          `ℹ ${result.truncated} recorded command(s) were truncated at 300 chars — evaluated as recorded; a rule matching only past that point cannot be tested against them`
+        );
+      }
+      const show = (rows, verb) => {
+        if (!rows.length) return;
+        console.log(`\n${verb} (${rows.length}):`);
+        for (const r of rows.slice(0, 15)) {
+          const why = r.reason ? ` — ${r.reason}` : r.action ? ` — ${r.action}` : '';
+          console.log(`  • [${String(r.count).padStart(3)}×] ${r.command.slice(0, 100)}${why}`);
+        }
+        if (rows.length > 15) console.log(`  … and ${rows.length - 15} more`);
+      };
+      show(result.wouldDeny, 'would DENY — ran freely before');
+      show(result.wouldAsk, 'would GATE — ran freely before');
+      show(result.wouldTighten, 'would now DENY — was gated (approved) before');
+      show(result.wouldUnblock, 'would now ALLOW — was denied/gated before');
+      console.log(
+        `\nUnchanged: ${result.unchanged} · denied: ${result.wouldDeny.length} · gated: ${result.wouldAsk.length} · tightened: ${result.wouldTighten.length} · unblocked: ${result.wouldUnblock.length}${result.errors ? ` · evaluation errors: ${result.errors}` : ''}`
+      );
+      if (!result.unique.length) {
+        console.log('No recorded Bash commands to replay — run some work (or `aos ingest`) first.');
+      }
       break;
     }
     case 'audit': {
