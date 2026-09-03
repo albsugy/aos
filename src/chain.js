@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { appendLineRotated, withLock } from './paths.js';
+import { appendLineRotated, withLock, writeJson, readJson } from './paths.js';
 
 // The tamper-evident audit chain.
 //
@@ -8,7 +8,11 @@ import { appendLineRotated, withLock } from './paths.js';
 // hash = sha256(prevHash + '\n' + payload) over the line's own payload (the
 // entry without the chain field). Editing or deleting any line after the
 // fact breaks the link at that point; `aos audit verify` walks the ledger
-// and reports the first line that no longer adds up.
+// and reports the first line that no longer adds up. A valid prefix is still
+// a valid chain, so trailing deletes are caught by a sibling head file
+// (`audit.jsonl.head`) that records the latest {seq, hash} under the same
+// lock as the append. A writer who can edit that head can still rewrite
+// history — the gap closed is the easy delete-the-end case.
 //
 // What this proves: the ledger is byte-for-byte as it was written. What it
 // does not prove: who wrote it — a process with write access can still append
@@ -24,6 +28,11 @@ import { appendLineRotated, withLock } from './paths.js';
 
 export const GENESIS = 'aos-genesis-v1';
 const TAIL_BYTES = 8192;
+const LAST_LINE_MAX = 64 * 1024;
+
+export function headPath(file) {
+  return file + '.head';
+}
 
 // Append one chained line to a ledger file. Read-prev → build → append under
 // the advisory lock so two concurrent appends can't fork the chain; if the
@@ -38,8 +47,9 @@ const TAIL_BYTES = 8192;
 export function appendChainedTo(file, rotated, entry) {
   withLock(file, () => {
     const prev = chainStateFromFile(file) || chainStateFromFile(rotated);
-    const { line } = buildChainedLine(prev, entry);
+    const { line, state } = buildChainedLine(prev, entry);
     appendLineRotated(file, line, rotated);
+    writeJson(headPath(file), { seq: state.seq, hash: state.hash });
   });
 }
 
@@ -59,6 +69,13 @@ function payloadOf(parsed) {
 // Build the next chained line for a ledger whose last chained state is
 // {seq, hash} (null when the ledger is empty or fully legacy).
 export function buildChainedLine(prev, entry) {
+  // The line is built by spreading the entry, so a non-object entry (a
+  // pre-stringified JSON string is the easy mistake) must be wrapped, not
+  // spread — spreading a string yields a numeric-keys object that "verifies"
+  // fine while destroying the payload.
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    entry = { value: entry };
+  }
   const payloadLine = JSON.stringify(entry);
   const seq = prev ? prev.seq + 1 : 0;
   const hash = chainHash(prev ? prev.hash : GENESIS, payloadLine);
@@ -77,16 +94,28 @@ export function lastLineOf(file) {
     fd = fs.openSync(file, 'r');
     const size = fs.fstatSync(fd).size;
     if (size === 0) return null;
-    const len = Math.min(size, TAIL_BYTES);
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, size - len);
-    const lines = buf.toString('utf8').split('\n').filter((l) => l.trim());
-    // When the tail read started mid-file, the first fragment may be a
-    // partial line — only trust it if it is the only one (it ends the file,
-    // and a trailing fragment that ends at EOF is complete).
-    if (lines.length > 1 && len < size) lines.shift();
-    const last = lines[lines.length - 1];
-    return last || null;
+    let window = Math.min(size, TAIL_BYTES);
+    while (true) {
+      const buf = Buffer.alloc(window);
+      fs.readSync(fd, buf, 0, window, size - window);
+      const text = buf.toString('utf8');
+      const startedMid = window < size;
+      const parts = text.split('\n');
+      if (parts.length && parts[parts.length - 1] === '') parts.pop();
+      if (startedMid) {
+        // A mid-file window's first segment is an incomplete prefix. One
+        // remaining part is not enough to know the last line is whole — grow
+        // until a preceding newline is in the window, or give up.
+        if (parts.length < 2) {
+          if (window >= size || window >= LAST_LINE_MAX) return null;
+          window = Math.min(size, LAST_LINE_MAX, window * 2);
+          continue;
+        }
+        parts.shift();
+      }
+      const last = parts[parts.length - 1];
+      return last && last.trim() ? last : null;
+    }
   } catch {
     return null;
   } finally {
@@ -183,6 +212,25 @@ export function verifyLedger(files) {
       }
       prev = { seq, hash };
       report.chained++;
+    }
+  }
+
+  // Head is a witness of the latest append. Missing head: ledgers written
+  // before this existed, or a writer who deleted the head too — the check
+  // closes the easy "delete the newest lines" case, not a writer who can
+  // edit the head file. Present head that disagrees with the tail: truncation
+  // (or a crash between append and head write; the next append heals it).
+  const current = files.length ? files[files.length - 1] : null;
+  const head = current ? readJson(headPath(current), null) : null;
+  if (head && Number.isInteger(head.seq) && typeof head.hash === 'string') {
+    if (!prev) {
+      problem(
+        `recorded head seq ${head.seq} but the ledger has no chained lines — trailing history was deleted`
+      );
+    } else if (head.seq !== prev.seq || head.hash !== prev.hash) {
+      problem(
+        `ledger tail (seq ${prev.seq}) does not match the recorded head (seq ${head.seq}) — trailing lines were deleted or the head was rewritten`
+      );
     }
   }
   return report;

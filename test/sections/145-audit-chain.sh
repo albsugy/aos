@@ -70,6 +70,17 @@ DEL=$($AOS audit verify --project demo 2>&1) && fail "audit verify passed a dele
 echo "$DEL" | grep -qE "seq|unchained" && pass "audit verify: a deleted line breaks the chain visibly" || fail "deletion not detected: $DEL"
 cp "$WORK/audit.bak" "$AUDIT"
 
+# deleting the newest lines (a valid prefix) is caught by the head file
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const lines = fs.readFileSync(p, "utf8").split("\n").filter(Boolean);
+  fs.writeFileSync(p, lines.slice(0, Math.max(1, lines.length - 2)).join("\n") + "\n");
+' "$AUDIT"
+TAIL=$($AOS audit verify --project demo 2>&1) && fail "audit verify passed a truncated tail" || true
+echo "$TAIL" | grep -qE "head|trailing" && pass "audit verify: deleting trailing lines is flagged" || fail "tail truncation not detected: $TAIL"
+cp "$WORK/audit.bak" "$AUDIT"
+
 # 140 injected a raw foreign line into rot's run ledger on purpose — the whole-
 # project sweep must say so rather than wave it through.
 SWEEP=$($AOS audit verify 2>&1) && fail "audit verify sweep passed a foreign line" || true
