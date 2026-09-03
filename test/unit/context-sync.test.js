@@ -11,6 +11,8 @@ before(async () => {
   process.env.AOS_HOME = home;
   const { addProject } = await import('../../src/registry.js');
   addProject({ id: 'ctx', name: 'ctx', repo, agents: ['claude', 'codex', 'gemini'] });
+  fs.mkdirSync(path.join(home, 'projects', 'ctx', 'context'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'projects', 'ctx', 'context', 'pack.md'), '# Context pack\n\nbody\n');
 });
 after(() => {
   fs.rmSync(home, { recursive: true, force: true });
@@ -45,7 +47,7 @@ test('sync writes marked files; re-sync is a no-op state', () => {
 });
 
 test('memory edits make the file stale; sync heals it', () => {
-  fs.appendFileSync(path.join(home, 'projects', 'ctx', 'learnings.md'), '- gotcha: x\n');
+  fs.writeFileSync(path.join(home, 'projects', 'ctx', 'learnings.md'), '# Learnings\n- gotcha: x\n');
   assert.equal(contextStatus('ctx', 'ctx', repo, 'AGENTS.md').state, 'stale');
   const d = diffContextFile('ctx', 'ctx', repo, 'AGENTS.md');
   assert.ok(d.lines.some((l) => l.startsWith('+ ') && l.includes('gotcha')));
