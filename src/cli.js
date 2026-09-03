@@ -21,8 +21,9 @@ import { runDoctor } from './doctor.js';
 import { exportAgentsMd } from './export.js';
 import { consumeSignoffTicket } from './signoff.js';
 import { printCost, parseSince } from './cost.js';
-import { verifyProjectLedgers } from './run.js';
 import { runPolicyTest } from './policy-test.js';
+import { verifyProjectLedgers } from './run.js';
+import { ingestTranscripts, claudeProjectsDir } from './ingest.js';
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -175,8 +176,9 @@ Usage:
   aos run list                      List runs for this project
   aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
-  aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
   aos policy test [--file <p.yaml>] [--since 30d]   Policy CI — replay recorded agent traffic against a policy
+  aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
+  aos ingest [--dry-run]            Backfill audit + token history from Claude Code transcripts
   aos find <query> [--all]          Search project memory; --all sweeps every project
   aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
   aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
@@ -611,6 +613,43 @@ async function main() {
         process.exitCode = 1;
       } else {
         console.log('\nAll ledgers verify — no post-hoc edits detected.');
+      }
+      break;
+    }
+    case 'ingest': {
+      // Backfill audit + token history from Claude Code transcripts. Read-only
+      // probe with --dry-run.
+      const only = strFlag(flags.project);
+      if (only && !getProject(only)) {
+        console.error(`No project "${only}".`);
+        process.exitCode = 1;
+        break;
+      }
+      const { files, projects, warnings } = ingestTranscripts({
+        dryRun: Boolean(flags['dry-run']),
+        onlyProjectId: only || null,
+      });
+      const dir = claudeProjectsDir();
+      console.log(
+        `Scanned ${files} session file(s) under ${dir}${Boolean(flags['dry-run']) ? ' (dry run — nothing written)' : ''}`
+      );
+      if (!projects.length) {
+        console.log('No transcripts matched a registered project. Sessions are matched by their recorded cwd.');
+      }
+      for (const r of projects) {
+        const parts = [
+          `${r.files} file(s): ${r.sessionsNew} new`,
+          r.sessionsDelta ? `${r.sessionsDelta} updated` : null,
+          r.sessionsSkipped ? `${r.sessionsSkipped} skipped` : null,
+        ].filter(Boolean);
+        console.log(`  ${r.project}: ${parts.join(', ')}, ${r.toolCalls} tool call(s)`);
+        if (r.tokens && (r.tokens.input || r.tokens.output || r.tokens.cache_read)) {
+          console.log(`    tokens: ${r.tokens.input} in, ${r.tokens.output} out, ${r.tokens.cache_read} cache-read`);
+        }
+      }
+      for (const w of warnings) console.log(`⚠ ${w}`);
+      if (!Boolean(flags['dry-run']) && projects.some((r) => r.toolCalls > 0)) {
+        console.log('\nIngested history is replayable: aos policy test');
       }
       break;
     }

@@ -367,7 +367,7 @@ export async function hookSessionStart() {
 // The legacy totals (input incl. cache writes) stay for continuity; the
 // per-model `models` buckets split cache writes out (they bill at 1.25x/2x
 // input, not 1x) so dollar estimates can be honest.
-function sumTranscriptUsage(transcriptPath) {
+export function sumTranscriptUsage(transcriptPath) {
   const usage = { input: 0, output: 0, cache_read: 0, models: {} };
   try {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
