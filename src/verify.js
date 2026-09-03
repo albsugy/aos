@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { loadPolicy } from './policy.js';
+import { loadPolicy, evaluateCommand, evaluateBashProtected } from './policy.js';
 import { getActiveRun, runDir, runMeta, mutateRunMeta, appendAudit } from './run.js';
-import { reviewMode } from './review.js';
-import { nowIso } from './paths.js';
+import { reviewMode, reviewPath, validateReview, DEMONSTRABLE_STATUSES } from './review.js';
+import { aosHome, nowIso } from './paths.js';
 
 function runContract(contract, cwd) {
   const started = Date.now();
@@ -88,4 +88,116 @@ function writeVerificationReport(projectId, runId, results, verdict) {
   }
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '# Verification\n\n';
   fs.writeFileSync(file, existing + lines.join('\n') + '\n');
+}
+
+// Execute the reproduce commands recorded in a run's review.json, and write
+// the results back into that file as `executions`.
+//
+// This is the executable half of executable findings: `aos run review` runs
+// every demonstrable finding's command (open → it must FAIL, fixed → it must
+// PASS) in a real subprocess, the same way contracts run. What it proves:
+// the finding's claim was checked against the machine, not asserted. What it
+// does not prove: that the command is a fair test — a skeptic can point
+// `reproduce` at a command that trivially passes. The severity bar and the
+// human reading the run still matter; this makes the cheap lie expensive.
+//
+// The runner lives in verify.js rather than review.js because review.js sits
+// below run.js in the import graph (run.js imports reviewState from it), and
+// appending the audit line needs run.js's appendAudit.
+// A reproduce command is AGENT-AUTHORED (review.json is written by the skeptic
+// subagent), which is a lower trust level than the policy.yaml contracts — so
+// it must clear the same gate every other agent-issued Bash command clears
+// before AOS will execute it. Denied or gated → not run, recorded honestly,
+// the finding stays unproven. Without this, `reproduce` would be a laundering
+// path around the very gate this tool exists to enforce.
+function policyVerdictFor(projectId, command, cwd) {
+  const policy = loadPolicy(projectId);
+  let verdict = evaluateCommand(policy, command, { cwd });
+  if (verdict.decision === 'allow') {
+    verdict = evaluateBashProtected(command, { home: aosHome(), cwd }) || verdict;
+  }
+  return verdict;
+}
+
+export function executeReview(projectId, runId, { cwd = null, timeoutMs = 120_000 } = {}) {
+  const file = reviewPath(projectId, runId);
+  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  if (!raw.trim()) {
+    return { error: `No review recorded at ${file} — run the skeptic first (/aos-verify).` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { error: `review.json is not valid JSON — ${e.message}` };
+  }
+  const { errors, findings } = validateReview(parsed);
+  if (errors.length) {
+    return { error: 'review.json does not validate — fix it before executing it:', detail: errors };
+  }
+  const executions = [];
+  findings.forEach((f, i) => {
+    if (!f.reproduce || !DEMONSTRABLE_STATUSES.includes(f.status)) return;
+    // A command for an `open` finding must fail — it is the bug, demonstrated.
+    // A command for a `fixed` finding must pass — it is the fix, holding.
+    const expectFailure = f.status === 'open';
+    const started = Date.now();
+    const gate = policyVerdictFor(projectId, f.reproduce, cwd || process.cwd());
+    if (gate.decision !== 'allow') {
+      // The gate said no (or would ask). Record it without running: a command
+      // the policy refuses must not execute silently from inside a review file.
+      executions.push({
+        finding: i,
+        status: f.status,
+        command: f.reproduce,
+        expected: f.status,
+        exit: gate.decision === 'deny' ? 'denied-by-policy' : 'gated-by-policy',
+        pass: false,
+        reason: gate.reason || `the policy would ${gate.decision} this command`,
+        ts: nowIso(),
+      });
+      return;
+    }
+    let exit = null;
+    let output = '';
+    try {
+      execSync(f.reproduce, { cwd: cwd || process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, encoding: 'utf8' });
+      exit = 0;
+    } catch (e) {
+      // execSync throws on non-zero exit AND on timeout/spawn failure — the
+      // status tells them apart, and a killed command is not a demonstrated
+      // anything.
+      exit = e.status ?? null;
+      if (exit === null || exit === undefined) {
+        exit = 'timeout-or-unrunnable';
+      }
+      output = tail(`${e.stdout || ''}\n${e.stderr || ''}`.trim() || String(e.message || e));
+    }
+    // A timeout or unrunnable command demonstrates nothing, either way.
+    const demonstrated = expectFailure ? exit !== 0 : exit === 0;
+    const pass = exit === 'timeout-or-unrunnable' ? false : demonstrated;
+    executions.push({
+      finding: i,
+      status: f.status,
+      command: f.reproduce,
+      expected: f.status,
+      exit,
+      pass,
+      ms: Date.now() - started,
+      output: output ? tail(output, 400) : undefined,
+      ts: nowIso(),
+    });
+  });
+  // Write the whole review back, executions attached — the file keeps its
+  // authored content untouched and gains the machine's verdict on it.
+  const next = { ...parsed, executions };
+  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  const passed = executions.filter((e) => e.pass).length;
+  appendAudit(projectId, {
+    event: 'review-exec',
+    run: runId,
+    executed: executions.length,
+    passed,
+  });
+  return { executions, passed, total: executions.length };
 }

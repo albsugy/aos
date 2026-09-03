@@ -21,6 +21,11 @@ const STATUSES = ['open', 'fixed', 'dismissed', 'deferred'];
 // Long enough that "ok", "n/a" and "fixed" don't pass as a disposition, short
 // enough not to invite padding.
 const MIN_TEXT = 12;
+// Statuses whose claim a reproduce command can actually demonstrate: `open`
+// says the bug exists (the command must FAIL), `fixed` says it no longer does
+// (the command must PASS). `dismissed`/`deferred` are judgements, not
+// executable claims — demanding a command for them would just invite noise.
+export const DEMONSTRABLE_STATUSES = ['open', 'fixed'];
 
 export function reviewPath(projectId, runId) {
   return path.join(projectDir(projectId), 'runs', runId, REVIEW_FILE);
@@ -32,7 +37,13 @@ function text(v) {
 
 // Returns { errors, findings }. Every error is phrased as an instruction: the
 // gate prints them verbatim, so they have to be enough to fix the file by.
-export function validateReview(parsed) {
+//
+// `executable` turns on the executable-findings bar (policy
+// verification.executable_findings): every DEMONSTRABLE high-severity finding
+// must carry a `reproduce` command. Presence is validated here; whether the
+// command actually demonstrates the claim is checked by executeReview and
+// enforced by the gate as the `unproven` state.
+export function validateReview(parsed, { executable = false } = {}) {
   const errors = [];
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { errors: ['review.json must be a JSON object'], findings: [] };
@@ -59,6 +70,7 @@ export function validateReview(parsed) {
     const status = text(f.status).toLowerCase();
     const summary = text(f.summary);
     const resolution = text(f.resolution);
+    const reproduce = text(f.reproduce) || null;
     if (!SEVERITIES.includes(severity)) errors.push(`${at}.severity: must be one of ${SEVERITIES.join(' | ')}`);
     if (summary.length < MIN_TEXT) errors.push(`${at}.summary: required — state the defect in one sentence`);
     if (!STATUSES.includes(status)) errors.push(`${at}.status: must be one of ${STATUSES.join(' | ')}`);
@@ -67,7 +79,21 @@ export function validateReview(parsed) {
     if (STATUSES.includes(status) && status !== 'open' && resolution.length < MIN_TEXT) {
       errors.push(`${at}.resolution: required for status "${status}" — what you did, or why it does not apply`);
     }
-    findings.push({ severity, status, summary, resolution, location: text(f.location) || null });
+    if (reproduce && reproduce.length < 2) {
+      errors.push(`${at}.reproduce: must be a real command, not a token`);
+    }
+    if (
+      executable &&
+      severity === 'high' &&
+      DEMONSTRABLE_STATUSES.includes(status) &&
+      !reproduce
+    ) {
+      errors.push(
+        `${at}.reproduce: required for a ${status} high-severity finding (executable_findings is on) — ` +
+          `a command that FAILS while the bug is present and PASSES once it is fixed`
+      );
+    }
+    findings.push({ severity, status, summary, resolution, location: text(f.location) || null, reproduce });
   });
   return { errors, findings };
 }
@@ -85,36 +111,93 @@ export function reviewCounts(findings) {
 // (record the state, never block) for projects that want the bookkeeping
 // without the gate.
 export function reviewMode(projectId) {
-  const setting = loadPolicy(projectId).verification?.adversarial_review;
+  return reviewModeFromPolicy(loadPolicy(projectId));
+}
+
+function reviewModeFromPolicy(policy) {
+  const setting = policy.verification?.adversarial_review;
   if (setting === false) return 'off';
   if (String(setting).toLowerCase() === 'warn') return 'warn';
   return 'gate';
 }
 
+export function executableFindingsFromPolicy(policy) {
+  return policy.verification?.executable_findings === true;
+}
+
 // States that stop a run from finishing (when mode is `gate`).
-export const BLOCKING_REVIEW_STATES = new Set(['absent', 'invalid', 'open']);
+export const BLOCKING_REVIEW_STATES = new Set(['absent', 'invalid', 'open', 'unproven']);
 
 // absent   — no review.json
 // invalid  — present but malformed (see .errors)
 // open     — valid, but findings are still unresolved (see .open)
+// unproven — valid, but executable_findings is on and a demonstrable
+//            high-severity finding has no passing execution recorded
+//            (see executeReview in verify.js — the review gate and `aos run
+//            review` live on opposite sides of the run.js import cycle, so
+//            the runner is documented here and lives there)
 // clean    — valid, a genuine hunt that found nothing
 // resolved — valid, every finding has a disposition
 export function reviewState(projectId, runId) {
-  const mode = reviewMode(projectId);
-  if (mode === 'off') return { mode, state: 'not-required', errors: [], open: [], findings: [] };
+  const policy = loadPolicy(projectId);
+  const mode = reviewModeFromPolicy(policy);
+  const executable = executableFindingsFromPolicy(policy);
+  if (mode === 'off') return { mode, state: 'not-required', errors: [], open: [], findings: [], executable };
   const raw = readIfExists(reviewPath(projectId, runId));
-  if (!raw || !raw.trim()) return { mode, state: 'absent', errors: [], open: [], findings: [] };
+  if (!raw || !raw.trim()) return { mode, state: 'absent', errors: [], open: [], findings: [], executable };
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    return { mode, state: 'invalid', errors: [`review.json is not valid JSON — ${e.message}`], open: [], findings: [] };
+    return { mode, state: 'invalid', errors: [`review.json is not valid JSON — ${e.message}`], open: [], findings: [], executable };
   }
-  const { errors, findings } = validateReview(parsed);
-  if (errors.length) return { mode, state: 'invalid', errors, open: [], findings };
+  const { errors, findings } = validateReview(parsed, { executable });
+  if (errors.length) return { mode, state: 'invalid', errors, open: [], findings, executable };
   const open = findings.filter((f) => f.status === 'open');
-  const state = open.length ? 'open' : findings.length ? 'resolved' : 'clean';
-  return { mode, state, errors: [], open, findings };
+  let state = open.length ? 'open' : findings.length ? 'resolved' : 'clean';
+  // The executable-findings bar: shape was validated above; here the recorded
+  // executions must actually exist and pass. This is the difference between
+  // "the review says fixed" and "a command that failed now passes".
+  if (state !== 'open') {
+    const problems = executionProblems(parsed, findings);
+    if (problems.length) {
+      return { mode, state: 'unproven', errors: problems, open, findings, executable };
+    }
+  }
+  return { mode, state, errors: [], open, findings, executable };
+}
+
+// Which required executions are missing or failing. An execution records
+// `finding` (the findings[] index it demonstrates), `pass` (did the command's
+// exit status match the status' expectation), and `expected` — the
+// expectation at execution time, so a finding whose status changed since
+// (fixed → reopened) reads as unproven rather than silently inherited.
+function executionProblems(parsed, findings) {
+  const executions = Array.isArray(parsed.executions) ? parsed.executions : [];
+  const problems = [];
+  findings.forEach((f, i) => {
+    if (f.severity !== 'high' || !DEMONSTRABLE_STATUSES.includes(f.status) || !f.reproduce) return;
+    const exec = executions.find((e) => e && e.finding === i);
+    if (!exec) {
+      problems.push(
+        `findings[${i}] (high, ${f.status}): no recorded execution — run \`aos run review\` so its reproduce command is actually run`
+      );
+      return;
+    }
+    if (exec.expected !== f.status) {
+      problems.push(
+        `findings[${i}]: execution recorded for status "${exec.expected}" but the finding is now "${f.status}" — re-run \`aos run review\``
+      );
+      return;
+    }
+    if (exec.pass !== true) {
+      problems.push(
+        `findings[${i}] (${f.status}): the reproduce command did not demonstrate it — ` +
+          `expected ${f.status === 'open' ? 'a non-zero exit (the bug reproducing)' : 'exit 0 (the fix holding)'}, got exit ${JSON.stringify(exec.exit)}`
+      );
+    }
+  });
+  return problems;
 }
 
 // One line per problem, ready to print. Kept next to the validator so the gate
@@ -135,7 +218,8 @@ export function reviewProblemLines(review, reviewFile) {
       '        "summary": "one sentence stating the defect",',
       '        "location": "src/foo.js:42",',
       '        "status": "fixed|dismissed|deferred|open",',
-      '        "resolution": "what you did, or why it does not apply"',
+      '        "resolution": "what you did, or why it does not apply",',
+      '        "reproduce": "npm test -- --run src/foo.test.js  (required for high open/fixed when executable_findings is on)"',
       '      }',
       '    ]',
       '  }',
@@ -145,6 +229,18 @@ export function reviewProblemLines(review, reviewFile) {
   }
   if (review.state === 'invalid') {
     return [`${reviewFile} is not a usable review:`, '', ...review.errors.map((e) => `  • ${e}`)];
+  }
+  if (review.state === 'unproven') {
+    return [
+      `${reviewFile} records findings whose claims have not been demonstrated (review state: unproven):`,
+      '',
+      ...review.errors.map((e) => `  • ${e}`),
+      '',
+      'Executable findings are on (verification.executable_findings) — every demonstrable',
+      'high-severity finding must have its reproduce command actually run, with the exit',
+      'status matching its status: open → the command fails, fixed → the command passes.',
+      'Run `aos run review` to execute them, or set executable_findings: false to drop the bar.',
+    ];
   }
   if (review.state === 'open') {
     return [

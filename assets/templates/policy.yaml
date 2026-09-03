@@ -95,6 +95,13 @@ verification:
   # The reviewer is a skeptic subagent spawned by /aos-verify or /aos-ticket;
   # it writes runs/<run>/review.json. `aos run review` validates that file.
   adversarial_review: true
+  # Executable findings (opt-in): high-severity open/fixed findings must
+  # carry a `reproduce` command; `aos run review` runs it in a real subprocess,
+  # and the gate refuses ("unproven") until the exit status matches the claim —
+  # an open finding's command must FAIL (the bug, demonstrated), a fixed
+  # finding's must PASS (the fix, holding). Turns "the review says fixed"
+  # into "a command that failed now passes".
+  executable_findings: false
   contracts:
     # Deterministic checks that must pass before a run can reach awaiting-review.
     # Examples:

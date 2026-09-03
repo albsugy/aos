@@ -10,7 +10,7 @@ import { init } from './install.js';
 import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun, CLOSING_STATES } from './run.js';
 import { parseTicket } from './vcs.js';
 import { reviewState, reviewPath, reviewProblemLines, reviewCounts } from './review.js';
-import { verifyContracts } from './verify.js';
+import { verifyContracts, executeReview } from './verify.js';
 import { printStatus } from './status.js';
 import { printFind, printFindAll } from './search.js';
 import { fleetScaffold, fleetLaunch } from './fleet.js';
@@ -332,13 +332,38 @@ async function main() {
       } else if (sub === 'review') {
         // The gate's own verdict, on demand: lets the agent fix review.json
         // against the real validator instead of discovering it at finish.
+        // Reproduce commands are executed by default (--no-execute skips) so
+        // "fixed" can mean "a command that failed now passes", not just "said so".
         const target = strFlag(flags.run) || getActiveRun(p.id);
         if (!target) {
           console.error('No active run. Use: aos run review --run <id>');
           process.exitCode = 1;
           break;
         }
-        const review = reviewState(p.id, target);
+        let review = reviewState(p.id, target);
+        const hasReproduce = review.findings.some((f) => f.reproduce && (f.status === 'open' || f.status === 'fixed'));
+        if (hasReproduce && !flags['no-execute']) {
+          const result = executeReview(p.id, target, { cwd: p.repos?.[0] || process.cwd() });
+          if (result.error) {
+            console.log(`⚠ ${result.error}`);
+          } else {
+            for (const e of result.executions) {
+              const expect = e.expected === 'open' ? 'fails (bug demonstrated)' : 'passes (fix demonstrated)';
+              const verdict = e.pass ? '✔' : '✗';
+              const why = e.reason ? ` — ${e.reason}` : '';
+              console.log(
+                `${verdict} findings[${e.finding}] (${e.expected}): \`${e.command}\` exit ${JSON.stringify(e.exit)} — expected it to ${expect} (${e.ms ?? 0}ms)${why}`
+              );
+            }
+            if (result.total) {
+              console.log(
+                `  ${result.passed}/${result.total} reproduce command(s) demonstrated their finding — results recorded in review.json`
+              );
+            }
+            // Re-read: the executions just written may change the verdict.
+            review = reviewState(p.id, target);
+          }
+        }
         const file = reviewPath(p.id, target);
         const problems = reviewProblemLines(review, file);
         console.log(`Run ${target} — adversarial review: ${review.state} (policy: ${review.mode})`);
@@ -351,7 +376,8 @@ async function main() {
           console.log(`✔ Valid — a hunt with no findings (scope recorded in ${file})`);
         } else if (review.state === 'resolved') {
           const c = reviewCounts(review.findings);
-          console.log(`✔ Valid — ${c.total} finding(s), all dispositioned`);
+          const execNote = hasReproduce ? ', reproduce commands executed' : '';
+          console.log(`✔ Valid — ${c.total} finding(s), all dispositioned${execNote}`);
         }
       } else if (sub === 'state') {
         // --run <id> targets any run — the review action (done/shipped) is

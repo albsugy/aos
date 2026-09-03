@@ -220,12 +220,12 @@
   .rvcount { font: 11px var(--sans); color: var(--ink-3); }
   .rvres { margin-top: 4px; font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
   .tag.high, .tag.medium, .tag.low, .tag.fixed, .tag.dismissed, .tag.deferred, .tag.open,
-  .tag.clean, .tag.resolved, .tag.invalid, .tag.forced, .tag.absent { text-transform: none; }
-  .tag.high, .tag.open, .tag.invalid, .tag.forced, .tag.absent { color: var(--s-block); background: color-mix(in srgb, var(--s-block) 10%, var(--surface)); }
+  .tag.clean, .tag.resolved, .tag.invalid, .tag.forced, .tag.absent, .tag.unproven { text-transform: none; }
+  .tag.high, .tag.open, .tag.invalid, .tag.forced, .tag.absent, .tag.unproven { color: var(--s-block); background: color-mix(in srgb, var(--s-block) 10%, var(--surface)); }
   .tag.medium, .tag.deferred { color: var(--s-await); background: color-mix(in srgb, var(--s-await) 11%, var(--surface)); }
   .tag.fixed, .tag.clean, .tag.resolved { color: var(--s-good); background: color-mix(in srgb, var(--s-good) 11%, var(--surface)); }
   .tag.low, .tag.dismissed { color: var(--ink-3); }
-  .tag.high i, .tag.open i, .tag.invalid i, .tag.forced i, .tag.medium i, .tag.deferred i,
+  .tag.high i, .tag.open i, .tag.invalid i, .tag.forced i, .tag.unproven i, .tag.medium i, .tag.deferred i,
   .tag.fixed i, .tag.clean i, .tag.resolved i { background: currentColor; }
   .kv { display: flex; justify-content: space-between; gap: 12px; padding: 11px 16px; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
   .kv:last-child { border-bottom: none; }

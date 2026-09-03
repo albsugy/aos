@@ -104,11 +104,13 @@ export function printStatus() {
           ? '  ⚠ review gate forced'
           : r.adversarial_review === 'absent'
             ? '  ⚠ no adversarial review'
-            : r.adversarial_review === 'resolved'
-              ? `  ✓ review: ${r.review?.total || 0} finding(s) resolved`
-              : ['clean', 'present'].includes(r.adversarial_review)
-                ? '  ✓ adversarial review'
-                : '';
+            : r.adversarial_review === 'unproven'
+              ? '  ⚠ review unproven — a reproduce command was never run'
+              : r.adversarial_review === 'resolved'
+                ? `  ✓ review: ${r.review?.total || 0} finding(s) resolved`
+                : ['clean', 'present'].includes(r.adversarial_review)
+                  ? '  ✓ adversarial review'
+                  : '';
       console.log(`  ⏳ awaiting review: ${r.run}${r.ticket ? ` — ${r.ticket}` : ''}${adv}`);
     }
   }

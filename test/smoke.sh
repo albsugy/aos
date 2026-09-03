@@ -52,6 +52,7 @@ SECTIONS=(
   140-rotation-registry.sh
   145-audit-chain.sh
   150-policy-ci.sh
+  170-executable-review.sh
 )
 
 # A section file that exists but isn't listed above would be silently skipped —
