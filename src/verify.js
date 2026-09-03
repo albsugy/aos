@@ -12,7 +12,7 @@ import {
   DEMONSTRABLE_STATUSES,
 } from './review.js';
 import { aosHome, nowIso, writeJson } from './paths.js';
-import { planGateBashVerdict } from './hooks.js';
+import { planGateBashVerdict } from './core/pipeline.js';
 
 function runContract(contract, cwd) {
   const started = Date.now();

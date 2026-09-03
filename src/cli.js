@@ -745,7 +745,10 @@ async function main() {
       break;
     }
     case 'hook':
-      await runHook(positional[0]);
+      // `--agent` selects the adapter that translates this provider's hook
+      // payload; default claude keeps every existing install behaving exactly
+      // as before the multi-agent refactor.
+      await runHook(positional[0], { agent: strFlag(flags.agent) });
       break;
     case 'doctor': {
       const ok = runDoctor({ appRoot: APP_ROOT, version: appVersion(), bundled: IS_BUNDLED });

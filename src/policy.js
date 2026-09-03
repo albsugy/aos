@@ -68,6 +68,15 @@ export const DEFAULT_POLICY = {
         action: 'project-remove',
         reason: 'Removing a project turns its gates off — approve only if that is really you',
       },
+      // Granting an external approval (the Codex/Cursor ask flow) is the
+      // human's act. Where prompts exist (Claude) approving the gate prompt IS
+      // the approval; where they don't, deny-only adapters refuse the command
+      // outright and the human runs it in a terminal.
+      {
+        pattern: '\\baos(\\.mjs)?\\s+approve\\b',
+        action: 'aos-approve',
+        reason: 'Approving a pending AOS decision is reserved for the human',
+      },
     ],
     // Extra write-protected paths (globs matched against absolute and
     // repo-relative paths), e.g. { pattern: '.env*', decision: 'ask' }.
@@ -636,11 +645,11 @@ export function evaluateBashProtected(command, { home, cwd = null } = {}) {
     };
   }
   if (!commandWritesFiles(cmd, { cwd })) return null;
-  if (/\.claude[\\/]settings(\.local)?\.json/.test(cmd)) {
+  if (PROTECTED_HOOK_CONFIG_BASH.test(cmd)) {
     return {
       decision: 'ask',
       action: 'protected-path',
-      reason: 'This command writes .claude/settings.json, which can rewire or remove the AOS hooks — requires human approval',
+      reason: 'This command writes agent hook configuration (.claude/settings.json, .codex/hooks.json, or .cursor/hooks.json), which can rewire or remove the AOS gates — requires human approval',
     };
   }
   if (/\.git[\\/]hooks[\\/]/.test(cmd)) {
@@ -653,7 +662,15 @@ export function evaluateBashProtected(command, { home, cwd = null } = {}) {
   const aosRoot = home || aosHome();
   // /\.aos\b catches ~/.aos, $HOME/.aos, and interpreter strings like
   // HOME + "/.aos/…" — with or without a trailing slash (`cd ~/.aos && …`).
-  const namesAosHome = cmd.includes(aosRoot) || /\/\.aos\b/.test(cmd);
+  const namesAosHome =
+    cmd.includes(aosRoot) || /~\/[.]aos\b|\$HOME\/?[.]aos\b|\/[.]aos\b/.test(cmd);
+  if (namesAosHome && PROTECTED_DECISIONS_BASH.test(cmd)) {
+    return {
+      decision: 'ask',
+      action: 'protected-path',
+      reason: 'This command writes AOS approval state — forging an approval unlocks gated operations without a human — requires human approval',
+    };
+  }
   if (namesAosHome && [...PROTECTED_AOS_BASENAMES].some((b) => cmd.includes(b))) {
     return {
       decision: 'ask',
@@ -687,6 +704,17 @@ const PROTECTED_AOS_BASENAMES = new Set([
   'ingest.json',
 ]);
 
+// Hook wiring files across agents: editing these disarms the gates exactly
+// like editing .claude/settings.json. Any agent config AOS installs hooks
+// into belongs here.
+const PROTECTED_HOOK_CONFIGS = /[\\/]\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json$/;
+// The same configs as they appear inside a shell command (either slash form).
+const PROTECTED_HOOK_CONFIG_BASH = /\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json/;
+// The external-approval ledger: forging an approval file unlocks gated
+// operations without a human, so it is as sensitive as signoff.json.
+const PROTECTED_DECISIONS_DIR = /[\\/]decisions[\\/](pending|approved)[\\/]/;
+const PROTECTED_DECISIONS_BASH = /decisions\/(pending|approved)\//;
+
 function globToRegExp(glob) {
   const source = String(glob)
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -706,11 +734,11 @@ export function evaluateFileWrite(policy, filePath, content = '', { home, repoRo
   const abs = path.resolve(String(filePath));
   const base = path.basename(abs);
 
-  if (/[\\/]\.claude[\\/]settings(\.local)?\.json$/.test(abs)) {
+  if (PROTECTED_HOOK_CONFIGS.test(abs)) {
     return {
       decision: 'ask',
       action: 'protected-path',
-      reason: 'Editing .claude/settings.json can rewire or remove the AOS hooks — requires human approval',
+      reason: 'Editing agent hook configuration (.claude/settings.json, .codex/hooks.json, or .cursor/hooks.json) can rewire or remove the AOS gates — requires human approval',
     };
   }
   if (abs.includes(`${path.sep}.git${path.sep}hooks${path.sep}`)) {
@@ -721,6 +749,13 @@ export function evaluateFileWrite(policy, filePath, content = '', { home, repoRo
     };
   }
   const aosRoot = home || aosHome();
+  if (abs.startsWith(aosRoot + path.sep) && PROTECTED_DECISIONS_DIR.test(abs)) {
+    return {
+      decision: 'ask',
+      action: 'protected-path',
+      reason: 'The decisions directory holds pending and granted approvals — writing it directly could forge a human approval. Requires human approval.',
+    };
+  }
   if (abs.startsWith(aosRoot + path.sep) && PROTECTED_AOS_BASENAMES.has(base)) {
     return {
       decision: 'ask',

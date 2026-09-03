@@ -311,7 +311,20 @@ export class ReviewGateError extends Error {
 // in the audit summary (post-tool hook), so a substring check covers `Edit`
 // as well as `cat >> learnings.md` appends.
 const MEMORY_FILES = ['learnings.md', 'decisions.md'];
-const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+// File-writing tool names across providers: Claude's Write/Edit family, and
+// Codex's apply_patch. Cursor uses the Claude names.
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'apply_patch']);
+
+// Provider-neutral read of an audit entry's tool class: entries written since
+// the multi-agent refactor carry `tool_kind`; legacy lines fall back to the
+// provider tool name (Bash for Claude, Shell for Cursor).
+function isShellTool(entry) {
+  return entry.tool_kind === 'shell' || entry.tool === 'Bash' || entry.tool === 'Shell';
+}
+
+function isFileWriteTool(entry) {
+  return entry.tool_kind === 'file' || WRITE_TOOLS.has(entry.tool);
+}
 
 function auditLines(file) {
   const raw = readIfExists(file);
@@ -332,11 +345,11 @@ function isMemoryWrite(entry) {
   if (entry.event !== 'tool') return false;
   const s = String(entry.summary || '');
   if (!MEMORY_FILES.some((f) => s.includes(f))) return false;
-  if (WRITE_TOOLS.has(entry.tool)) return true;
-  // Bash summaries are the command text: only count commands that actually
+  if (isFileWriteTool(entry)) return true;
+  // Shell summaries are the command text: only count commands that actually
   // write (redirect/tee/in-place edit) — `cat`/`grep` reads of learnings.md
   // must not satisfy the capture check.
-  if (entry.tool === 'Bash') return /(>|\btee\b|\bsed\s+-\w*i)/.test(s);
+  if (isShellTool(entry)) return /(>|\btee\b|\bsed\s+-\w*i)/.test(s);
   return false;
 }
 
@@ -375,7 +388,7 @@ export function sessionMemoryActivity(projectId, sessionId) {
       if (entry.event === 'review-nudge') reviewNudged = true;
       if (entry.event !== 'tool') continue;
       if (isMemoryWrite(entry)) memoryWrite = true;
-      if (WRITE_TOOLS.has(entry.tool)) writes++;
+      if (isFileWriteTool(entry)) writes++;
     }
   }
   return { substantive: Boolean(bound) || writes >= 3, memoryWrite, nudged, reviewNudged, bound };
@@ -472,15 +485,20 @@ export function touchedFiles(projectId, runId, repoRoot = null) {
   const root = repoRoot ? canonicalPath(repoRoot) : null;
   for (const entry of auditLines(path.join(runDir(projectId, runId), 'audit.jsonl'))) {
     if (entry.event !== 'tool') continue;
-    if (WRITE_TOOLS.has(entry.tool)) {
-      const summary = String(entry.summary || '');
-      if (!summary || !path.isAbsolute(summary)) continue;
-      const abs = canonicalPath(summary);
-      // Run-folder and project-memory writes are bookkeeping, not the change.
-      if (abs.startsWith(canonicalPath(runDir(projectId, runId)) + path.sep)) continue;
-      if (abs.startsWith(canonicalPath(projectDir(projectId)) + path.sep)) continue;
-      files.add(root && abs.startsWith(root + path.sep) ? abs.slice(root.length + 1) : abs);
-    } else if (entry.tool === 'Bash' && /(^|\s)(>|>>|tee\b|sed\s+-\w*i)/.test(String(entry.summary || ''))) {
+    if (isFileWriteTool(entry)) {
+      // Multi-path writes (apply_patch) carry every target; single-path
+      // events carry the one path in the summary.
+      const candidates =
+        Array.isArray(entry.paths) && entry.paths.length ? entry.paths : [String(entry.summary || '')];
+      for (const candidate of candidates) {
+        if (!candidate || !path.isAbsolute(candidate)) continue;
+        const abs = canonicalPath(candidate);
+        // Run-folder and project-memory writes are bookkeeping, not the change.
+        if (abs.startsWith(canonicalPath(runDir(projectId, runId)) + path.sep)) continue;
+        if (abs.startsWith(canonicalPath(projectDir(projectId)) + path.sep)) continue;
+        files.add(root && abs.startsWith(root + path.sep) ? abs.slice(root.length + 1) : abs);
+      }
+    } else if (isShellTool(entry) && /(^|\s)(>|>>|tee\b|sed\s+-\w*i)/.test(String(entry.summary || ''))) {
       bashWrites++;
     }
   }
