@@ -62,11 +62,17 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+function capSummary(s, n) {
+  const t = String(s || '');
+  return t.length > n ? t.slice(0, n) : t;
+}
+
 function summarizeToolInput(toolName, toolInput = {}) {
-  if (toolName === 'Bash') return String(toolInput.command || '').slice(0, 300);
-  if (toolInput.file_path) return toolInput.file_path;
-  if (toolInput.pattern) return String(toolInput.pattern).slice(0, 120);
-  if (toolInput.url) return toolInput.url;
+  if (toolName === 'Bash') return capSummary(toolInput.command, 300);
+  if (toolInput.file_path) return capSummary(toolInput.file_path, 300);
+  if (toolInput.notebook_path) return capSummary(toolInput.notebook_path, 300);
+  if (toolInput.pattern) return capSummary(toolInput.pattern, 120);
+  if (toolInput.url) return capSummary(toolInput.url, 300);
   const keys = Object.keys(toolInput).slice(0, 3).join(',');
   return keys ? `{${keys}}` : '';
 }
@@ -163,7 +169,7 @@ function exemptDirVariants(dir) {
   return variants;
 }
 
-function planGateBashVerdict(projectId, command, sessionId) {
+export function planGateBashVerdict(projectId, command, sessionId) {
   const active = unapprovedPlanRun(projectId, sessionId);
   if (!active) return null;
   const exempt = [

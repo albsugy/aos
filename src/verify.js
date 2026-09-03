@@ -3,8 +3,16 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadPolicy, evaluateCommand, evaluateBashProtected } from './policy.js';
 import { getActiveRun, runDir, runMeta, mutateRunMeta, appendAudit } from './run.js';
-import { reviewMode, reviewPath, validateReview, DEMONSTRABLE_STATUSES } from './review.js';
-import { aosHome, nowIso } from './paths.js';
+import {
+  reviewMode,
+  reviewPath,
+  executionsPath,
+  validateReview,
+  executableFindingsFromPolicy,
+  DEMONSTRABLE_STATUSES,
+} from './review.js';
+import { aosHome, nowIso, writeJson } from './paths.js';
+import { planGateBashVerdict } from './hooks.js';
 
 function runContract(contract, cwd) {
   const started = Date.now();
@@ -91,7 +99,8 @@ function writeVerificationReport(projectId, runId, results, verdict) {
 }
 
 // Execute the reproduce commands recorded in a run's review.json, and write
-// the results back into that file as `executions`.
+// the results to an AOS-owned sidecar (`executions.json`). review.json is
+// agent-authored — a `pass: true` array in it is not evidence.
 //
 // This is the executable half of executable findings: `aos run review` runs
 // every demonstrable finding's command (open → it must FAIL, fixed → it must
@@ -107,19 +116,27 @@ function writeVerificationReport(projectId, runId, results, verdict) {
 // A reproduce command is AGENT-AUTHORED (review.json is written by the skeptic
 // subagent), which is a lower trust level than the policy.yaml contracts — so
 // it must clear the same gate every other agent-issued Bash command clears
-// before AOS will execute it. Denied or gated → not run, recorded honestly,
-// the finding stays unproven. Without this, `reproduce` would be a laundering
-// path around the very gate this tool exists to enforce.
+// before AOS will execute it, including the plan gate (this path is not a
+// hook, so `ask` is treated as refuse). Denied or gated → not run, recorded
+// honestly, the finding stays unproven.
 function policyVerdictFor(projectId, command, cwd) {
   const policy = loadPolicy(projectId);
   let verdict = evaluateCommand(policy, command, { cwd });
   if (verdict.decision === 'allow') {
     verdict = evaluateBashProtected(command, { home: aosHome(), cwd }) || verdict;
   }
+  if (verdict.decision === 'allow') {
+    // Non-interactive: a plan-gate `ask` has no human to prompt, so refuse.
+    const plan = planGateBashVerdict(projectId, command, null);
+    if (plan) verdict = plan;
+  }
   return verdict;
 }
 
-export function executeReview(projectId, runId, { cwd = null, timeoutMs = 120_000 } = {}) {
+export function executeReview(projectId, runId, { cwd = null, timeoutMs = 120_000, force = false } = {}) {
+  if (!force && !executableFindingsFromPolicy(loadPolicy(projectId))) {
+    return { skipped: true, reason: 'executable_findings is off — pass --execute to run anyway' };
+  }
   const file = reviewPath(projectId, runId);
   const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (!raw.trim()) {
@@ -188,16 +205,20 @@ export function executeReview(projectId, runId, { cwd = null, timeoutMs = 120_00
       ts: nowIso(),
     });
   });
-  // Write the whole review back, executions attached — the file keeps its
-  // authored content untouched and gains the machine's verdict on it.
-  const next = { ...parsed, executions };
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
   const passed = executions.filter((e) => e.pass).length;
+  writeJson(executionsPath(projectId, runId), { run: runId, ts: nowIso(), executions });
   appendAudit(projectId, {
     event: 'review-exec',
     run: runId,
     executed: executions.length,
     passed,
+    findings: executions.map((e) => ({
+      finding: e.finding,
+      expected: e.expected,
+      exit: e.exit,
+      pass: e.pass,
+      command: String(e.command || '').slice(0, 300),
+    })),
   });
   return { executions, passed, total: executions.length };
 }

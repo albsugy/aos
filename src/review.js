@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { projectDir, readIfExists } from './paths.js';
+import { projectDir, readIfExists, readJson } from './paths.js';
 import { loadPolicy } from './policy.js';
 
 // The adversarial review as a structured record, not prose: runs/<id>/review.json.
@@ -15,6 +15,10 @@ import { loadPolicy } from './policy.js';
 // Paths are built from projectDir (not run.js's runDir) to keep this module
 // free of a cycle: run.js imports review.js, never the reverse.
 export const REVIEW_FILE = 'review.json';
+// Machine-written by `aos run review` — never trusted from review.json, which
+// is agent-authored. A fake `executions` array in the review file is the cheap
+// lie this sidecar exists to stop.
+export const EXECUTIONS_FILE = 'executions.json';
 
 const SEVERITIES = ['high', 'medium', 'low'];
 const STATUSES = ['open', 'fixed', 'dismissed', 'deferred'];
@@ -29,6 +33,10 @@ export const DEMONSTRABLE_STATUSES = ['open', 'fixed'];
 
 export function reviewPath(projectId, runId) {
   return path.join(projectDir(projectId), 'runs', runId, REVIEW_FILE);
+}
+
+export function executionsPath(projectId, runId) {
+  return path.join(projectDir(projectId), 'runs', runId, EXECUTIONS_FILE);
 }
 
 function text(v) {
@@ -155,11 +163,10 @@ export function reviewState(projectId, runId) {
   if (errors.length) return { mode, state: 'invalid', errors, open: [], findings, executable };
   const open = findings.filter((f) => f.status === 'open');
   let state = open.length ? 'open' : findings.length ? 'resolved' : 'clean';
-  // The executable-findings bar: shape was validated above; here the recorded
-  // executions must actually exist and pass. This is the difference between
-  // "the review says fixed" and "a command that failed now passes".
-  if (state !== 'open') {
-    const problems = executionProblems(parsed, findings);
+  // Optional `reproduce` is documentation until the policy flag is on — a
+  // copied review.json must not flip a project that never opted in to unproven.
+  if (executable && state !== 'open') {
+    const problems = executionProblems(projectId, runId, findings);
     if (problems.length) {
       return { mode, state: 'unproven', errors: problems, open, findings, executable };
     }
@@ -167,13 +174,16 @@ export function reviewState(projectId, runId) {
   return { mode, state, errors: [], open, findings, executable };
 }
 
-// Which required executions are missing or failing. An execution records
-// `finding` (the findings[] index it demonstrates), `pass` (did the command's
-// exit status match the status' expectation), and `expected` — the
-// expectation at execution time, so a finding whose status changed since
-// (fixed → reopened) reads as unproven rather than silently inherited.
-function executionProblems(parsed, findings) {
-  const executions = Array.isArray(parsed.executions) ? parsed.executions : [];
+// Which required executions are missing or failing. Proof lives in the
+// AOS-written sidecar, not in review.json — `pass: true` in an agent-authored
+// file is not evidence. An execution records `finding` (the findings[] index
+// it demonstrates), `pass` (did the command's exit status match the status'
+// expectation), and `expected` — the expectation at execution time, so a
+// finding whose status changed since (fixed → reopened) reads as unproven
+// rather than silently inherited.
+function executionProblems(projectId, runId, findings) {
+  const recorded = readJson(executionsPath(projectId, runId), null);
+  const executions = Array.isArray(recorded?.executions) ? recorded.executions : [];
   const problems = [];
   findings.forEach((f, i) => {
     if (f.severity !== 'high' || !DEMONSTRABLE_STATUSES.includes(f.status) || !f.reproduce) return;

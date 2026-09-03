@@ -10,7 +10,7 @@ import path from 'node:path';
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'aos-execfind-'));
 process.env.AOS_HOME = path.join(WORK, 'aos-home');
 
-const { validateReview, reviewState, BLOCKING_REVIEW_STATES } = await import('../../src/review.js');
+const { validateReview, reviewState, BLOCKING_REVIEW_STATES, executionsPath } = await import('../../src/review.js');
 const { writeJson, ensureDir } = await import('../../src/paths.js');
 
 const PROJECT = 'demo';
@@ -35,6 +35,9 @@ const baseReview = {
 
 function writeReview(obj) {
   writeJson(path.join(RUN_DIR, 'review.json'), obj);
+}
+function writeExecutions(executions) {
+  writeJson(executionsPath(PROJECT, RUN), { run: RUN, executions });
 }
 function writePolicy(verification) {
   writeJson(path.join(process.env.AOS_HOME, 'projects', PROJECT, 'policy.yaml'), null); // placeholder, unused
@@ -78,6 +81,14 @@ test('off by default: no reproduce demanded, no unproven state', () => {
   assert.equal(BLOCKING_REVIEW_STATES.has('unproven'), true);
 });
 
+test('off: a reproduce field is documentation, not a proof obligation', () => {
+  writePolicy(['adversarial_review: true']);
+  writeReview(baseReview);
+  const r = reviewState(PROJECT, RUN);
+  assert.equal(r.state, 'resolved');
+  assert.equal(r.executable, false);
+});
+
 test('unproven: valid review, required execution missing', () => {
   writePolicy(['adversarial_review: true', 'executable_findings: true']);
   writeReview(baseReview);
@@ -87,7 +98,8 @@ test('unproven: valid review, required execution missing', () => {
 });
 
 test('unproven: execution recorded but not passing', () => {
-  writeReview({ ...baseReview, executions: [{ finding: 0, status: 'fixed', expected: 'fixed', exit: 1, pass: false }] });
+  writeReview(baseReview);
+  writeExecutions([{ finding: 0, status: 'fixed', expected: 'fixed', exit: 1, pass: false }]);
   const r = reviewState(PROJECT, RUN);
   assert.equal(r.state, 'unproven');
   assert.ok(r.errors.some((e) => e.includes('did not demonstrate')));
@@ -96,14 +108,31 @@ test('unproven: execution recorded but not passing', () => {
 test('unproven: execution recorded under a stale status', () => {
   // The finding was `open` when executed (command failed — correct then), but
   // is `fixed` now: the recorded execution no longer demonstrates the claim.
-  writeReview({ ...baseReview, executions: [{ finding: 0, status: 'open', expected: 'open', exit: 1, pass: true }] });
+  writeReview(baseReview);
+  writeExecutions([{ finding: 0, status: 'open', expected: 'open', exit: 1, pass: true }]);
   const r = reviewState(PROJECT, RUN);
   assert.equal(r.state, 'unproven');
   assert.ok(r.errors.some((e) => e.includes('status')));
 });
 
+test('a fake executions array in review.json is not evidence', () => {
+  writePolicy(['adversarial_review: true', 'executable_findings: true']);
+  // The previous tests leave a real sidecar behind — clear it, or the stale
+  // entry answers for the forged one and the assertion below sees the wrong
+  // refusal. The forged array in the REVIEW file must be ignored entirely.
+  fs.rmSync(executionsPath(PROJECT, RUN), { force: true });
+  writeReview({
+    ...baseReview,
+    executions: [{ finding: 0, status: 'fixed', expected: 'fixed', exit: 0, pass: true }],
+  });
+  const r = reviewState(PROJECT, RUN);
+  assert.equal(r.state, 'unproven');
+  assert.ok(r.errors.some((e) => e.includes('no recorded execution')));
+});
+
 test('resolved: passing execution for the required finding', () => {
-  writeReview({ ...baseReview, executions: [{ finding: 0, status: 'fixed', expected: 'fixed', exit: 0, pass: true }] });
+  writeReview(baseReview);
+  writeExecutions([{ finding: 0, status: 'fixed', expected: 'fixed', exit: 0, pass: true }]);
   const r = reviewState(PROJECT, RUN);
   assert.equal(r.state, 'resolved');
 });
