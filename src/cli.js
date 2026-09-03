@@ -21,6 +21,7 @@ import { runDoctor } from './doctor.js';
 import { exportAgentsMd } from './export.js';
 import { consumeSignoffTicket } from './signoff.js';
 import { printCost, parseSince } from './cost.js';
+import { verifyProjectLedgers } from './run.js';
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -173,6 +174,7 @@ Usage:
   aos run list                      List runs for this project
   aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
+  aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
   aos find <query> [--all]          Search project memory; --all sweeps every project
   aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
   aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
@@ -479,6 +481,50 @@ async function main() {
         );
       }
       process.exit(verdict === 'fail' ? 1 : 0);
+      break;
+    }
+    case 'audit': {
+      // `aos audit verify` — walk every audit ledger (project + each run) and
+      // check the hash chain. Exit 1 on any tamper evidence so CI can gate on it.
+      const sub = positional[0];
+      if (sub !== 'verify') {
+        console.error('Usage: aos audit verify [--project <id>]');
+        process.exitCode = 1;
+        break;
+      }
+      const wanted = strFlag(flags.project);
+      if (wanted && !getProject(wanted)) {
+        console.error(`No project "${wanted}".`);
+        process.exitCode = 1;
+        break;
+      }
+      const ids = wanted ? [wanted] : loadRegistry().projects.map((x) => x.id);
+      if (!ids.length) {
+        console.error('No projects registered.');
+        process.exitCode = 1;
+        break;
+      }
+      let bad = 0;
+      for (const id of ids) {
+        for (const { label, report } of verifyProjectLedgers(id)) {
+          if (report.lines === 0) continue;
+          console.log(
+            `${report.ok ? '✔' : '✗'} ${id} — ${label}: ${report.lines} line(s), ${report.chained} chained, ${report.legacy} legacy${report.ok ? '' : ' — TAMPER EVIDENCE'}`
+          );
+          for (const pr of report.problems) {
+            bad++;
+            console.log(`    ${pr.issue}`);
+          }
+        }
+      }
+      if (bad) {
+        console.log(
+          `\n${bad} ledger problem(s) — entries were modified after being written, or written outside the chain.`
+        );
+        process.exitCode = 1;
+      } else {
+        console.log('\nAll ledgers verify — no post-hoc edits detected.');
+      }
       break;
     }
     case 'cost': {

@@ -5,7 +5,6 @@ import {
   ensureDir,
   readJson,
   writeJson,
-  appendLineRotated,
   readIfExists,
   slugify,
   today,
@@ -15,6 +14,7 @@ import {
 } from './paths.js';
 import { reviewState, reviewCounts, reviewPath, reviewProblemLines, BLOCKING_REVIEW_STATES } from './review.js';
 import { gitBranch, safeUrl } from './vcs.js';
+import { appendChainedTo, verifyLedger } from './chain.js';
 
 export function statePath(projectId) {
   return path.join(projectDir(projectId), 'state.json');
@@ -536,19 +536,41 @@ function auditPath(projectId, runId = null) {
 // Logs rotate to audit.1.jsonl at LOG_ROTATE_BYTES; only the contract-history
 // reader (cost.js) aggregates across the boundary — everything else reads the
 // current run's recent activity, which the fresh file still holds.
+// Every line is hash-chained (see chain.js) so `aos audit verify` can detect
+// post-hoc edits; the chain continues across a rotation because it links
+// lines, not files.
+function rotatedOf(p) {
+  return p.replace(/audit\.jsonl$/, 'audit.1.jsonl');
+}
+
 export function appendAudit(projectId, entry) {
   const active = getActiveRun(projectId);
-  const line = JSON.stringify({ ts: nowIso(), ...entry });
   if (active && fs.existsSync(runDir(projectId, active))) {
     const boundSession = runMeta(projectId, active)?.session;
     if (!boundSession || !entry.session || entry.session === boundSession) {
-      const p = auditPath(projectId, active);
-      appendLineRotated(p, line, p.replace(/audit\.jsonl$/, 'audit.1.jsonl'));
+      appendChainedTo(auditPath(projectId, active), rotatedOf(auditPath(projectId, active)), { ts: nowIso(), ...entry });
       return;
     }
   }
   const p = auditPath(projectId);
-  appendLineRotated(p, line, p.replace(/audit\.jsonl$/, 'audit.1.jsonl'));
+  appendChainedTo(p, rotatedOf(p), { ts: nowIso(), ...entry });
+}
+
+// All of a project's audit ledgers, one report per directory: the project
+// log and every run's log, rotated generation first (chronological order —
+// the chain links lines, not files, but verification still walks them in
+// the order they were written).
+export function verifyProjectLedgers(projectId) {
+  const out = [];
+  const pair = (base, label) => {
+    const rotated = base.replace(/audit\.jsonl$/, 'audit.1.jsonl');
+    out.push({ label, report: verifyLedger([rotated, base]) });
+  };
+  pair(path.join(projectDir(projectId), 'audit.jsonl'), 'project ledger');
+  for (const r of listRuns(projectId)) {
+    pair(path.join(runDir(projectId, r.run), 'audit.jsonl'), `run ${r.run}`);
+  }
+  return out;
 }
 
 export function readRunFile(projectId, runId, file) {

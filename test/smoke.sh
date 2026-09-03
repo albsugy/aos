@@ -50,6 +50,7 @@ SECTIONS=(
   120-supply-chain.sh
   130-console.sh
   140-rotation-registry.sh
+  145-audit-chain.sh
 )
 
 # A section file that exists but isn't listed above would be silently skipped —
