@@ -38,7 +38,8 @@ files live in the run folder printed by `aos run start`.
 
 6. Run `aos verify`. Fix failures and re-run until required contracts pass.
 7. Adversarial review (required unless policy sets `adversarial_review: false`): spawn a
-   subagent (Task tool) with this framing: "You are a skeptical reviewer. Try to REFUTE this
+   subagent with this framing (use your runtime's subagent mechanism; if it has none, do a
+   separate adversarial pass yourself): "You are a skeptical reviewer. Try to REFUTE this
    work against the acceptance criteria in <run>/ticket.md. Hunt for: criteria not actually
    met, edge cases, silent failures, tests that don't test the change. Report findings with
    file:line. Finding nothing is an acceptable answer only after a genuine hunt."

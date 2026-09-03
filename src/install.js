@@ -1,38 +1,14 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { addProject } from './registry.js';
+import { addProject, getProject } from './registry.js';
 import { projectDir, ensureDir, readJson, writeJson, slugify } from './paths.js';
 import { detectRepo } from './detect.js';
+import { AGENT_CATALOG, detectAgents, parseAgentFlag } from './agents.js';
+import { syncContextFiles } from './context-sync.js';
 
 const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
-
-// The command embedded in hooks must survive `aos update`, reinstalls to a new
-// directory, and dev-checkout ↔ installed-package switches. So we embed the
-// path the user invoked (usually the ~/.local/bin/aos symlink) — the stable
-// launcher — NOT its realpath, which pins hooks to one physical install.
-// $HOME keeps it user-portable; a PATH fallback and `|| true` make sure a
-// missing aos can never break a Claude Code session.
-function launcherCommand(cmd) {
-  let launcher = path.resolve(process.argv[1]);
-  const home = os.homedir();
-  if (launcher.startsWith(home + path.sep)) {
-    launcher = '$HOME' + launcher.slice(home.length);
-  }
-  return `"${launcher}" ${cmd} 2>/dev/null || aos ${cmd} 2>/dev/null || true`;
-}
-
-function copyDir(src, dest) {
-  ensureDir(dest);
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDir(s, d);
-    else fs.copyFileSync(s, d);
-  }
-}
 
 // Inject detected contracts into the freshly-scaffolded policy without losing
 // the template's comments. Parsing as a Document keeps everything outside the
@@ -76,13 +52,13 @@ function scaffoldProjectHome(id, repoRoot) {
   const packDest = path.join(dir, 'context', 'pack.md');
   if (!fs.existsSync(packDest)) {
     if (detection.pack) fs.writeFileSync(packDest, detection.pack);
-    else fs.copyFileSync(path.join(ASSETS, 'templates/pack.md'), packDest);
+    else fs.copyFileSync(path.join(ASSETS, 'templates', 'pack.md'), packDest);
   }
 
   // policy.yaml: template + any detected verification contracts.
   const policyDest = path.join(dir, 'policy.yaml');
   if (!fs.existsSync(policyDest)) {
-    let policyText = fs.readFileSync(path.join(ASSETS, 'templates/policy.yaml'), 'utf8');
+    let policyText = fs.readFileSync(path.join(ASSETS, 'templates', 'policy.yaml'), 'utf8');
     if (detection.contracts.length) {
       try {
         policyText = injectContracts(policyText, detection.contracts);
@@ -96,64 +72,56 @@ function scaffoldProjectHome(id, repoRoot) {
   return { dir, detection };
 }
 
-function installSkills(repoRoot) {
-  const skillsSrc = path.join(ASSETS, 'skills');
-  const skillsDest = path.join(repoRoot, '.claude', 'skills');
-  for (const skill of fs.readdirSync(skillsSrc)) {
-    copyDir(path.join(skillsSrc, skill), path.join(skillsDest, skill));
+// Which agents an init wires. Precedence: the explicit flag (auto detects), an
+// existing registration (re-init keeps the project's agents unless told
+// otherwise), then the Claude default that preserves the historical behavior.
+export function resolveAgents(repoRoot, agentFlagValue) {
+  const parsed = parseAgentFlag(agentFlagValue);
+  if (parsed?.mode === 'auto') {
+    const detected = detectAgents(repoRoot);
+    return detected.length ? detected : ['claude'];
   }
-}
-
-const HOOK_DEFS = [
-  // File tools are gated too: protected paths, script-content scanning, and
-  // plan-gate enforcement all hang off pre-tool.
-  { event: 'PreToolUse', matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', cmd: 'hook pre-tool' },
-  { event: 'PostToolUse', matcher: null, cmd: 'hook post-tool' },
-  { event: 'SessionStart', matcher: null, cmd: 'hook session-start' },
-  { event: 'SessionEnd', matcher: null, cmd: 'hook session-end' },
-  // Learnings extraction happens in-session: Stop blocks once when a finished
-  // run recorded no learnings, so the model that did the work writes them
-  // while it still has the context.
-  { event: 'Stop', matcher: null, cmd: 'hook stop' },
-];
-
-function isAosHook(h) {
-  return (
-    typeof h.command === 'string' &&
-    h.command.includes('aos') &&
-    HOOK_DEFS.some((d) => h.command.includes(d.cmd))
-  );
-}
-
-function installHooks(repoRoot) {
-  const settingsPath = path.join(repoRoot, '.claude', 'settings.json');
-  const settings = readJson(settingsPath, {}) || {};
-  settings.hooks = settings.hooks || {};
-
-  for (const def of HOOK_DEFS) {
-    // Replace, don't skip: re-running init migrates stale/old-format entries
-    // (e.g. hooks pinned to a previous install path) to the current launcher.
-    const entries = (settings.hooks[def.event] || []).filter(
-      (e) => !(e.hooks || []).some(isAosHook)
-    );
-    const entry = { hooks: [{ type: 'command', command: launcherCommand(def.cmd) }] };
-    if (def.matcher) entry.matcher = def.matcher;
-    entries.push(entry);
-    settings.hooks[def.event] = entries;
-  }
-  writeJson(settingsPath, settings);
+  if (parsed?.mode === 'set') return parsed.agents;
+  const existing = getProject(slugify(path.basename(path.resolve(repoRoot))));
+  if (existing?.agents?.length) return existing.agents;
+  return ['claude'];
 }
 
 // `hooksOnly` installs the layer that works without anyone invoking anything:
 // context injection, gates, audit, token accounting. The project home is still
 // scaffolded — policy.yaml IS the gate and pack.md IS the context, so there is
 // no hooks-only install without them. Only the pipeline skills are skipped.
-export function init(repoRoot, { name, hooksOnly = false } = {}) {
+export function init(repoRoot, { name, hooksOnly = false, agent = null } = {}) {
   const resolved = path.resolve(repoRoot);
   const id = slugify(name || path.basename(resolved));
-  const project = addProject({ id, name: name || path.basename(resolved), repo: resolved });
+  const agents = resolveAgents(resolved, agent);
+  const project = addProject({ id, name: name || path.basename(resolved), repo: resolved, agents });
   const { dir, detection } = scaffoldProjectHome(id, resolved);
-  if (!hooksOnly) installSkills(resolved);
-  installHooks(resolved);
-  return { project, home: dir, detection, hooksOnly };
+
+  const wired = [];
+  for (const agentId of agents) {
+    const entry = AGENT_CATALOG[agentId];
+    if (!entry) continue;
+    if (!entry.installer) {
+      wired.push({ id: agentId, label: entry.label, hooks: false, configPath: null, skills: null, notes: entry.notes });
+      continue;
+    }
+    entry.installer.wireHooks(resolved);
+    const skillsDir = hooksOnly ? null : entry.installer.installSkills(resolved);
+    wired.push({
+      id: agentId,
+      label: entry.label,
+      hooks: true,
+      configPath: entry.installer.configPath(resolved),
+      skills: skillsDir,
+      notes: entry.notes,
+    });
+  }
+
+  // Derived context files for file-reading agents (Claude gets native
+  // SessionStart injection; AGENTS.md/GEMINI.md carry the same memory to the
+  // rest). Foreign files are reported, never clobbered.
+  const contextReports = syncContextFiles(id, project.name, resolved, agents);
+
+  return { project, home: dir, detection, hooksOnly, agents: wired, contextReports };
 }

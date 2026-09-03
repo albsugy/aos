@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { aosHome, projectDir, registryPath, readJson } from './paths.js';
+import { aosHome, projectDir, registryPath, readJson, canonicalPath } from './paths.js';
 import { loadRegistry, findProjectByCwd } from './registry.js';
 import { loadPolicy } from './policy.js';
+import { AGENT_CATALOG, INSTALLABLE_AGENTS, enforcementLevel } from './agents.js';
+import { getAdapter } from './adapters/index.js';
 
 // A wired hook whose command does not resolve is the worst state AOS can be
 // in: every session looks normal and every gate is off, because the launcher
@@ -136,6 +138,26 @@ export function runDoctor({ appRoot, version, bundled = false }) {
         return path.join(projectDir(project.id), 'policy.yaml');
       })
     );
+    // Per-agent wiring for every agent this project registered — not just the
+    // one that happened to be first. Claude keeps its detailed legacy checks
+    // below (hook format, pinned paths, resolution); the others verify config
+    // presence and our entries.
+    // Canonicalized: repos are stored realpath'd, and cwd on macOS (/tmp →
+    // /private/tmp, /var → /private/var) otherwise never matches.
+    const cwd = canonicalPath(process.cwd());
+    const repo = (project.repos || []).find((r) => cwd === r || cwd.startsWith(r + path.sep));
+    for (const agentId of project.agents || []) {
+      const entry = AGENT_CATALOG[agentId];
+      if (!entry?.installer || !repo) continue;
+      // installers return {ok, detail} — surface failures as check failures.
+      checks.push(
+        check(`${entry.label} hooks wired`, () => {
+          const v = entry.installer.verify(repo);
+          if (!v.ok) throw new Error(v.detail);
+          return v.detail;
+        })
+      );
+    }
     checks.push(
       // Deliberately a FAILURE, not a note. dry_run leaves every gate reporting
       // and none of them enforcing, and it looks identical to a healthy install
@@ -218,4 +240,72 @@ export function runDoctor({ appRoot, version, bundled = false }) {
   }
   console.log(failed ? `\n${failed} problem(s) found.` : '\nAll clear.');
   return failed === 0;
+}
+
+
+// ── capability matrix ────────────────────────────────────────────────────
+// The honest picture of what enforcement each agent's hook surface supports,
+// plus this repo's actual wiring when run inside a project. Never oversell:
+// workflow compatibility is reported as exactly that.
+export function printCapabilities() {
+  const mark = (b) => (b === true ? '✓' : b === 'partial' ? '△' : '✗');
+  console.log('Agent support matrix (verified against each vendor\'s hook documentation):');
+  console.log('');
+  const rows = [];
+  for (const id of INSTALLABLE_AGENTS) {
+    const adapter = getAdapter(id);
+    const entry = AGENT_CATALOG[id];
+    const caps = adapter
+      ? adapter.capabilities
+      : { context: 'file', audit: false, deny: false, ask: false, writes: false, tokens: false };
+    const level = enforcementLevel(id);
+    rows.push({
+      id,
+      label: entry.label.padEnd(12),
+      context: caps.context === true ? '✓' : caps.context === 'file' ? '✓ (file)' : '✗',
+      audit: mark(caps.audit),
+      deny: mark(caps.deny),
+      ask: !caps.deny ? '✗' : caps.ask ? '✓ native' : 'aos approve',
+      writes: mark(caps.writes),
+      level: level.level === 'full' ? 'full enforcement' : 'workflow only',
+    });
+  }
+  console.log('Agent        Context      Audit  Deny  Ask          Writes  Enforcement');
+  console.log('-----------  -----------  -----  ----  -----------  ------  ------------------');
+  for (const r of rows) {
+    console.log(
+      `${r.label}  ${r.context.padEnd(11)}  ${r.audit.padEnd(5)}  ${r.deny.padEnd(4)}  ${r.ask.padEnd(11)}  ${r.writes.padEnd(6)}  ${r.level}`
+    );
+  }
+  const project = findProjectByCwd(process.cwd());
+  if (project) {
+    console.log('');
+    console.log(`This repo (project "${project.id}"):`);
+    // Canonicalized: repos are stored realpath'd, and cwd on macOS (/tmp →
+    // /private/tmp, /var → /private/var) otherwise never matches.
+    const cwd = canonicalPath(process.cwd());
+    const repo = (project.repos || []).find((r) => cwd === r || cwd.startsWith(r + path.sep));
+    for (const agentId of project.agents || []) {
+      const entry = AGENT_CATALOG[agentId];
+      if (!entry) continue;
+      if (!entry.installer) {
+        console.log(`  ${entry.label}: registered for context files only (${enforcementLevel(agentId).label})`);
+        continue;
+      }
+      if (!repo) {
+        console.log(`  ${entry.label}: registered, but this directory is not under a registered repo`);
+        continue;
+      }
+      const v = entry.installer.verify(repo);
+      console.log(`  ${entry.label}: ${v.ok ? '✓' : '✗'} ${v.detail}`);
+    }
+    if (!project.agents?.length) {
+      console.log('  no agents recorded — re-run `aos init --agent <id|all|auto>` to wire them');
+    }
+  } else {
+    console.log('');
+    console.log('(Run inside an AOS project to also check this repo\'s per-agent wiring.)');
+  }
+  console.log('');
+  console.log('Workflow-only agents get context and CI gates, NOT tool-call enforcement — by design.');
 }

@@ -253,6 +253,29 @@ export function handleToolBefore(event, adapter) {
     });
   }
 
+  // An approval the human already granted unlocks this exact operation once.
+  // Checked BEFORE the external-approval conversion (a Codex/Cursor retry must
+  // spend its approval, not mint a new pending decision), and only for
+  // ask-tier verdicts — a deny-tier verdict can never be unlocked.
+  if (decision.effect === 'require_approval') {
+    const approval = consumeApproval(project.id, operationFingerprint(event));
+    if (approval) {
+      appendAudit(project.id, {
+        event: 'gate',
+        decision: 'ask',
+        action: decision.rule,
+        tool: event.tool.name,
+        command: target,
+        session,
+        provider: event.provider,
+        tool_kind: event.tool.kind,
+        approval: approval.id,
+        mode: event.permissionMode || undefined,
+      });
+      return { effect: 'allow', rule: decision.rule, approval: approval.id };
+    }
+  }
+
   // Providers that cannot ask: convert require_approval into deny + an
   // external approval the human grants outside the agent. `aos approve`
   // itself is terminal-only there — an agent approving its own unlock is
@@ -284,29 +307,6 @@ export function handleToolBefore(event, adapter) {
     );
     auditGate(project.id, converted, event, target, { approval: pending.id });
     return converted;
-  }
-
-  // An approval the human already granted unlocks this exact operation once.
-  // Checked after evaluation (a deny-tier verdict can never be unlocked) and
-  // only for ask-tier decisions.
-  if (decision.effect === 'require_approval') {
-    const approval = consumeApproval(project.id, operationFingerprint(event));
-    if (approval) {
-      const unlocked = { effect: 'allow', rule: decision.rule, approval: approval.id };
-      appendAudit(project.id, {
-        event: 'gate',
-        decision: 'ask',
-        action: decision.rule,
-        tool: event.tool.name,
-        command: target,
-        session,
-        provider: event.provider,
-        tool_kind: event.tool.kind,
-        approval: approval.id,
-        mode: event.permissionMode || undefined,
-      });
-      return unlocked;
-    }
   }
 
   auditGate(project.id, decision, event, target);

@@ -10,11 +10,12 @@ Do the review legwork the human would otherwise do by hand, then close the run
 with them — in this session. You recommend; the human approves.
 
 **How the sign-off works:** you run the close command, and the AOS gate turns it
-into a permission prompt showing the human exactly what they are approving.
-Approving that prompt IS the sign-off, and it is recorded (`via: gate-prompt`).
-Never work around the prompt, never pass `--force`, and never ask the human to
-open a second terminal to do it — that is the friction that left runs sitting in
-the queue for weeks.
+into the human's approval. Depending on your runtime this is either a permission
+prompt (Claude Code — approving that prompt IS the sign-off, recorded
+`via: gate-prompt`) or a denial that creates a pending approval (Codex, Cursor —
+tell the human to run the printed `aos approve <id>` command in their own
+terminal, then re-run the close). Never work around the gate, never pass
+`--force`, and never approve a decision on the human's behalf yourself.
 
 ## 1. Pick the run
 

@@ -38,7 +38,7 @@ export function saveRegistry(reg) {
   fs.writeFileSync(registryPath(), YAML.stringify(reg));
 }
 
-export function addProject({ id, name, repo }) {
+export function addProject({ id, name, repo, agents = null }) {
   const reg = loadRegistry({ strict: true });
   let project = reg.projects.find((p) => p.id === id);
   if (!project) {
@@ -47,6 +47,12 @@ export function addProject({ id, name, repo }) {
   }
   const resolved = canonical(repo);
   if (!project.repos.includes(resolved)) project.repos.push(resolved);
+  // Which coding agents this project is wired for (claude/codex/cursor/…).
+  // Merged, never replaced: re-running `aos init --agent codex` ADDS codex
+  // rather than silently uninstalling the claude wiring that's already there.
+  if (Array.isArray(agents) && agents.length) {
+    project.agents = [...new Set([...(project.agents || []), ...agents])];
+  }
   saveRegistry(reg);
   return project;
 }

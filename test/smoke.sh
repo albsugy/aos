@@ -58,6 +58,7 @@ SECTIONS=(
   150-policy-ci.sh
   160-ingest.sh
   170-executable-review.sh
+  190-agents.sh
   180-remove-project.sh
 )
 

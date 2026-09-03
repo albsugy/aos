@@ -7,6 +7,7 @@ import { ensureHome, projectDir, aosHome, nowIso } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry, removeProject } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
+import { enforcementLevel } from './agents.js';
 import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun, CLOSING_STATES } from './run.js';
 import { parseTicket } from './vcs.js';
 import { reviewState, reviewPath, reviewProblemLines, reviewCounts } from './review.js';
@@ -17,9 +18,10 @@ import { fleetScaffold, fleetLaunch } from './fleet.js';
 import { buildContext } from './context.js';
 import { loadPolicy } from './policy.js';
 import { serveConsole } from './console/server.js';
-import { runDoctor } from './doctor.js';
+import { runDoctor, printCapabilities } from './doctor.js';
 import { exportAgentsMd } from './export.js';
 import { consumeSignoffTicket } from './signoff.js';
+import { approveDecision, listPendingDecisions, getPendingDecision } from './decisions.js';
 import { printCost, parseSince } from './cost.js';
 import { runPolicyTest } from './policy-test.js';
 import { verifyProjectLedgers } from './run.js';
@@ -42,7 +44,7 @@ const [, , cmd, ...rest] = process.argv;
 // gate is already showing them the command; making them open a second terminal
 // meant runs stayed at awaiting-review forever. Approving the prompt is the
 // same human act — now it counts, and what it was is recorded either way.
-function signoffIdentity(action, { required = true, projectId = null, ticket = null, target = null } = {}) {
+function signoffIdentity(action, { required = true, projectId = null, ticket = null, target = null, mustInclude = null } = {}) {
   const headless = process.env.AOS_ALLOW_HEADLESS_APPROVE === '1';
   // Under dry_run the gate never prompts, so no ticket can ever exist — and
   // requiring one would make closing a run the single thing dry run makes
@@ -51,7 +53,7 @@ function signoffIdentity(action, { required = true, projectId = null, ticket = n
   const dryRun = projectId ? loadPolicy(projectId).dry_run === true : false;
   let via = null;
   if (process.stdin.isTTY) via = 'tty';
-  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket, target)) via = 'gate-prompt';
+  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket, target, mustInclude)) via = 'gate-prompt';
   else if (dryRun) via = 'dry-run';
   else if (headless) via = 'headless-env';
 
@@ -149,6 +151,15 @@ function printReviewOutcome(meta) {
   }
 }
 
+function relAge(ts) {
+  const s = (Date.now() - Date.parse(ts || '')) / 1000;
+  if (!Number.isFinite(s) || s < 0) return '?';
+  if (s < 90) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
 function requireProject(flags = {}) {
   const id = strFlag(flags.project);
   const p = id ? getProject(id) : findProjectByCwd(process.cwd());
@@ -164,7 +175,9 @@ function requireProject(flags = {}) {
 const HELP = `aos — Agent Operations Stack
 
 Usage:
-  aos init [--name <name>] [--hooks-only]   Register this repo (--hooks-only: context + gates + audit, no pipeline skills)
+  aos init [--name <name>] [--hooks-only] [--agent <a>]   Register this repo for coding agents
+         --agent claude|codex|cursor|gemini (comma list), auto (detect installed), or all (default: claude)
+         (--hooks-only: context + gates + audit, no pipeline skills)
   aos status                        All projects: runs, states, leverage ratio, tokens
   aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
   aos context [--project <id>]      Print the project context pack (what agents load)
@@ -182,12 +195,15 @@ Usage:
   aos ingest [--dry-run]            Backfill audit + token history from Claude Code transcripts
   aos find <query> [--all]          Search project memory; --all sweeps every project
   aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
-  aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
+  aos export                        Write the context pack as AGENTS.md (legacy alias of: aos context sync)
+  aos context sync|check|diff       Generate/verify per-agent context files (AGENTS.md, GEMINI.md) from the project memory
+  aos approve [<id>|--list]         Grant a pending external approval (Codex/Cursor gated ops) — human-only
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
   aos projects                      List registered projects and their memory homes
   aos remove <id> [--purge] [--force]   Unregister a project (console stops listing it); --purge deletes its data — sign-off required
-  aos doctor                        Diagnose the install, registry, and current repo's wiring
-  aos hook <name>                   (internal) Claude Code hook entry points
+  aos doctor [--capabilities]       Diagnose the install, registry, and current repo's wiring
+         --capabilities prints the per-agent support matrix (enforcement levels, honestly)
+  aos hook <name> [--agent <id>]     (internal) agent hook entry points (default: claude)
   aos version                       Print version
   aos update                        Update in place (release installs: verified reinstall; dev checkouts: git pull)
   aos help                          This help
@@ -200,7 +216,15 @@ async function main() {
   switch (cmd) {
     case 'init': {
       const hooksOnly = Boolean(flags['hooks-only']);
-      const { project, home, detection } = init(process.cwd(), { name: strFlag(flags.name), hooksOnly });
+      let result;
+      try {
+        result = init(process.cwd(), { name: strFlag(flags.name), hooksOnly, agent: strFlag(flags.agent) });
+      } catch (e) {
+        console.error(String(e.message || e));
+        process.exitCode = 1;
+        break;
+      }
+      const { project, home, detection, agents: wired, contextReports } = result;
       console.log(`✔ Registered project "${project.name}" (${project.id})`);
       console.log(`✔ Spec scaffolded at ${home}`);
       if (detection?.pack) {
@@ -216,22 +240,75 @@ async function main() {
             `  Add contracts to policy.yaml (or run /aos-onboard and let the agent author them).`
         );
       }
-      if (hooksOnly) {
-        console.log(`✔ Skills skipped (--hooks-only) — nothing added to .claude/skills/`);
-      } else {
-        console.log(`✔ Skills installed to .claude/skills/ (aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard)`);
+      // Per-agent wiring — the honest capability picture, per agent.
+      for (const a of wired) {
+        const level = enforcementLevel(a.id);
+        if (a.hooks) {
+          const cfg = a.configPath ? path.relative(process.cwd(), a.configPath) || a.configPath : '';
+          console.log(`✔ ${a.label}: hooks wired (${cfg}) — ${level.label}`);
+          if (!hooksOnly) console.log(`✔ ${a.label}: skills installed to ${path.relative(process.cwd(), a.skills) || a.skills}`);
+        } else {
+          console.log(`ℹ ${a.label}: ${level.label}`);
+        }
+        for (const note of a.notes || []) console.log(`  ⚠ ${a.label}: ${note}`);
       }
-      console.log(`✔ Hooks wired in .claude/settings.json (gate, audit, context, tokens, learnings)`);
+      for (const r of contextReports || []) {
+        if (r.ok) console.log(`✔ Context synced: ${r.file}${r.changed ? '' : ' (already current)'}`);
+        else console.log(`⚠ Context file ${r.file}: ${r.error}`);
+      }
       if (hooksOnly) {
         console.log(`\nThat's the whole install: every new session in this repo now loads the context`);
         console.log(`pack, gates risky commands and writes, and records an audit trail — no skill`);
         console.log(`invocation, nothing to remember. Fill in ${path.join(home, 'context', 'pack.md')}.`);
         console.log(`Add the ticket pipeline later with: aos init`);
       } else {
-        console.log(`\nNext: start a Claude Code session here and run /aos-onboard — it fills the`);
-        console.log(`context pack from the repo, mines git history for decisions, and reviews policy.yaml.`);
-        console.log(`Then work tickets with /aos-ticket <ticket>.`);
+        console.log(`\nNext: start a session here with any wired agent and run the aos-onboard skill —`);
+        console.log(`it fills the context pack from the repo, mines git history for decisions, and reviews policy.yaml.`);
+        console.log(`Then work tickets with the aos-ticket skill.`);
       }
+      break;
+    }
+    case 'approve': {
+      // Grant a pending external approval — the human half of the Codex/Cursor
+      // ask flow. The decision id is positional; --list shows what is pending.
+      // Sign-off uses the same routes as closing a run; the gate-prompt route
+      // is bound to THIS decision id, so a prompt for one approval can never
+      // grant another.
+      const p = requireProject(flags);
+      if (flags.list || !positional[0]) {
+        const pending = listPendingDecisions(p.id);
+        if (!pending.length) {
+          console.log(`No pending approvals for "${p.id}".`);
+        } else {
+          console.log(`Pending approvals for "${p.id}" — grant with: aos approve <id>`);
+          for (const d of pending) {
+            const age = relAge(d.created);
+            console.log(`  ${d.id}  [${d.action}]  ${String(d.reason || '').slice(0, 90)}  (${age})`);
+          }
+        }
+        break;
+      }
+      const id = String(positional[0]);
+      const pending = getPendingDecision(p.id, id);
+      if (pending) {
+        console.log(`Approving ${id}: [${pending.action}] ${pending.reason}`);
+        console.log(`  provider: ${pending.provider || 'unknown'}  session: ${pending.session || '-'}  created: ${pending.created}`);
+      }
+      const by = signoffIdentity(`aos approve ${id}`, {
+        required: true,
+        projectId: p.id,
+        ticket: 'aos-approve',
+        mustInclude: id,
+      });
+      if (!by) break;
+      const result = approveDecision(p.id, id, by);
+      if (!result.ok) {
+        console.error(`✗ ${result.error}`);
+        process.exitCode = 1;
+        break;
+      }
+      console.log(`✔ Approved ${id} — the agent may retry the exact operation now.`);
+      console.log(`  Single-use, and it expires if not spent soon. Recorded in the audit trail.`);
       break;
     }
     case 'status':
@@ -751,6 +828,10 @@ async function main() {
       await runHook(positional[0], { agent: strFlag(flags.agent) });
       break;
     case 'doctor': {
+      if (flags.capabilities) {
+        printCapabilities();
+        break;
+      }
       const ok = runDoctor({ appRoot: APP_ROOT, version: appVersion(), bundled: IS_BUNDLED });
       process.exit(ok ? 0 : 1);
       break;
