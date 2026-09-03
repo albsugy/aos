@@ -60,6 +60,14 @@ export const DEFAULT_POLICY = {
         action: 'review-close',
         reason: 'Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off',
       },
+      // Unregistering a project turns its gates off, so the removal command is
+      // itself gated: an agent hitting it gets asked, and approving the prompt
+      // is the human sign-off for the --purge variant (see signoff.js).
+      {
+        pattern: '\\baos(\\.mjs)?\\s+remove\\b',
+        action: 'project-remove',
+        reason: 'Removing a project turns its gates off — approve only if that is really you',
+      },
     ],
     // Extra write-protected paths (globs matched against absolute and
     // repo-relative paths), e.g. { pattern: '.env*', decision: 'ask' }.

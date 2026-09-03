@@ -202,6 +202,7 @@ Three commands that turn the ledger from a record into evidence:
 ```
 ~/.aos/
 ├── registry.yaml                  # project id → repo paths
+├── removals.jsonl                 # receipt for every `aos remove` — survives the purge it records
 ├── fleet/                         # optional hub for cross-project sessions (see below)
 └── projects/<id>/
     ├── context/pack.md            # the brief every agent loads
@@ -246,7 +247,7 @@ the hooks are what hold when the model deviates.
 
 ## CLI
 
-`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | policy test | audit verify | ingest | find [--all] | export | fleet | console | projects | doctor | version | update`
+`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | policy test | audit verify | ingest | find [--all] | export | fleet | console | projects | remove | doctor | version | update`
 
 ## The fleet hub
 

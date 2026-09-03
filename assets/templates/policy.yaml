@@ -76,6 +76,12 @@ tiers:
     - pattern: '\baos(\.mjs)?\s+run\s+(state|finish)\b[^|;&]*\b(done|shipped)\b'
       action: review-close
       reason: Closing a review (done/shipped) is reserved for the human — the approval prompt is the sign-off
+    # Unregistering a project turns its gates off, so removal is gated too:
+    # an agent hitting it gets asked, and approving the prompt is the sign-off
+    # `aos remove <id> --purge` consumes.
+    - pattern: '\baos(\.mjs)?\s+remove\b'
+      action: project-remove
+      reason: Removing a project turns its gates off — approve only if that is really you
   # File writes are gated too. Built-in (always on): .claude/settings.json,
   # .git/hooks/, and AOS's own policy/audit/state files require approval, and
   # shell scripts being written are scanned for forbidden/gated commands.

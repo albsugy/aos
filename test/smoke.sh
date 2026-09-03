@@ -54,6 +54,7 @@ SECTIONS=(
   150-policy-ci.sh
   160-ingest.sh
   170-executable-review.sh
+  180-remove-project.sh
 )
 
 # A section file that exists but isn't listed above would be silently skipped —

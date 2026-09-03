@@ -73,3 +73,17 @@ export function findProjectByCwd(cwd) {
 export function getProject(id) {
   return loadRegistry().projects.find((p) => p.id === id) || null;
 }
+
+// Unregister a project. Strict load — a corrupt registry must never be
+// "cleaned" by a deletion (same contract as addProject). Returns the removed
+// entry so the caller can write a receipt; throws when the id is unknown so
+// a typo can never look like success. Data under projects/<id>/ is the
+// caller's call — removal and deletion are separate acts on purpose.
+export function removeProject(id) {
+  const reg = loadRegistry({ strict: true });
+  const idx = reg.projects.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error(`No project "${id}" is registered.`);
+  const [removed] = reg.projects.splice(idx, 1);
+  saveRegistry(reg);
+  return removed;
+}

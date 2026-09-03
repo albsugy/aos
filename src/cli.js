@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
-import { ensureHome, projectDir } from './paths.js';
-import { findProjectByCwd, getProject, loadRegistry } from './registry.js';
+import { ensureHome, projectDir, aosHome, appendLineRotated, nowIso } from './paths.js';
+import { findProjectByCwd, getProject, loadRegistry, removeProject } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
 import { startRun, finishRun, setRunState, getActiveRun, listRuns, approvePlan, runMeta, linkRun, CLOSING_STATES } from './run.js';
@@ -183,6 +183,8 @@ Usage:
   aos fleet [--launch [runtime]]    Scaffold ~/.aos/fleet (primary-agent hub); --launch opens it in claude|codex|opencode|droid
   aos export                        Write the context pack as AGENTS.md (for Codex/Cursor/other runtimes)
   aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
+  aos projects                      List registered projects and their memory homes
+  aos remove <id> [--purge] [--force]   Unregister a project (console stops listing it); --purge deletes its data — sign-off required
   aos doctor                        Diagnose the install, registry, and current repo's wiring
   aos hook <name>                   (internal) Claude Code hook entry points
   aos version                       Print version
@@ -787,6 +789,83 @@ async function main() {
     case 'projects': {
       for (const p of loadRegistry().projects) {
         console.log(`${p.id}  ${p.repos.join(', ')}  → ${projectDir(p.id)}`);
+      }
+      break;
+    }
+    case 'remove': {
+      // Unregister a project — and, with --purge, delete its data. Unregistering
+      // turns that repo's gates off, which is why the command is gated by
+      // default policy (an agent hitting it is asked) and --purge demands a
+      // human sign-off (TTY, gate prompt, or the CI env var — same routes as
+      // closing a run). Deletion is recorded in ~/.aos/removals.jsonl, which
+      // survives the purge: the project's own audit ledger dies with it.
+      const id = positional[0];
+      if (!id || id.startsWith('--')) {
+        console.error('Usage: aos remove <id> [--purge] [--force]');
+        process.exitCode = 1;
+        break;
+      }
+      const p = getProject(id);
+      if (!p) {
+        console.error(`No project "${id}" is registered — aos projects lists them.`);
+        process.exitCode = 1;
+        break;
+      }
+      // A run mid-flight belongs to somebody's session; deleting (or even
+      // unregistering) under it is the kind of quiet loss the gates exist for.
+      const open = listRuns(p.id).filter((r) => r.state === 'in-progress' || r.state === 'blocked');
+      if (open.length && !flags.force) {
+        console.error(
+          `Project "${p.id}" still has ${open.length} open run(s): ${open.map((r) => r.run).join(', ')}.\n` +
+            `Finish or park them first (aos run finish / aos run state blocked), or override with --force.`
+        );
+        process.exitCode = 1;
+        break;
+      }
+      let by = null;
+      if (flags.purge) {
+        by = signoffIdentity(`aos remove ${p.id} --purge`, {
+          required: true,
+          projectId: p.id,
+          ticket: 'project-remove',
+          target: p.id,
+        });
+        if (!by) break;
+      }
+      // The receipt is written from facts gathered BEFORE the purge — the
+      // ledger it records dies with the directory it describes.
+      const runs = listRuns(p.id).length;
+      const dataDir = projectDir(p.id);
+      let user = null;
+      try {
+        user = os.userInfo().username;
+      } catch {
+        // identity is best-effort
+      }
+      removeProject(p.id);
+      appendLineRotated(
+        path.join(aosHome(), 'removals.jsonl'),
+        JSON.stringify({
+          ts: nowIso(),
+          id: p.id,
+          name: p.name,
+          repos: p.repos || [],
+          runs,
+          purged: Boolean(flags.purge),
+          forced: Boolean(flags.force) || undefined,
+          by: by || undefined,
+          user,
+        })
+      );
+      console.log(`✔ Unregistered project "${p.id}"${flags.purge ? ' and deleted its data' : ''} — receipt in ${path.join(aosHome(), 'removals.jsonl')}`);
+      if (flags.purge) {
+        fs.rmSync(dataDir, { recursive: true, force: true });
+        console.log(`  removed ${runs} run(s), the audit ledger, memory, and tokens under ${dataDir}`);
+      } else {
+        console.log(`  data kept at ${dataDir} (${runs} run(s)) — purge later with: rm -rf ${dataDir}`);
+      }
+      if (p.repos && p.repos.length) {
+        console.log(`  hooks in ${p.repos.length} repo(s) now no-op — strip the AOS entries from their .claude/settings.json when convenient`);
       }
       break;
     }

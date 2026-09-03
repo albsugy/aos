@@ -8,7 +8,7 @@ import path from 'node:path';
 
 process.env.AOS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'aos-registry-'));
 
-const { addProject, findProjectByCwd, getProject, loadRegistry } =
+const { addProject, findProjectByCwd, getProject, loadRegistry, removeProject } =
   await import('../../src/registry.js');
 const { registryPath } = await import('../../src/paths.js');
 
@@ -86,5 +86,25 @@ test('a registry with the wrong shape reads as empty', () => {
   const saved = fs.readFileSync(registryPath(), 'utf8');
   fs.writeFileSync(registryPath(), 'projects: not-a-list\n');
   assert.deepEqual(loadRegistry().projects, []);
+  fs.writeFileSync(registryPath(), saved);
+});
+
+test('removeProject unregisters exactly one project, strictly', () => {
+  const before = loadRegistry().projects.map((p) => p.id);
+  const removed = removeProject('alpha');
+  assert.equal(removed.id, 'alpha', 'returns the removed entry for the receipt');
+  const after = loadRegistry().projects.map((p) => p.id);
+  assert.deepEqual(after, before.filter((id) => id !== 'alpha'), 'only that one is gone');
+});
+
+test('removeProject refuses an unknown id rather than faking success', () => {
+  assert.throws(() => removeProject('never-registered'), /No project/);
+});
+
+test('removeProject refuses to clobber a corrupt registry', () => {
+  const saved = fs.readFileSync(registryPath(), 'utf8');
+  fs.writeFileSync(registryPath(), 'projects: [oops\n  not: yaml');
+  assert.throws(() => removeProject('alpha'), /corrupt/);
+  assert.equal(fs.readFileSync(registryPath(), 'utf8').includes('oops'), true, 'the file is untouched');
   fs.writeFileSync(registryPath(), saved);
 });

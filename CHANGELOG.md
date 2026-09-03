@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`aos remove <id> [--purge] [--force]`** — unregister a project. Registry-only
+  removal keeps the data (reversible via `aos init`); `--purge` deletes it and
+  requires a human sign-off (TTY, gate prompt, or `AOS_ALLOW_HEADLESS_APPROVE`),
+  with the receipt written to `~/.aos/removals.jsonl` — a ledger that survives the
+  purge it records, since the project's own audit ledger dies with its directory.
+  Removal refuses while a run is in progress (`--force` overrides, recorded).
+  Unregistering a project turns that repo's gates off, so the removal command is
+  itself gated by default policy (`action: project-remove`) and an approved gate
+  prompt doubles as the purge sign-off. New installs get the rule from the
+  template; existing policy.yaml files that pin a `gated:` list need the rule
+  added by hand to keep the gate on.
 - **Policy CI — `aos policy test [--file <policy.yaml>] [--since 30d]`.** Replays the
   commands that actually ran (audit ledger + ingested history) against a policy before
   you install it, reporting what it would newly deny, newly gate, or newly allow, with

@@ -337,6 +337,7 @@ are applied at display time, so a table update corrects history retroactively.
 ```
 ~/.aos/
 ├── registry.yaml                  # project id → repo paths
+├── removals.jsonl                 # receipt for every aos remove (survives --purge)
 └── projects/<id>/
     ├── context/
     │   ├── pack.md                # the brief every agent loads
@@ -561,6 +562,7 @@ aos export                        Write the context pack as AGENTS.md (Codex/Cur
 aos fleet [--launch [runtime]]    Scaffold the primary-agent hub at ~/.aos/fleet; --launch opens it (claude|codex|opencode|droid; bare = first installed)
 aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
 aos projects                      List registered projects and their memory homes
+aos remove <id> [--purge] [--force]  Unregister a project; --purge deletes its data (sign-off required)
 aos doctor                        Diagnose the install, registry, and this repo's wiring
 aos version                       Print the installed version
 aos update                        Update in place
@@ -585,6 +587,26 @@ Notes:
   command has actually run with the exit status its status claims.
 - `aos hook <name>` exists but is internal — the entry point the Claude Code
   hooks call.
+
+### Removing a project
+
+`aos remove <id>` unregisters the project — the console, `aos status`, and
+`run` commands stop seeing it, and the hooks in its repos become silent
+no-ops (they stay harmless in `.claude/settings.json` until you strip them).
+The data under `~/.aos/projects/<id>/` is **kept** and the removal is
+recorded in `~/.aos/removals.jsonl`.
+
+- **Open runs block it**: removal refuses while a run is `in-progress` or
+  `blocked` — finish or park it first, or override with `--force`.
+- **`--purge` deletes the data** (runs, the chained audit ledger, memory,
+  tokens) and requires a human sign-off: an interactive terminal, the gate
+  prompt (the command is gated by default policy — unregistering turns a
+  repo's gates off, so an agent running it is asked, and approving the
+  prompt is the sign-off), or `AOS_ALLOW_HEADLESS_APPROVE=1` in CI. The
+  receipt written to `removals.jsonl` survives the purge and names the
+  route that authorized it.
+- Removal without `--purge` is reversible: re-run `aos init` in the repo to
+  re-register — the existing data is picked back up.
 
 ### `aos cost`
 

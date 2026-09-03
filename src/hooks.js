@@ -30,7 +30,7 @@ import { stampRunCost } from './cost.js';
 
 // Gate actions whose permission prompt doubles as a human sign-off. Kept in
 // step with the `plan-approve` / `review-close` rules in the policy template.
-const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close']);
+const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close', 'project-remove']);
 
 // States a run only reaches by actually finishing. `blocked` is absent on
 // purpose — it is parked, not done, and can still spend more tokens.
