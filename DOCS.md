@@ -345,11 +345,12 @@ are applied at display time, so a table update corrects history retroactively.
     ├── learnings.md               # compounding gotchas & fixes (recent lines auto-loaded)
     ├── playbooks/                 # extracted repeatable procedures
     ├── sessions.jsonl             # per-session token usage
+    ├── ingest.json                # transcript-ingest watermarks (aos ingest)
     ├── state.json                 # which run is active
-    ├── audit.jsonl                # project-level audit (actions outside a run)
+    ├── audit.jsonl                # project-level audit (actions outside a run) — hash-chained
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
-        ├── audit.jsonl            # every action, gate decision, and verdict for this run
+        ├── audit.jsonl            # every action, gate decision, and verdict for this run — hash-chained
         └── meta.json              # state, verification, attempts, tokens, adversarial-review status
 ```
 
@@ -395,6 +396,10 @@ verification:
   # true: ENFORCED — `aos run finish` refuses while review.json is missing,
   # malformed, or has an open finding. `warn`: record only. false: not required.
   adversarial_review: true
+  # executable findings (opt-in): high-severity open/fixed findings must carry
+  # a `reproduce` command; `aos run review` runs it, and the gate refuses
+  # ("unproven") until the exit status matches the claim. See below.
+  executable_findings: false
   contracts:
     - name: tests
       command: npm test
@@ -548,6 +553,9 @@ aos run link [--pr <url>] [--ticket-url <url>] [--branch <name>]  Attach the PR 
 aos run list                      List runs for this project
 aos run session [--run <id>]      Print the session id bound to a run — resume its crewmate with: claude --resume $(aos run session --run <id>)
 aos verify                        Run the verification contracts from policy.yaml
+aos policy test [--file <p.yaml>] [--since 30d]   Policy CI — replay recorded agent traffic against a policy
+aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
+aos ingest [--dry-run]            Backfill audit + token history from Claude Code transcripts
 aos find <query> [--all]          Search project memory; --all sweeps every registered project
 aos export                        Write the context pack as AGENTS.md (Codex/Cursor/other runtimes)
 aos fleet [--launch [runtime]]    Scaffold the primary-agent hub at ~/.aos/fleet; --launch opens it (claude|codex|opencode|droid; bare = first installed)
@@ -570,6 +578,11 @@ Notes:
   malformed, or has an open finding — `aos run review` shows the same verdict on
   demand, and `--force` finishes anyway (recorded as `forced` in meta + audit).
   `adversarial_review: warn` in policy downgrades the gate to a warning.
+- `aos run review` also **executes** any `reproduce` commands recorded in
+  review.json (`--no-execute` skips) and writes the results back as an
+  `executions` array — with `executable_findings: true` in policy, the finish
+  gate refuses ("unproven") until every demonstrable high-severity finding's
+  command has actually run with the exit status its status claims.
 - `aos hook <name>` exists but is internal — the entry point the Claude Code
   hooks call.
 
@@ -610,6 +623,86 @@ precision that isn't there.
 `outcome.md` under a `## Cost` heading, so a PR drafted from that file carries
 its own cost. The stamp is marked and idempotent — re-stamping replaces it and
 never touches the prose above it, and a run with no `outcome.md` is left alone.
+
+### `aos policy test` — policy CI
+
+A policy change is a claim about your traffic. This command replays the
+commands that **actually ran** — every Bash call in the audit ledger, plus
+everything `aos ingest` backfilled — against a policy that hasn't been switched
+on yet, and reports what would change:
+
+```bash
+aos policy test                                # the installed policy, vs its own history
+aos policy test --file candidate.yaml          # a candidate, before you install it
+aos policy test --file candidate.yaml --since 30d
+```
+
+- **would DENY / would GATE** — commands that ran freely that the candidate
+  would stop or prompt for, each with its run count and the rule's reason.
+- **would now ALLOW** — commands the current policy stopped that the candidate
+  would let through (the loosening you should double-check).
+
+Honest limits, stated in the output too: commands are recorded truncated at
+300 characters, and truncated rows are counted rather than silently treated as
+clean; the stateful gates (plan, scope) are deliberately not replayed — only
+the command tiers and shell-path write protection are. Exit 0 always; exit 1
+only means the replay couldn't run (unreadable file, no project).
+
+### `aos audit verify` — tamper evidence
+
+Every audit line is hash-chained: each entry's hash covers its own content and
+the previous line's hash, so editing or deleting any line after the fact
+breaks the chain at that point. `aos audit verify` walks every ledger (project
++ every run) and reports the first lines that no longer add up; exit 1 when any
+tamper evidence is found, so CI or a cron can gate on it.
+
+What it proves: the ledger is byte-for-byte as written. What it does not prove:
+who wrote a line — anyone with write access can still append (an append-only
+log must forgive appends). Lines from before the chain existed are counted as
+`legacy`, not failures; a foreign unchained line **after** the chain started is
+reported, because that is either tampering or a downgraded AOS, and both are
+worth seeing.
+
+### `aos ingest` — history backfill
+
+The audit ledger only knows what happened since AOS was installed.
+`aos ingest` backfills it from what Claude Code already wrote on disk
+(`~/.claude/projects/<slug>/<session>.jsonl`), matched to your registered
+repos by each session's recorded `cwd`:
+
+- tool calls become audit lines in the project ledger — chained, marked
+  `source: "ingested"`, original timestamps preserved — so **`aos policy test`
+  can replay a month of real traffic against a candidate policy**;
+- each session's cumulative token usage lands in `sessions.jsonl` in the same
+  shape the SessionEnd hook writes (readers dedup, so re-ingesting a grown
+  file replaces rather than adds).
+
+Idempotent: per-session line watermarks in `ingest.json` mean re-runs ingest
+only what a resumed session appended; a file that shrank is skipped with a
+warning rather than double-counted. `--dry-run` reports without writing.
+Gate decisions are not in transcripts, so ingested lines carry no verdict —
+they are activity history, not gate history. `CLAUDE_CONFIG_DIR` is honoured
+for non-default Claude Code installs.
+
+### Executable findings — `reproduce` on high-severity findings
+
+With `verification.executable_findings: true`, the review gate stops trusting
+prose for the findings that matter most: a **high-severity `open` or `fixed`
+finding must carry a `reproduce` command**, `aos run review` executes it in a
+real subprocess, and the gate holds the run at `unproven` until the exit
+status matches the claim:
+
+- `open` → the command must **fail** (the bug, demonstrated);
+- `fixed` → the command must **pass** (the fix, holding).
+
+Results are written back into `review.json` as `executions` (with expected
+status, exit, duration), the execution is audited, and a finding whose status
+changed since its execution reads as unproven again. `dismissed`/`deferred`
+findings and lower severities are exempt — those are judgements, not
+executable claims. What this proves: the claim was checked against the
+machine. What it does not: that the command is a *fair* test — a skeptic can
+still point `reproduce` at something trivial; the human reading the run
+still matters. Off by default; `--force` still overrides, loudly.
 
 ## The fleet — a primary agent over all projects
 

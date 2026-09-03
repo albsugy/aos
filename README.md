@@ -57,6 +57,8 @@ Both matter. Only one of them survives an agent that doesn't feel like cooperati
 | **Scope gate** — when `plan.md` declares a `## Files` list, writes outside it ask. Self-activating: no declaration, no gating | Whether the declared file list was honest in the first place |
 | **Forbidden holds in every permission mode** — Claude Code honours a hook's `deny` even under `--dangerously-skip-permissions`. The **gated** tier is conditional: modes that auto-approve (`acceptEdits`, `auto`, `bypassPermissions`) or auto-deny (`dontAsk`) mean an `ask` may never reach you, so AOS records the mode on every decision and refuses to accept a sign-off nobody gave | Whether you notice the audit line saying so |
 | **Audit** — every tool call, gate decision, and verdict appended to the run's `audit.jsonl`, automatically | |
+| **Tamper-evident ledgers** — every audit line is hash-chained; `aos audit verify` detects any line edited or deleted after the fact (exit 1, CI-gateable) | |
+| **Executable findings** (opt-in) — high-severity `open`/`fixed` findings must carry a `reproduce` command that `aos run review` actually runs; the gate holds the run at `unproven` until the exit status matches the claim | |
 | **State machine** — `in-progress → shipped` (skipping review) is rejected; `--force` is audited | |
 | **Token accounting** — per run and per session, cache reads split from fresh input | |
 
@@ -163,12 +165,37 @@ as structured claims in the run's `review.json`:
 `aos run finish` **refuses** while that file is missing, malformed, or holds a finding
 still marked `open`. `aos run review` validates it on demand.
 
+**Executable findings** (opt in with `verification.executable_findings: true`) make the
+strongest claims machine-checked: a high-severity `open` finding's `reproduce` command
+must **fail** (the bug, demonstrated), a `fixed` one's must **pass** (the fix, holding) —
+`aos run review` executes them in real subprocesses and the gate holds the run at
+`unproven` until they do. "The review says fixed" becomes "a command that failed now
+passes."
+
 What this proves: explicit claims were made, each with a disposition you can audit, and no
 run reached your review queue with a known-open finding inside it. What it does **not**
 prove: that the review was any good. Only another reviewer can judge that, and a model
 determined to phone it in still can. Escape hatches are deliberate and loud —
 `aos run finish --force` stamps the run `adversarial_review: forced` in meta and audit;
 `adversarial_review: warn` in policy downgrades the gate to a warning.
+
+## Policy CI, tamper evidence, and history ingest
+
+Three commands that turn the ledger from a record into evidence:
+
+- **`aos policy test --file candidate.yaml`** — replay the commands that *actually ran*
+  against a policy before you install it: what it would newly deny, newly gate, or
+  newly allow. Commands are recorded truncated at 300 chars and the report says so
+  rather than pretending otherwise.
+- **`aos audit verify`** — every audit line is hash-chained; this walks all ledgers and
+  flags any line edited or deleted after the fact. Exit 1 on tamper evidence, so CI
+  can gate on it.
+- **`aos ingest`** — backfill the ledger from Claude Code's own session transcripts
+  (`~/.claude/projects/…`), matched to your repos by each session's `cwd`. Tool calls
+  become chained audit lines (marked `source: ingested`), token usage lands in the
+  session ledger — and the move that makes it sing: install AOS today, ingest a month
+  of history, then tune your policy against the real traffic instead of a guess.
+  Idempotent, delta-based, `--dry-run` to preview.
 
 ## The spec
 
@@ -182,9 +209,10 @@ determined to phone it in still can. Escape hatches are deliberate and loud —
     ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, verification
     ├── learnings.md               # compounding gotchas & fixes
     ├── playbooks/                 # extracted repeatable procedures
+    ├── ingest.json                # transcript-ingest watermarks (aos ingest)
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
-        ├── audit.jsonl            # every action, gate decision, verdict
+        ├── audit.jsonl            # every action, gate decision, verdict — hash-chained
         │                          # meta also records branch, PR/ticket links, files touched
         └── meta.json              # state, verification, review, attempts, tokens, bound session id
 ```
@@ -218,7 +246,7 @@ the hooks are what hold when the model deviates.
 
 ## CLI
 
-`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | find [--all] | export | fleet | console | projects | doctor | version | update`
+`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | policy test | audit verify | ingest | find [--all] | export | fleet | console | projects | doctor | version | update`
 
 ## The fleet hub
 
@@ -256,11 +284,12 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
 against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
-plus a dist-freshness gate and shellcheck. The end-to-end suite reports 313 checks from
-361 assertion sites (a loop over a command matrix prints one line), weighted toward the
-gate's adversarial bypass surface — that's where the value is, so that's where the tests
-are. Under it sits a unit layer (`node --test`, no dependencies): 203 tests, including a
-125-case gate corpus and a seeded fuzzer over wrapper × payload × quoting combinations.
+plus a dist-freshness gate and shellcheck. The end-to-end suite reports 347 checks,
+weighted toward the gate's adversarial bypass surface and the evidence layer (policy
+replay, tamper detection, ingest idempotency, executable findings) — that's where the
+value is, so that's where the tests are. Under it sits a unit layer (`node --test`, no
+dependencies): 229 tests, including a 125-case gate corpus and a seeded fuzzer over
+wrapper × payload × quoting combinations.
 
 ## License
 

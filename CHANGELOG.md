@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added
+
+- **Policy CI — `aos policy test [--file <policy.yaml>] [--since 30d]`.** Replays the
+  commands that actually ran (audit ledger + ingested history) against a policy before
+  you install it, reporting what it would newly deny, newly gate, or newly allow, with
+  per-command run counts and rule reasons. Recorded commands are truncated at 300
+  chars; the report counts and discloses them rather than treating them as clean. The
+  stateful plan/scope gates are deliberately not replayed — command tiers and
+  shell-path write protection only, and the docs say so.
+- **Tamper-evident audit ledgers — `aos audit verify`.** Every audit line now carries
+  `chain: {seq, hash}` (sha-256 over its own payload linked to the previous line),
+  maintained by every append site, surviving rotation and the
+  rename-without-append crash window. `aos audit verify` walks every project and run
+  ledger and exits 1 on any line edited, deleted, reordered, or written outside the
+  chain after it started — CI-gateable. Pre-chain lines count as `legacy`, not
+  failures; a foreign unchained line after the chain started is reported, because
+  that is either tampering or a downgraded AOS. The chain forgives appends (an
+  append-only log must); it catches post-hoc edits — which is the audit trail's
+  actual failure mode.
+- **History ingest — `aos ingest [--dry-run]`.** Backfills the audit ledger and token
+  totals from Claude Code's own session transcripts (`~/.claude/projects/<slug>/*.jsonl`,
+  `CLAUDE_CONFIG_DIR` honoured), matched to registered repos by each session's recorded
+  `cwd`. Tool calls become chained audit lines marked `source: ingested` with original
+  timestamps; per-session cumulative usage lands in `sessions.jsonl` in the SessionEnd
+  shape (readers dedup, so re-ingesting a grown file replaces rather than adds).
+  Delta-based and idempotent via per-session line watermarks in `ingest.json`; a file
+  that shrank is skipped with a warning. Combined with policy test: install AOS today,
+  ingest a month of real traffic, tune the policy against evidence.
+- **Executable findings (opt-in) — `verification.executable_findings: true`.** A
+  high-severity `open`/`fixed` finding in review.json must now carry a `reproduce`
+  command; `aos run review` executes every reproduce in a real subprocess (`--no-execute`
+  to skip) and writes results back as an `executions` array. The review gate gains an
+  `unproven` state: it blocks the finish while a required execution is missing, not
+  passing, or recorded under a status the finding no longer has. Semantics: `open` →
+  the command must fail (bug demonstrated); `fixed` → it must pass (fix holding).
+  Off by default — it raises the bar on review.json beyond what existing projects
+  have written.
+
 ### Changed
 
 - **The test suite is two layers instead of one 1,300-line file.**
