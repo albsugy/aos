@@ -5,7 +5,6 @@ import { projectDir, canonicalPath, readJson, writeJson, appendLineRotated, nowI
 import { loadRegistry } from './registry.js';
 import { appendChainedTo } from './chain.js';
 import { sessionsPath } from './sessions.js';
-import { sumTranscriptUsage } from './hooks.js';
 
 // History ingest: reconstruct AOS's audit trail and token ledger from what
 // Claude Code already wrote on disk (~/.claude/projects/<slug>/<session>.jsonl),
@@ -37,6 +36,15 @@ import { sumTranscriptUsage } from './hooks.js';
 export function claudeProjectsDir() {
   const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   return path.join(base, 'projects');
+}
+
+// Claude transcripts routinely reach tens of MB; a planted tree can be worse.
+// Skip rather than slurp — ingest is a backfill, not a denial-of-service sink.
+export const MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024;
+
+function capSummary(s, n) {
+  const t = String(s ?? '');
+  return t.length > n ? t.slice(0, n) : t;
 }
 
 function ingestStatePath(projectId) {
@@ -72,11 +80,11 @@ function projectForCwds(cwds, registry) {
 // Same summary semantics the post-tool hook uses, so an ingested Bash line is
 // indistinguishable from a live one downstream (scope checks, policy replay).
 export function summarizeToolUse(name, input = {}) {
-  if (name === 'Bash') return String(input.command || '').slice(0, 300);
-  if (input.file_path) return input.file_path;
-  if (input.notebook_path) return input.notebook_path;
-  if (input.pattern) return String(input.pattern).slice(0, 120);
-  if (input.url) return input.url;
+  if (name === 'Bash') return capSummary(input.command, 300);
+  if (input.file_path) return capSummary(input.file_path, 300);
+  if (input.notebook_path) return capSummary(input.notebook_path, 300);
+  if (input.pattern) return capSummary(input.pattern, 120);
+  if (input.url) return capSummary(input.url, 300);
   const keys = Object.keys(input).slice(0, 3).join(',');
   return keys ? `{${keys}}` : '';
 }
@@ -102,8 +110,46 @@ function toolCallsOf(entry) {
 // watermark") is a filter over ONE parse — no second read of the file.
 // Facts (sessionId/cwds/lines) always scan the whole file: they are the match
 // key and the new watermark.
-export function parseTranscript(file) {
-  const out = { file, lines: 0, sessionId: null, cwds: new Set(), toolCalls: [], lastTs: null };
+function addUsage(usage, entry) {
+  const u = entry?.message?.usage;
+  if (!u) return;
+  usage.input += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  usage.output += u.output_tokens || 0;
+  usage.cache_read += u.cache_read_input_tokens || 0;
+  const model = entry?.message?.model;
+  if (!model || typeof model !== 'string') return;
+  const b = (usage.models[model] = usage.models[model] || {
+    input: 0, output: 0, cache_read: 0, cache_write_5m: 0, cache_write_1h: 0,
+  });
+  b.input += u.input_tokens || 0;
+  b.output += u.output_tokens || 0;
+  b.cache_read += u.cache_read_input_tokens || 0;
+  const cc = u.cache_creation;
+  if (cc && (cc.ephemeral_5m_input_tokens != null || cc.ephemeral_1h_input_tokens != null)) {
+    b.cache_write_5m += cc.ephemeral_5m_input_tokens || 0;
+    b.cache_write_1h += cc.ephemeral_1h_input_tokens || 0;
+  } else {
+    b.cache_write_5m += u.cache_creation_input_tokens || 0;
+  }
+}
+
+export function parseTranscript(file, { maxBytes = MAX_TRANSCRIPT_BYTES } = {}) {
+  let size = 0;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    return null;
+  }
+  if (size > maxBytes) return { file, skipped: 'too-large', size };
+  const out = {
+    file,
+    lines: 0,
+    sessionId: null,
+    cwds: new Set(),
+    toolCalls: [],
+    lastTs: null,
+    usage: { input: 0, output: 0, cache_read: 0, models: {} },
+  };
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -122,9 +168,10 @@ export function parseTranscript(file) {
     } catch {
       continue;
     }
-    if (entry.sessionId) out.sessionId = entry.sessionId;
-    if (entry.cwd) out.cwds.add(entry.cwd);
-    if (entry.timestamp) out.lastTs = entry.timestamp;
+    if (typeof entry.sessionId === 'string' && entry.sessionId) out.sessionId = entry.sessionId;
+    if (typeof entry.cwd === 'string' && entry.cwd) out.cwds.add(entry.cwd);
+    if (typeof entry.timestamp === 'string' && entry.timestamp) out.lastTs = entry.timestamp;
+    addUsage(out.usage, entry);
     for (const call of toolCallsOf(entry)) out.toolCalls.push({ ...call, row: i });
   }
   out.lines = lastNonEmpty + 1;
@@ -157,7 +204,7 @@ export function discoverSessionFiles(dir = claudeProjectsDir()) {
 
 // Ingest every transcript that maps to a registered project. Returns a
 // per-project report; with dryRun nothing is written.
-export function ingestTranscripts({ dryRun = false, onlyProjectId = null } = {}) {
+export function ingestTranscripts({ dryRun = false, onlyProjectId = null, maxBytes = MAX_TRANSCRIPT_BYTES } = {}) {
   const registry = loadRegistry();
   const files = discoverSessionFiles();
   const states = new Map(); // projectId → parsed ingest.json (mutations accumulate here)
@@ -175,8 +222,15 @@ export function ingestTranscripts({ dryRun = false, onlyProjectId = null } = {})
   };
 
   for (const file of files) {
-    const peek = parseTranscript(file);
-    if (!peek || peek.lines === 0) continue;
+    const peek = parseTranscript(file, { maxBytes });
+    if (!peek) continue;
+    if (peek.skipped) {
+      warnings.push(
+        `${path.basename(file)}: skipped (${peek.skipped}${peek.size != null ? `, ${peek.size} bytes` : ''})`
+      );
+      continue;
+    }
+    if (peek.lines === 0) continue;
     const project = projectForCwds(peek.cwds, registry);
     if (!project) continue;
     if (onlyProjectId && project.id !== onlyProjectId) continue;
@@ -216,21 +270,21 @@ export function ingestTranscripts({ dryRun = false, onlyProjectId = null } = {})
       appendChainedTo(audit, rotated, {
         ts: call.ts || peek.lastTs || nowIso(),
         event: 'tool',
-        tool: call.tool,
+        tool: typeof call.tool === 'string' ? call.tool : String(call.tool || ''),
         summary: call.summary,
-        session: peek.sessionId,
+        session: String(peek.sessionId || ''),
         source: 'ingested',
       });
     }
-    // Session usage: cumulative for the whole file, same shape SessionEnd
-    // writes; sessions.js dedups by largest total per session id.
-    const usage = sumTranscriptUsage(file);
+    // Session usage: from the same parse (no second slurp). Same shape
+    // SessionEnd writes; sessions.js dedups by largest total per session id.
+    const usage = peek.usage || { input: 0, output: 0, cache_read: 0, models: {} };
     if (usage.input || usage.output || usage.cache_read) {
       appendLineRotated(
         sessionsPath(project.id),
         JSON.stringify({
           ts: nowIso(),
-          session: peek.sessionId,
+          session: String(peek.sessionId || ''),
           source: 'ingested',
           input_tokens: usage.input,
           output_tokens: usage.output,
@@ -242,11 +296,10 @@ export function ingestTranscripts({ dryRun = false, onlyProjectId = null } = {})
       report.tokens.output += usage.output;
       report.tokens.cache_read += usage.cache_read;
     }
-    state.files[file] = { session: peek.sessionId, lines: peek.lines, ts: nowIso() };
-  }
-
-  if (!dryRun) {
-    for (const [id, state] of states) writeJson(ingestStatePath(id), state);
+    state.files[file] = { session: String(peek.sessionId || ''), lines: peek.lines, ts: nowIso() };
+    // Persist per file so a crash after a successful append does not re-ingest
+    // that file as new and duplicate the chain.
+    writeJson(ingestStatePath(project.id), state);
   }
   return { files: files.length, projects: [...reports.values()], warnings };
 }

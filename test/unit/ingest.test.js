@@ -12,7 +12,7 @@ const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'aos-ingest-'));
 process.env.AOS_HOME = path.join(WORK, 'aos-home');
 process.env.CLAUDE_CONFIG_DIR = path.join(WORK, 'claude');
 
-const { parseTranscript, ingestTranscripts, discoverSessionFiles } = await import('../../src/ingest.js');
+const { parseTranscript, ingestTranscripts, discoverSessionFiles, summarizeToolUse } = await import('../../src/ingest.js');
 const { addProject } = await import('../../src/registry.js');
 
 const REPO = path.join(WORK, 'repo');
@@ -136,6 +136,32 @@ test('a file that shrank is skipped with a warning, never double-counted', () =>
   assert.ok(result.warnings.some((w) => /shrank/.test(w)));
   const after = fs.readFileSync(path.join(process.env.AOS_HOME, 'projects', 'demo', 'audit.jsonl'), 'utf8');
   assert.equal(after, before, 'nothing written');
+});
+
+test('file_path and url summaries are capped like Bash', () => {
+  assert.equal(summarizeToolUse('Edit', { file_path: 'x'.repeat(500) }).length, 300);
+  assert.equal(summarizeToolUse('WebFetch', { url: 'u'.repeat(500) }).length, 300);
+});
+
+test('a transcript over the size cap is skipped, not slurped', () => {
+  const huge = path.join(SESSION_DIR, 'huge.jsonl');
+  fs.writeFileSync(huge, 'x'.repeat(200));
+  const parsed = parseTranscript(huge, { maxBytes: 50 });
+  assert.equal(parsed.skipped, 'too-large');
+  const result = ingestTranscripts({ onlyProjectId: 'demo', maxBytes: 50 });
+  assert.ok(result.warnings.some((w) => /too-large/.test(w)));
+  fs.unlinkSync(huge);
+});
+
+test('a non-string sessionId falls back to the filename', () => {
+  const f = path.join(SESSION_DIR, 'from-name.jsonl');
+  fs.writeFileSync(
+    f,
+    JSON.stringify({ type: 'mode', sessionId: 12345, cwd: REPO, timestamp: '2026-08-01T12:00:00Z' }) + '\n'
+  );
+  const parsed = parseTranscript(f);
+  assert.equal(parsed.sessionId, 'from-name');
+  fs.unlinkSync(f);
 });
 
 test('dry run writes nothing', () => {
