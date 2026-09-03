@@ -382,11 +382,11 @@ function leverage(p) {
 }
 
 /* The review states a finished run can carry. `present` is pre-0.11 and still
-   appears on older runs; the gate now emits clean/resolved/open/invalid/forced.
+   appears on older runs; the gate now emits clean/resolved/open/invalid/unproven/forced.
    Counting only `present` silently dropped every run finished under the new
    schema — including `forced`, the one an operator most needs to see. */
 const REVIEW_RECORDED = new Set(['present', 'clean', 'resolved']);
-const REVIEW_MISSING = new Set(['absent', 'invalid', 'open']);
+const REVIEW_MISSING = new Set(['absent', 'invalid', 'open', 'unproven']);
 /* A project in dry_run looks perfectly healthy from inside a session, because
    nothing ever prompts. The console is where that has to be impossible to miss:
    `aos status` shouts about it and `aos doctor` fails on it, and this was the
@@ -975,6 +975,7 @@ const REVIEW_STATE_TIP = {
   clean: 'A genuine hunt that found nothing',
   resolved: 'Every finding has a disposition',
   open: 'Findings are still unresolved — the finish gate refuses this',
+  unproven: 'A reproduce command was never run or did not demonstrate the claim',
   invalid: 'review.json is present but not usable',
   absent: 'No adversarial review was recorded',
   forced: 'Finished past the review gate with --force',
@@ -1005,6 +1006,10 @@ function renderReview(d) {
     html += `<div class="empty" style="text-align:left">review.json is not a usable review:<ul style="margin:8px 0 0 18px">` +
       (rv.errors || []).map(e => `<li>${esc(e)}</li>`).join('') + `</ul></div>`;
     return html;
+  }
+  if (rv.state === 'unproven') {
+    html += `<div class="empty" style="text-align:left">Reproduce commands have not demonstrated these findings:<ul style="margin:8px 0 0 18px">` +
+      (rv.errors || []).map(e => `<li>${esc(e)}</li>`).join('') + `</ul></div>`;
   }
   if (!(rv.findings || []).length) {
     return html + `<div class="empty">A hunt with no findings. That is a legitimate result — the scope it covered is recorded in review.json.</div>`;

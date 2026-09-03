@@ -351,6 +351,7 @@ are applied at display time, so a table update corrects history retroactively.
     ├── audit.jsonl                # project-level audit (actions outside a run) — hash-chained
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
+        ├── executions.json         # machine-written reproduce results (executable_findings)
         ├── audit.jsonl            # every action, gate decision, and verdict for this run — hash-chained
         └── meta.json              # state, verification, attempts, tokens, adversarial-review status
 ```
@@ -580,11 +581,12 @@ Notes:
   malformed, or has an open finding — `aos run review` shows the same verdict on
   demand, and `--force` finishes anyway (recorded as `forced` in meta + audit).
   `adversarial_review: warn` in policy downgrades the gate to a warning.
-- `aos run review` also **executes** any `reproduce` commands recorded in
-  review.json (`--no-execute` skips) and writes the results back as an
-  `executions` array — with `executable_findings: true` in policy, the finish
-  gate refuses ("unproven") until every demonstrable high-severity finding's
-  command has actually run with the exit status its status claims.
+- `aos run review` **executes** `reproduce` commands when
+  `executable_findings: true` (or with `--execute`; `--no-execute` skips) and
+  writes results to `executions.json` — an AOS-owned sidecar, not review.json.
+  The finish gate refuses ("unproven") until every demonstrable high-severity
+  finding's command has actually run with the exit status its status claims.
+  A `pass: true` array inside agent-authored review.json is not evidence.
 - `aos hook <name>` exists but is internal — the entry point the Claude Code
   hooks call.
 
@@ -674,14 +676,18 @@ only means the replay couldn't run (unreadable file, no project).
 
 Every audit line is hash-chained: each entry's hash covers its own content and
 the previous line's hash, so editing or deleting any line after the fact
-breaks the chain at that point. `aos audit verify` walks every ledger (project
-+ every run) and reports the first lines that no longer add up; exit 1 when any
-tamper evidence is found, so CI or a cron can gate on it.
+breaks the chain at that point. A valid prefix is still a valid chain, so the
+latest `{seq, hash}` is also stored in a sibling `audit.jsonl.head` — deleting
+the newest lines without that file is how tail truncation is caught. `aos audit
+verify` walks every ledger (project + every run) and reports the first lines
+that no longer add up; exit 1 when any tamper evidence is found, so CI or a
+cron can gate on it.
 
 What it proves: the ledger is byte-for-byte as written. What it does not prove:
 who wrote a line — anyone with write access can still append (an append-only
-log must forgive appends). Lines from before the chain existed are counted as
-`legacy`, not failures; a foreign unchained line **after** the chain started is
+log must forgive appends), and a writer who can edit the head file can still
+rewrite history. Lines from before the chain existed are counted as `legacy`,
+not failures; a foreign unchained line **after** the chain started is
 reported, because that is either tampering or a downgraded AOS, and both are
 worth seeing.
 
@@ -717,14 +723,18 @@ status matches the claim:
 - `open` → the command must **fail** (the bug, demonstrated);
 - `fixed` → the command must **pass** (the fix, holding).
 
-Results are written back into `review.json` as `executions` (with expected
-status, exit, duration), the execution is audited, and a finding whose status
-changed since its execution reads as unproven again. `dismissed`/`deferred`
-findings and lower severities are exempt — those are judgements, not
-executable claims. What this proves: the claim was checked against the
-machine. What it does not: that the command is a *fair* test — a skeptic can
-still point `reproduce` at something trivial; the human reading the run
-still matters. Off by default; `--force` still overrides, loudly.
+Results are written to `executions.json` next to the review (with expected
+status, exit, duration) and a per-finding `review-exec` audit line — not into
+`review.json`, which is agent-authored. A finding whose status changed since
+its execution reads as unproven again. `dismissed`/`deferred` findings and
+lower severities are exempt — those are judgements, not executable claims.
+Reproduce commands must clear the same Bash gate as live traffic, including
+the plan gate (`ask` is refused; this path has no human to prompt). What this
+proves: the claim was checked against the machine. What it does not: that the
+command is a *fair* test — a skeptic can still point `reproduce` at something
+trivial; the human reading the run still matters. Off by default; `--force`
+still overrides, loudly. Optional `reproduce` is documentation until the flag
+is on.
 
 ## The fleet — a primary agent over all projects
 

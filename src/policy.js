@@ -78,10 +78,10 @@ export const DEFAULT_POLICY = {
     // Executable findings (opt-in): when true, a high-severity finding must
     // carry a `reproduce` command, `aos run review` executes it, and the
     // review gate refuses (state "unproven") until every required execution
-    // matches its expectation — `open` findings must fail their command (the
-    // bug demonstrated), `fixed` findings must pass it (the fix demonstrated).
-    // Off by default: it raises the bar on review.json beyond what existing
-    // projects have written.
+    // in executions.json matches its expectation — `open` findings must fail
+    // their command (the bug demonstrated), `fixed` findings must pass it
+    // (the fix demonstrated). Off by default: it raises the bar on review.json
+    // beyond what existing projects have written.
     executable_findings: false,
     contracts: [],
   },
@@ -679,6 +679,12 @@ const PROTECTED_AOS_BASENAMES = new Set([
   // a run, so it belongs here with the rest of the self-protection — the gate
   // is the only thing that should ever create it.
   'signoff.json',
+  // The removals receipt ledger — it survives every purge it records and names
+  // who authorized them, so an agent editing it is editing the evidence.
+  'removals.jsonl',
+  // Transcript-ingest watermarks: rewriting them re-ingests deltas (duplicate
+  // audit lines) or suppresses them — AOS state either way.
+  'ingest.json',
 ]);
 
 function globToRegExp(glob) {

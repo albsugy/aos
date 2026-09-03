@@ -57,7 +57,7 @@ Both matter. Only one of them survives an agent that doesn't feel like cooperati
 | **Scope gate** — when `plan.md` declares a `## Files` list, writes outside it ask. Self-activating: no declaration, no gating | Whether the declared file list was honest in the first place |
 | **Forbidden holds in every permission mode** — Claude Code honours a hook's `deny` even under `--dangerously-skip-permissions`. The **gated** tier is conditional: modes that auto-approve (`acceptEdits`, `auto`, `bypassPermissions`) or auto-deny (`dontAsk`) mean an `ask` may never reach you, so AOS records the mode on every decision and refuses to accept a sign-off nobody gave | Whether you notice the audit line saying so |
 | **Audit** — every tool call, gate decision, and verdict appended to the run's `audit.jsonl`, automatically | |
-| **Tamper-evident ledgers** — every audit line is hash-chained; `aos audit verify` detects any line edited or deleted after the fact (exit 1, CI-gateable) | |
+| **Tamper-evident ledgers** — every audit line is hash-chained (plus a head file for trailing deletes); `aos audit verify` detects any line edited or deleted after the fact (exit 1, CI-gateable) | |
 | **Executable findings** (opt-in) — high-severity `open`/`fixed` findings must carry a `reproduce` command that `aos run review` actually runs; the gate holds the run at `unproven` until the exit status matches the claim | |
 | **State machine** — `in-progress → shipped` (skipping review) is rejected; `--force` is audited | |
 | **Token accounting** — per run and per session, cache reads split from fresh input | |
@@ -168,9 +168,9 @@ still marked `open`. `aos run review` validates it on demand.
 **Executable findings** (opt in with `verification.executable_findings: true`) make the
 strongest claims machine-checked: a high-severity `open` finding's `reproduce` command
 must **fail** (the bug, demonstrated), a `fixed` one's must **pass** (the fix, holding) —
-`aos run review` executes them in real subprocesses and the gate holds the run at
-`unproven` until they do. "The review says fixed" becomes "a command that failed now
-passes."
+`aos run review` executes them in real subprocesses, records results in `executions.json`
+(not in agent-authored `review.json`), and the gate holds the run at `unproven` until they
+do. "The review says fixed" becomes "a command that failed now passes."
 
 What this proves: explicit claims were made, each with a disposition you can audit, and no
 run reached your review queue with a known-open finding inside it. What it does **not**
@@ -187,9 +187,9 @@ Three commands that turn the ledger from a record into evidence:
   against a policy before you install it: what it would newly deny, newly gate, or
   newly allow. Commands are recorded truncated at 300 chars and the report says so
   rather than pretending otherwise.
-- **`aos audit verify`** — every audit line is hash-chained; this walks all ledgers and
-  flags any line edited or deleted after the fact. Exit 1 on tamper evidence, so CI
-  can gate on it.
+- **`aos audit verify`** — every audit line is hash-chained (a sibling head file
+  catches trailing deletes); this walks all ledgers and flags any line edited or
+  deleted after the fact. Exit 1 on tamper evidence, so CI can gate on it.
 - **`aos ingest`** — backfill the ledger from Claude Code's own session transcripts
   (`~/.claude/projects/…`), matched to your repos by each session's `cwd`. Tool calls
   become chained audit lines (marked `source: ingested`), token usage lands in the
@@ -213,6 +213,7 @@ Three commands that turn the ledger from a record into evidence:
     ├── ingest.json                # transcript-ingest watermarks (aos ingest)
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
+        ├── executions.json         # machine-written reproduce results (when executable_findings is on)
         ├── audit.jsonl            # every action, gate decision, verdict — hash-chained
         │                          # meta also records branch, PR/ticket links, files touched
         └── meta.json              # state, verification, review, attempts, tokens, bound session id

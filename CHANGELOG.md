@@ -14,7 +14,10 @@
   itself gated by default policy (`action: project-remove`) and an approved gate
   prompt doubles as the purge sign-off. New installs get the rule from the
   template; existing policy.yaml files that pin a `gated:` list need the rule
-  added by hand to keep the gate on.
+  added by hand to keep the gate on. `removals.jsonl` and `ingest.json` join the
+  write-protected AOS state files, and the removals ledger is hash-chained and
+  walked by `aos audit verify` — the receipt that survives a purge carries the
+  same tamper evidence as the ledger it receipts.
 - **Policy CI — `aos policy test [--file <policy.yaml>] [--since 30d]`.** Replays the
   commands that actually ran (audit ledger + ingested history) against a policy before
   you install it, reporting what it would newly deny, newly gate, or newly allow, with
@@ -44,12 +47,37 @@
 - **Executable findings (opt-in) — `verification.executable_findings: true`.** A
   high-severity `open`/`fixed` finding in review.json must now carry a `reproduce`
   command; `aos run review` executes every reproduce in a real subprocess (`--no-execute`
-  to skip) and writes results back as an `executions` array. The review gate gains an
+  to skip) and writes results to `executions.json`. The review gate gains an
   `unproven` state: it blocks the finish while a required execution is missing, not
   passing, or recorded under a status the finding no longer has. Semantics: `open` →
   the command must fail (bug demonstrated); `fixed` → it must pass (fix holding).
   Off by default — it raises the bar on review.json beyond what existing projects
   have written.
+
+### Fixed
+
+- **Executable findings honor the opt-out, and proof is no longer agent-authored.**
+  `executable_findings: false` no longer treats a `reproduce` field as a proof
+  obligation (copied review.json was flipping opted-out projects to `unproven`).
+  `aos run review` only executes reproduce commands when the flag is on, or with
+  `--execute`. Results are written to `executions.json` (and a detailed
+  `review-exec` audit line), not into `review.json` — a forged `pass: true` array
+  in the review file is not evidence. Reproduce commands now go through the same
+  plan-gate check as live Bash (`ask` is refused; this path has no human to prompt).
+- **Audit chain detects trailing deletes.** A valid prefix is a valid chain, so
+  deleting the newest lines used to verify clean. Each ledger now keeps a sibling
+  `audit.jsonl.head` with the latest `{seq, hash}`; `aos audit verify` fails when
+  the tail does not match. A writer who can edit the head can still rewrite
+  history — this closes the easy delete-the-end case. `lastLineOf` no longer
+  treats a mid-file fragment as a complete last line (which forked the chain).
+- **Ingest watermarks flush per file, and summaries/size are bounded.** A crash
+  after appending audit lines no longer re-ingests the same transcript as new.
+  `file_path` / `url` / `notebook_path` summaries are capped like Bash (300 chars)
+  so a long untrusted path cannot fork the chain; transcripts over 32MB are
+  skipped; usage is taken from the same parse rather than a second slurp.
+- **Finish/close/console warn on `unproven`.** `printReviewOutcome`, the close-path
+  warning, and the console's missing-review set treated `absent|invalid|open` as
+  the exhaustive list and stayed silent on `unproven` in warn mode.
 
 ### Changed
 

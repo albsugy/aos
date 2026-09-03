@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
-import { ensureHome, projectDir, aosHome, appendLineRotated, nowIso } from './paths.js';
+import { ensureHome, projectDir, aosHome, nowIso } from './paths.js';
 import { findProjectByCwd, getProject, loadRegistry, removeProject } from './registry.js';
 import { runHook } from './hooks.js';
 import { init } from './install.js';
@@ -23,6 +23,7 @@ import { consumeSignoffTicket } from './signoff.js';
 import { printCost, parseSince } from './cost.js';
 import { runPolicyTest } from './policy-test.js';
 import { verifyProjectLedgers } from './run.js';
+import { appendChainedTo, verifyLedger } from './chain.js';
 import { ingestTranscripts, claudeProjectsDir } from './ingest.js';
 
 const [, , cmd, ...rest] = process.argv;
@@ -136,7 +137,7 @@ function printReviewOutcome(meta) {
     console.log(`✔ Adversarial review: ${detail}`);
   } else if (meta.adversarial_review === 'not-required') {
     console.log('ℹ Adversarial review not required by policy');
-  } else if (['absent', 'invalid', 'open'].includes(meta.adversarial_review)) {
+  } else if (['absent', 'invalid', 'open', 'unproven'].includes(meta.adversarial_review)) {
     // Reachable in warn mode, or in gate mode when --force jumped past the
     // gated edge (finish --state done). Either way the warning must happen —
     // warn's whole promise is that it does; don't name the mode, we can't
@@ -169,7 +170,7 @@ Usage:
   aos context [--project <id>]      Print the project context pack (what agents load)
   aos run start --ticket <id|url> [--title <t>]   Start a run (branch auto-detected; a URL is kept as the ticket link)
   aos run approve                   Approve the active run's plan (human step when plan_gate: ask)
-  aos run review [--run <id>]       Validate the run's adversarial review (review.json) — what the finish gate checks
+  aos run review [--run <id>] [--execute|--no-execute]  Validate the run's adversarial review; execute reproduce commands when executable_findings is on
   aos run finish [--state <s>]      Finish active run (default: awaiting-review); blocked by an unsatisfied review gate (--force overrides, audited)
   aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
   aos run link [--pr <url>] [--ticket-url <url>] [--branch <n>]  Attach the PR / ticket / branch to a run
@@ -336,8 +337,9 @@ async function main() {
       } else if (sub === 'review') {
         // The gate's own verdict, on demand: lets the agent fix review.json
         // against the real validator instead of discovering it at finish.
-        // Reproduce commands are executed by default (--no-execute skips) so
-        // "fixed" can mean "a command that failed now passes", not just "said so".
+        // Reproduce commands run only when executable_findings is on (or
+        // `--execute`); `--no-execute` skips. Optional reproduce is docs until
+        // the flag is on — running them on an opted-out project was a bypass.
         const target = strFlag(flags.run) || getActiveRun(p.id);
         if (!target) {
           console.error('No active run. Use: aos run review --run <id>');
@@ -346,9 +348,16 @@ async function main() {
         }
         let review = reviewState(p.id, target);
         const hasReproduce = review.findings.some((f) => f.reproduce && (f.status === 'open' || f.status === 'fixed'));
-        if (hasReproduce && !flags['no-execute']) {
-          const result = executeReview(p.id, target, { cwd: p.repos?.[0] || process.cwd() });
-          if (result.error) {
+        const wantExecute = (review.executable || flags.execute) && !flags['no-execute'];
+        if (hasReproduce && wantExecute) {
+          const result = executeReview(p.id, target, {
+            cwd: p.repos?.[0] || process.cwd(),
+            force: Boolean(flags.execute),
+          });
+          if (result.skipped) {
+            // Policy off and no --execute — should not be reached (wantExecute
+            // already gated), but don't treat a skip as a successful run.
+          } else if (result.error) {
             console.log(`⚠ ${result.error}`);
           } else {
             for (const e of result.executions) {
@@ -361,7 +370,7 @@ async function main() {
             }
             if (result.total) {
               console.log(
-                `  ${result.passed}/${result.total} reproduce command(s) demonstrated their finding — results recorded in review.json`
+                `  ${result.passed}/${result.total} reproduce command(s) demonstrated their finding — results recorded in executions.json`
               );
             }
             // Re-read: the executions just written may change the verdict.
@@ -413,7 +422,7 @@ async function main() {
           // signed: a run closed while its review never cleared says so here.
           if (
             ['done', 'shipped'].includes(meta.state) &&
-            ['absent', 'invalid', 'open', 'forced'].includes(meta.adversarial_review)
+            ['absent', 'invalid', 'open', 'unproven', 'forced'].includes(meta.adversarial_review)
           ) {
             console.log(
               `⚠ Closed with adversarial review: ${meta.adversarial_review} — recorded in meta and audit.`
@@ -606,6 +615,19 @@ async function main() {
             bad++;
             console.log(`    ${pr.issue}`);
           }
+        }
+      }
+      // The removals receipt ledger is global, not per-project: it survives the
+      // purges it records, so it gets the same walk.
+      const removals = path.join(aosHome(), 'removals.jsonl');
+      const removalsReport = verifyLedger([removals.replace(/removals\.jsonl$/, 'removals.1.jsonl'), removals]);
+      if (removalsReport.lines > 0) {
+        console.log(
+          `${removalsReport.ok ? '✔' : '✗'} removals ledger: ${removalsReport.lines} line(s), ${removalsReport.chained} chained, ${removalsReport.legacy} legacy${removalsReport.ok ? '' : ' — TAMPER EVIDENCE'}`
+        );
+        for (const pr of removalsReport.problems) {
+          bad++;
+          console.log(`    ${pr.issue}`);
         }
       }
       if (bad) {
@@ -832,8 +854,9 @@ async function main() {
         });
         if (!by) break;
       }
-      // The receipt is written from facts gathered BEFORE the purge — the
-      // ledger it records dies with the directory it describes.
+      // Facts gathered before any deletion; the receipt itself lives OUTSIDE
+      // the project dir, so it is written last, after the outcome is known —
+      // a receipt that says purged when rmSync failed would be evidence lying.
       const runs = listRuns(p.id).length;
       const dataDir = projectDir(p.id);
       let user = null;
@@ -843,24 +866,44 @@ async function main() {
         // identity is best-effort
       }
       removeProject(p.id);
-      appendLineRotated(
-        path.join(aosHome(), 'removals.jsonl'),
-        JSON.stringify({
+      let purgeError = null;
+      if (flags.purge) {
+        try {
+          fs.rmSync(dataDir, { recursive: true, force: true });
+        } catch (e) {
+          purgeError = String(e.message || e);
+        }
+      }
+      // Hash-chained like the audit ledgers: this file survives every purge it
+      // records, so it carries the same tamper evidence (aos audit verify walks it).
+      const removalsPath = path.join(aosHome(), 'removals.jsonl');
+      appendChainedTo(
+        removalsPath,
+        removalsPath.replace(/removals\.jsonl$/, 'removals.1.jsonl'),
+        {
           ts: nowIso(),
           id: p.id,
           name: p.name,
           repos: p.repos || [],
           runs,
-          purged: Boolean(flags.purge),
+          purged: Boolean(flags.purge) && !purgeError,
+          error: purgeError || undefined,
           forced: Boolean(flags.force) || undefined,
           by: by || undefined,
           user,
-        })
+        }
       );
-      console.log(`✔ Unregistered project "${p.id}"${flags.purge ? ' and deleted its data' : ''} — receipt in ${path.join(aosHome(), 'removals.jsonl')}`);
+      console.log(
+        `✔ Unregistered project "${p.id}"${flags.purge && !purgeError ? ' and deleted its data' : ''} — receipt in ${removalsPath}`
+      );
       if (flags.purge) {
-        fs.rmSync(dataDir, { recursive: true, force: true });
-        console.log(`  removed ${runs} run(s), the audit ledger, memory, and tokens under ${dataDir}`);
+        if (purgeError) {
+          console.error(`⚠ could not delete the data (${purgeError}) — receipt records purged:false`);
+          console.error(`  finish it manually: rm -rf ${dataDir}`);
+          process.exitCode = 1;
+        } else {
+          console.log(`  removed ${runs} run(s), the audit ledger, memory, and tokens under ${dataDir}`);
+        }
       } else {
         console.log(`  data kept at ${dataDir} (${runs} run(s)) — purge later with: rm -rf ${dataDir}`);
       }

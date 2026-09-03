@@ -5,6 +5,10 @@
 # in a fixed order. The order is load-bearing — sections share the demo project
 # and its run history, so a section reads the state the ones before it left.
 set -euo pipefail
+# Agent terminals often set FORCE_COLOR=1; Node then colorizes console.log of
+# numbers and the suite's numeric equality checks fail. Pin an uncolored run.
+export NO_COLOR=1
+export FORCE_COLOR=0
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Override to test the compiled bundle: AOS_BIN="node $ROOT/dist/aos.mjs" bash test/smoke.sh

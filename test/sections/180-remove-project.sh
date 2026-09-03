@@ -54,3 +54,16 @@ grep -q '"via":"headless-env"' "$AOS_HOME/removals.jsonl" && pass "remove: the p
 if $AOS remove nosuch >/dev/null 2>&1; then fail "unknown id removed"; else pass "remove: unknown id errors, never fakes success"; fi
 # the audit sweep still walks the remaining projects cleanly (demo verifies)
 $AOS audit verify --project demo | grep -q "All ledgers verify" && pass "remove: audit verify unaffected" || fail "verify broke after removals"
+
+# --- the receipt ledger is protected evidence, and tamper-evident itself ---
+# An agent must not forge or rewrite the ledger that survives the purge.
+# demo is still registered; the unregistered repos no longer trigger the gate.
+RM_FORGE='{"cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"echo forged > '"$AOS_HOME"'/removals.jsonl"},"session_id":"s1"}'
+hook_out "$RM_FORGE" | grep -q '"permissionDecision":"ask"' && pass "remove: writing removals.jsonl via shell is gated" || fail "removals.jsonl shell write bypass"
+RM_INGEST='{"cwd":"'"$REPO"'","tool_name":"Write","tool_input":{"file_path":"'"$AOS_HOME"'/projects/demo/ingest.json"},"session_id":"s1"}'
+hook_out "$RM_INGEST" | grep -q '"permissionDecision":"ask"' && pass "remove: writing ingest.json via file tool is gated" || fail "ingest.json file write bypass"
+
+# the receipts are hash-chained and verified by the same sweep as the audits
+grep -q '"chain"' "$AOS_HOME/removals.jsonl" && pass "remove: receipts are hash-chained" || fail "receipts not chained"
+SWEEP_RM=$($AOS audit verify 2>&1 || true)
+echo "$SWEEP_RM" | grep -q "removals ledger" && pass "remove: audit verify walks the removals ledger" || fail "sweep ignores removals: $SWEEP_RM"
