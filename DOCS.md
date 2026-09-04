@@ -31,10 +31,13 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
 1. **The spec** — a file convention under `~/.aos/`: context packs, policies,
    playbooks, run records, and audit logs. Plain files, readable by any agent
    from any provider.
-2. **The skills + hooks** — a Claude Code integration: a ticket pipeline that
-   runs work through intake → plan → implement → verify → package → learn, with
-   hooks that enforce policy and write audit *automatically*, without the agent
-   having to remember to.
+2. **The skills + hooks** — a multi-agent integration (Claude Code, Codex,
+   Cursor; context files for Gemini CLI): a ticket pipeline that runs work
+   through intake → plan → implement → verify → package → learn, with hooks
+   that enforce policy and write audit *automatically*, without the agent
+   having to remember to. Adapters translate each agent's hook protocol into
+   one normalized event stream — the policy engine never learns a provider
+   tool name, and no adapter contains a line of policy.
 3. **The console** — a local, read-only window onto the ledger and the runs:
    the decision queue, run states, verification verdicts, token economics, and
    a leverage ratio.
@@ -50,6 +53,9 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
   findings are structured and the run can't close with one left open.
 - **Every layer works standalone** — the hooks alone are worth installing; the
   pipeline is optional; the console is read-only.
+- **One policy, honestly labeled per agent** — enforcement is stated as what
+  each agent's hook surface actually supports (`aos doctor --capabilities`);
+  workflow compatibility is never described as enforcement.
 - **Local-only** — the console binds `127.0.0.1`, and the CLI makes no network
   requests. Nothing leaves your machine.
 
@@ -60,8 +66,9 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
 - macOS or Linux
 - Node.js **≥ 22** (`node -v`)
 - `curl` and `tar` (present on any stock system) — for the curl installer
-- Claude Code — only for the skills/hooks integration. The CLI and console work
-  without it.
+- At least one supported agent for the hooks/skills integration — Claude Code,
+  Codex, or Cursor (Gemini CLI gets context files only). The CLI and console
+  work without any of them.
 - `git` — only if you build from source.
 
 **Install**
@@ -114,8 +121,16 @@ Diagnose any install with `aos doctor`.
 ```bash
 cd your-repo
 aos init                # register the project + scaffold ~/.aos/projects/<id>/,
-                        # install skills into .claude/skills/ and hooks into .claude/settings.json
+                        # wire Claude Code (skills + hooks)
+aos init --agent all    # …or wire every agent: Claude Code, Codex, Cursor
+                        # (hooks + skills each), Gemini (context files)
+aos init --agent auto   # whichever of them is installed on this machine
 ```
+
+`--agent` takes one id, a comma list, `auto`, or `all`. Agents accumulate: a
+later `aos init --agent codex` *adds* Codex to a project that already has
+Claude Code wired, it never uninstalls the others. Every wired agent gets the
+same gates, the same context injection, and the same audit trail.
 
 `aos init` inspects the repo and **drafts a context pack** from what it finds
 (README summary, `package.json`, frameworks, top-level dirs, other ecosystems)
@@ -127,17 +142,18 @@ and **seeds verification contracts** from your scripts (`test` as required;
 ~/.aos/projects/<id>/policy.yaml       # gates + verification contracts
 ```
 
-Then, inside a Claude Code session in that repo:
-
-```
-/aos-ticket LIN-482     # runs the full pipeline; ends awaiting your review
-```
+Then, in a session with any wired agent in that repo, run the **aos-ticket**
+skill on a ticket — the full pipeline runs and ends awaiting your review. (In
+Claude Code that's the `/aos-ticket` slash command; Codex and Cursor discover
+the same skills in their own skills directories.)
 
 And from a terminal at any time:
 
 ```bash
 aos status              # all projects: runs, states, leverage ratio, tokens
+aos context sync        # regenerate AGENTS.md/GEMINI.md after editing memory
 aos console             # http://127.0.0.1:4560
+aos doctor --capabilities   # what each wired agent enforces, honestly
 ```
 
 ---
@@ -199,16 +215,23 @@ meta and audit. Five routes, strongest first:
 |---|---|
 | `tty` | An interactive terminal under this OS user ran the command |
 | `gate-prompt` | The PreToolUse gate asked, and the human approved the prompt |
+| `external-approval` | A human granted the `aos approve` for exactly this command (the Codex/Cursor ask flow); the agent retried it once |
 | `dry-run` | The project is in `dry_run`, so the gate never prompted anyone |
 | `headless-env` | `AOS_ALLOW_HEADLESS_APPROVE=1` — the CI escape hatch |
 | `prompt` | Unverified; only accepted where no sign-off is required |
 
 `gate-prompt` is how the close normally happens. AOS used to require a TTY for
 it, which was right about *who* may close a run and wrong about *where*: the
-human is in the Claude Code session, not in a second terminal, and runs that
+human is in the agent session, not in a second terminal, and runs that
 needed a context switch to close never closed. So the gate — which already stops
 the command and shows the human its exact text — mints a single-use, 5-minute
 ticket when it asks, and the CLI consumes it as sign-off.
+
+`external-approval` is the same human act on agents whose hooks cannot ask
+(Codex, Cursor): the gated command is denied with an `aos approve <id>`
+command, a human grants it outside the agent, and the unlocked retry mints the
+carry ticket — so the run's record still names who approved and how. See
+[Hooks](#hooks-per-agent) for the full flow.
 
 What that proves is narrow and worth stating: the command was gated, and then it
 ran, which cannot happen without someone approving the prompt. It is not proof
@@ -218,10 +241,11 @@ and an agent willing to forge sign-off would just pass `--force`. With no route
 at all, the close refuses and names all three ways to authorize it.
 
 **Permission modes — what survives `--dangerously-skip-permissions`.** Claude
-Code fires `PreToolUse` in *every* permission mode, and honours a hook's `deny`
-**even in `bypassPermissions`**. So AOS's forbidden tier — force-push, recursive
-deletes of root/home — holds no matter how the session was started. That is the
-strongest claim in this document and it is not conditional.
+Code and Codex fire their pre-tool hooks in *every* permission mode, and honour
+a hook's `deny` **even in `bypassPermissions`**. So AOS's forbidden tier —
+force-push, recursive deletes of root/home — holds no matter how the session
+was started. That is the strongest claim in this document and it is not
+conditional.
 
 The `ask` tier is conditional, and the docs say so plainly. An `ask` only
 reaches a human in a mode that actually prompts (`default`, `plan`). In
@@ -233,9 +257,10 @@ is still recorded, but nobody was asked.
 
 Two consequences AOS handles for you:
 
-- Every gate line in `audit.jsonl` records the `mode` it was decided under. An
-  `ask` logged in `bypassPermissions` did not necessarily reach anybody, and an
-  auditor reading the trail later has no other way to tell.
+- Every gate line in `audit.jsonl` records the `mode` it was decided under (on
+  agents that send one), plus the `provider` that produced it. An `ask` logged
+  in `bypassPermissions` did not necessarily reach anybody, and an auditor
+  reading the trail later has no other way to tell.
 - **No sign-off ticket is minted outside a prompting mode.** The ticket's whole
   claim is "the gate asked, then the command ran, so somebody approved" — which
   is false when the mode auto-approves. `aos run state done` therefore refuses
@@ -345,7 +370,9 @@ are applied at display time, so a table update corrects history retroactively.
     ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, contracts
     ├── learnings.md               # compounding gotchas & fixes (recent lines auto-loaded)
     ├── playbooks/                 # extracted repeatable procedures
-    ├── sessions.jsonl             # per-session token usage
+    ├── decisions/                 # external approvals: pending/ + approved/ — one JSON
+    │                              # per grant (single-use, expiring, fingerprint-bound)
+    ├── sessions.jsonl             # per-session token usage (per provider)
     ├── ingest.json                # transcript-ingest watermarks (aos ingest)
     ├── state.json                 # which run is active
     ├── audit.jsonl                # project-level audit (actions outside a run) — hash-chained
@@ -356,14 +383,25 @@ are applied at display time, so a table update corrects history retroactively.
         └── meta.json              # state, verification, attempts, tokens, adversarial-review status
 ```
 
-Inside each registered **repo**, `aos init` also writes:
+Inside each registered **repo**, `aos init` writes the wiring for every
+selected agent:
 
 ```
 .claude/
-├── skills/aos-ticket, aos-verify, aos-approve, aos-learn, aos-ask, aos-onboard   # the slash-command skills
-└── settings.json                                       # the four AOS hook entries
+├── skills/aos-*                # the six skills (Claude Code)
+└── settings.json               # the five AOS hook entries
+.codex/
+└── hooks.json                  # the same five events, Codex's schema (trust via /hooks)
+.cursor/
+├── skills/aos-*                # the six skills (Cursor)
+└── hooks.json                  # the same five events, Cursor's schema
+.agents/skills/aos-*            # the six skills (Codex scans .agents/skills)
+AGENTS.md                       # generated context (codex/cursor) — marker, derived
+GEMINI.md                       # generated context (gemini) — marker, derived
 ```
 
+The generated files carry a marker and are never written over a hand-authored
+file; `aos context sync` refreshes them, `aos context check` gates the drift.
 `~/.aos` is yours — back it up, or `git init ~/.aos` for full history.
 
 ## policy.yaml reference
@@ -385,8 +423,8 @@ tiers:
   forbidden:            # → denied
     - pattern: 'push\s+[^|;&]*(--force(?!-with-lease)\b|(?<=\s)-f\b)'
       reason: Force-push is forbidden by policy
-  gated:                # → require your approval (Claude Code shows a prompt)
-    - pattern: '\bgit\s+push\b'
+  gated:                # → require your approval (a prompt where the agent has
+    - pattern: '\bgit\s+push\b'      #   one; an aos approve flow where it doesn't)
       action: git-push
   # protected_paths are globs, matched against absolute AND repo-relative file paths.
   protected_paths:
@@ -476,20 +514,23 @@ there is no prompt to approve.
 - **Default forbidden** — force-push (plain `--force`, `-f`, and `+refspec`);
   recursive delete of root/home.
 - **Default gated** — `git push`, `gh pr merge`, `deploy` (anchored so
-  `cat docs/deploy.md` doesn't trip it), and the two sign-off commands
+  `cat docs/deploy.md` doesn't trip it), and the human-only commands:
   `aos run approve` and either spelling of a close (`run state done|shipped`,
-  `run finish --state done|shipped`) — all yours to give (
-  the prompt *is* the approval, and approving it mints the sign-off ticket the
-  CLI records).
+  `run finish --state done|shipped`), plus `aos approve` itself (granting an
+  external approval). Approving the prompt *is* the act, and approving it
+  mints the sign-off ticket the CLI records.
 - **Command aliasing** — the program a token invokes is resolved before any check:
   path stripped, GNU `g`-prefixes folded (`gsed`, `gawk`, `gcp`), `busybox`/
   `toybox` applets unwrapped, and `sudo`/`env`/`VAR=x` prefixes skipped. `git`,
   `grep` and `gh` are deliberately not folded.
-- **Self-protection** — writes to `.claude/settings.json` (rewiring hooks),
-  anything under `.git/hooks/`, and AOS's own state files (`policy.yaml`,
-  `audit.jsonl`, `meta.json`, `state.json`, `sessions.jsonl`, `registry.yaml`,
-  `signoff.json`) require approval, so an agent can't disable its own guardrails
-  or forge a sign-off. Enforced on the shell path too.
+- **Self-protection** — writes to any agent's hook wiring
+  (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json` — an
+  agent disarming *any* agent's gates), anything under `.git/hooks/`, and AOS's
+  own state files (`policy.yaml`, `audit.jsonl`, `meta.json`, `state.json`,
+  `sessions.jsonl`, `registry.yaml`, `signoff.json`, the `decisions/`
+  approval ledger — forging an approval would unlock gated operations) require
+  approval, so an agent can't disable its own guardrails or forge a sign-off.
+  Enforced on the shell path too.
 - **Script-content scan** — a shell script being written is scanned with the same
   policy, so a gated/forbidden command can't be laundered into a file and run
   later.
@@ -513,7 +554,7 @@ The same five events are wired everywhere the agent's protocol has them:
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session. |
-| `PreToolUse` | Gates **Bash and file writes** (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected paths are enforced on the shell path too (`tee`, `> file`, `sed -i` naming a protected target get the same ask), and evasive git-push forms (`git -C . push`) are caught structurally. Enforces `plan_gate: ask` — including write-intent Bash — until `aos run approve`. |
+| `PreToolUse` | Gates **shell commands and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval (a native prompt on Claude Code; an external approval on Codex/Cursor). Per agent, the same policy sees: Bash (`Bash`/`Shell`) and the file tools — `Write`/`Edit`/`MultiEdit`/`NotebookEdit` on Claude Code and Cursor, `apply_patch` on Codex (parsed into per-path writes, so protected paths, the plan gate, and the scope gate all apply). Protected paths are enforced on the shell path too (`tee`, `> file`, `sed -i` naming a protected target get the same ask), and evasive git-push forms (`git -C . push`) are caught structurally. Enforces `plan_gate: ask` — including write-intent Bash — until `aos run approve`. |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl`, and binds a run to the session that started it (so concurrent sessions don't pollute its trail). |
 | `SessionEnd` | Records token usage — fresh input, output, and cache reads separately — per session and per run. Flags sessions that did substantive work without writing learnings (`learnings_owed`), so the next session sees the debt. |
 | `Stop` | Collects what the run still owes, while the model that did the work still has it in context. Two independent asks, each blocking the stop at most once: **close the review** when the session's run is sitting at `awaiting-review` (present the change, propose `done`/`shipped`, let the gate prompt the human for sign-off) and **extract learnings** when a finished run recorded none. Guarded: once per session per ask, never mid-run; `review_capture: false` / `learnings_capture: false` opt out. |
@@ -550,7 +591,11 @@ numbers, and `aos doctor --capabilities` says which is which.
 
 ## Skills
 
-`aos init` installs the slash-command skills into `.claude/skills/`:
+`aos init` installs the six skills — agent-neutral markdown — into each wired
+agent's skills directory (`.claude/skills/`, `.agents/skills/` for Codex,
+`.cursor/skills/` for Cursor). Claude Code exposes them as `/aos-*` slash
+commands; other agents discover them through their own skill mechanisms.
+The `/aos-*` spelling below is the Claude Code form:
 
 - **`/aos-onboard`** — replaces the scaffolded templates with the repo's actual
   truth: fills the context pack from the code, mines git history for
@@ -595,12 +640,16 @@ aos policy test [--file <p.yaml>] [--since 30d]   Policy CI — replay recorded 
 aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
 aos ingest [--dry-run]            Backfill audit + token history from Claude Code transcripts
 aos find <query> [--all]          Search project memory; --all sweeps every registered project
-aos export                        Write the context pack as AGENTS.md (Codex/Cursor/other runtimes)
+aos context sync                  Write/refresh the per-agent context files (AGENTS.md, GEMINI.md)
+aos context check                 Verify them against the memory — exit 1 on drift (CI-gateable)
+aos context diff                  Show what changed in the generated files
+aos export                        Legacy alias: context pack → AGENTS.md (see aos context sync)
 aos fleet [--launch [runtime]]    Scaffold the primary-agent hub at ~/.aos/fleet; --launch opens it (claude|codex|opencode|droid; bare = first installed)
 aos console [--port <p>]          Serve the local console (default http://127.0.0.1:4560)
 aos projects                      List registered projects and their memory homes
 aos remove <id> [--purge] [--force]  Unregister a project; --purge deletes its data (sign-off required)
-aos doctor                        Diagnose the install, registry, and this repo's wiring
+aos doctor [--capabilities]       Diagnose the install, registry, and this repo's wiring
+                                  --capabilities prints the per-agent support matrix
 aos version                       Print the installed version
 aos update                        Update in place
 aos help                          Show help
@@ -623,14 +672,28 @@ Notes:
   The finish gate refuses ("unproven") until every demonstrable high-severity
   finding's command has actually run with the exit status its status claims.
   A `pass: true` array inside agent-authored review.json is not evidence.
-- `aos hook <name>` exists but is internal — the entry point the Claude Code
-  hooks call.
+- `aos hook <name> [--agent <id>]` exists but is internal — the entry point
+  the agent hooks call (`--agent codex` / `--agent cursor` select the adapter
+  that translates that provider's payload; default `claude`).
+- **`aos approve <id>`** grants a pending external approval — the human half of
+  the Codex/Cursor ask flow (see [Hooks](#hooks-per-agent)). `--list` (or no
+  argument) shows the queue. It is sign-off gated like closing a run: a
+  terminal, a gate prompt bound to that decision id, or
+  `AOS_ALLOW_HEADLESS_APPROVE=1`. An agent running it through a deny-capable
+  agent is refused outright — approvals are granted outside the agent.
+- **`aos context sync/check/diff`** manages the generated context files. The
+  set is derived from the project's registered agents: AGENTS.md when codex or
+  cursor is wired, GEMINI.md for gemini; Claude Code needs no file (its
+  SessionStart hook injects the context natively). `check` exits 1 when any
+  file is stale, missing, or blocked by a hand-authored foreign file — so CI
+  can gate the drift.
 
 ### Removing a project
 
 `aos remove <id>` unregisters the project — the console, `aos status`, and
 `run` commands stop seeing it, and the hooks in its repos become silent
-no-ops (they stay harmless in `.claude/settings.json` until you strip them).
+no-ops (they stay harmless in `.claude/settings.json`, `.codex/hooks.json`,
+and `.cursor/hooks.json` until you strip them).
 The data under `~/.aos/projects/<id>/` is **kept** and the removal is
 recorded in `~/.aos/removals.jsonl`.
 
@@ -806,9 +869,10 @@ that hands the whole spec to a single session:
 - `aos context --project <id>` — any project's pack, decisions, learnings
 - `aos find "<query>" --all` — cross-project recall ("have we solved this
   anywhere before?")
-- `aos run session --run <id>` — the Claude Code session bound to a run
-  (recorded automatically by the hooks), so the hub can resume the exact
-  crewmate that did the work: `claude --resume $(aos run session --run <id>)`
+- `aos run session --run <id>` — the agent session bound to a run (recorded
+  automatically by the hooks, whichever agent started it), so the hub can
+  resume the exact crewmate that did the work:
+  `claude --resume $(aos run session --run <id>)`
 
 **How to use it.**
 
@@ -849,11 +913,15 @@ A **read-only** dashboard with three screens:
 - **Project** — leverage/runs/tokens KPIs (median cycle time, estimated cost)
   and a tokens-per-session sparkline, a filterable + searchable runs table
   with per-run cost, the project's memory (context pack, decisions,
-  learnings — rendered), and a policy digest with adversarial-review coverage
-  and per-contract failure counts.
+  learnings — rendered), a policy digest with adversarial-review coverage
+  and per-contract failure counts, an **Agents** card (which agents are wired
+  and what each enforces — *enforced* / *context only* / *not wired*), and a
+  **Pending approvals** section listing every gated operation waiting on a
+  human, with a copyable `aos approve <id>` command.
 - **Run** — a pipeline stage strip, plan-approval status, and tabs for Outcome /
   Verification / Audit / Ticket / Plan, with the audit timeline filterable by
-  event type.
+  event type and provider chips marking which agent produced each entry; the
+  run's record names the sign-off route, including `external-approval`.
 
 It polls the local API every 5 seconds (and pauses while the tab is hidden).
 
@@ -897,6 +965,10 @@ Exit `0` means all clear.
 | `Port 4560 is already in use` | `aos console --port <n>`. |
 | `No AOS project matches this directory` | Run `aos init` here, or pass `--project <id>`. |
 | Corrupt `registry.yaml` | Reads degrade with a warning and writes refuse to clobber it — fix or remove the file, then re-run. |
+| **Codex hooks never fire** | Codex requires hooks to be reviewed and trusted before they run: open Codex in the repo and run `/hooks`, then trust the AOS entries. Doctor reminds you; the trusted-hash state is Codex-side. |
+| A Codex/Cursor gate says **denied pending human approval** | That's the ask flow: run the exact `aos approve dec_…` command from the denial message in your own terminal (never through the agent), then let the agent retry the same operation — it passes once. `aos approve --list` shows the queue; the console lists pending approvals with copyable commands. |
+| `aos context check` fails / `AGENTS.md` is stale | You edited the project memory — run `aos context sync`. If the file is hand-written (no marker), AOS refuses to touch it: merge its content into the pack or move it aside. |
+| Doctor flags an agent's hooks **not wired** | Re-run `aos init --agent <id>` in the repo — it merges the AOS entries into `.codex/hooks.json` / `.cursor/hooks.json` without touching other tools' entries. |
 
 ## Update & uninstall
 
@@ -919,12 +991,14 @@ aos update
 rm -rf ~/.local/share/aos ~/.local/bin/aos
 ```
 
-Per repo, remove the AOS skills and the four hook entries:
+Per repo, remove the AOS skills, the generated context files, and the hook
+entries from every agent you wired:
 
 ```bash
-rm -rf .claude/skills/aos-ticket .claude/skills/aos-verify \
-       .claude/skills/aos-learn .claude/skills/aos-ask .claude/skills/aos-onboard
-# then delete the aos hook entries from .claude/settings.json
+rm -rf .claude/skills/aos-* .agents/skills/aos-* .cursor/skills/aos-*
+rm -f AGENTS.md GEMINI.md          # only the ones carrying the aos generation marker
+# then delete the aos hook entries from .claude/settings.json,
+# .codex/hooks.json, and .cursor/hooks.json
 ```
 
 Your data in `~/.aos` is yours — it stays untouched. Delete it too if you want a

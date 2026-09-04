@@ -45,6 +45,31 @@ work is done: the commands gated, every action audited, the result verified agai
 contracts before a run can close. They decide what the work is; AOS proves it followed
 the rules.
 
+### Which agents, and what each one enforces
+
+Support is stated honestly per agent — `aos doctor --capabilities` prints this from the
+same code that enforces it:
+
+| Agent | Gates | Audit | Approvals | Writes | Level |
+|---|---|---|---|---|---|
+| Claude Code | ✓ | ✓ | ✓ native prompt | ✓ | full enforcement |
+| Codex | ✓ | ✓ | via `aos approve` | ✓ (apply_patch) | full enforcement — hooks must be trusted once (run `/hooks` in Codex) |
+| Cursor | ✓ | ✓ | via `aos approve` | ✓ | full enforcement |
+| Gemini CLI | — | — | — | — | workflow compatibility (context file + Git/CI gates) |
+
+Neither Codex nor Cursor can surface a native *ask* prompt from a hook today — so a gated
+operation is **denied pending a human approval**: the denial carries an exact
+`aos approve <id>` command, a human grants it outside the agent, and the same operation is
+allowed through exactly once. Never silently allowed, never permanently denied. Agents
+cannot approve their own unlocks — the command is human-only by policy, and a deny-tier
+verdict can never be unlocked at all.
+
+Start a task in Claude Code, continue it in Codex, finish it in Cursor: the plan approval,
+scope gate, verification contracts, review gate, sign-offs, audit ledger, and project
+memory are the same objects whichever agent touches them. Each audit line records which
+agent produced it (`provider`), and a run closed through an external approval says
+`via: external-approval` in its record.
+
 **Package:** [npmjs.com/package/@albsugy/aos](https://www.npmjs.com/package/@albsugy/aos)
 · **Full manual:** [DOCS.md](DOCS.md)
 
@@ -55,18 +80,18 @@ Both matter. Only one of them survives an agent that doesn't feel like cooperati
 | Enforced by hooks and the CLI | Convention (markdown the model follows) |
 |---|---|
 | **Command + file-write gates** — forbidden denied, gated asks. Shell paths (`tee`, `>`, `sed -i`) are parsed, not pattern-matched; evasive forms (`git -C . push`, `rm -Rf /*`, quoted flags, `$(…)` substitution) are caught structurally | The **quality** of a plan, a ticket write-up, or an `outcome.md` |
-| **Self-protection** — an agent can't edit `.claude/settings.json`, `.git/hooks/`, or AOS's own policy/audit files without your approval | Whether the intake actually captured the ticket's real acceptance criteria |
+| **Self-protection** — an agent can't edit any agent's hook wiring (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), `.git/hooks/`, AOS's policy/audit files, or the pending-approval ledger without your approval | Whether the intake actually captured the ticket's real acceptance criteria |
 | **Plan approval** (`plan_gate: ask`) — implementation writes stay blocked until a human approves, and `aos run approve` is itself gated so the agent can't self-approve | Whether the skeptic subagent hunted hard or glanced |
 | **Review gate** — `aos run finish` refuses while the adversarial review is missing, malformed, or has an open finding | Whether a recorded learning is worth reading |
-| **Sign-off** — closing a run needs a human's approval at the gate prompt (or a real TTY), recorded with your OS user and which route it came through | Whether a playbook gets proposed |
+| **Sign-off** — closing a run needs a human's approval, recorded with your OS user and the route it came through: the gate prompt (Claude Code), a terminal, an `aos approve` grant (Codex/Cursor), or the CI env var | Whether a playbook gets proposed |
 | **Working-tree guard** — `git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore`, `git rm -r`, `git branch -D` are parsed structurally and gated; `git checkout <branch>`, `-b`, `--staged` restore and `--soft` reset stay silent | |
 | **Scope gate** — when `plan.md` declares a `## Files` list, writes outside it ask. Self-activating: no declaration, no gating | Whether the declared file list was honest in the first place |
-| **Forbidden holds in every permission mode** — Claude Code honours a hook's `deny` even under `--dangerously-skip-permissions`. The **gated** tier is conditional: modes that auto-approve (`acceptEdits`, `auto`, `bypassPermissions`) or auto-deny (`dontAsk`) mean an `ask` may never reach you, so AOS records the mode on every decision and refuses to accept a sign-off nobody gave | Whether you notice the audit line saying so |
+| **Forbidden holds in every permission mode** — agents honour a hook's `deny` even in modes that skip prompts. The **gated** tier is conditional: modes that auto-approve (`acceptEdits`, `auto`, `bypassPermissions`) or auto-deny (`dontAsk`) mean an `ask` may never reach you — and on Codex/Cursor, `ask` becomes an external approval anyway — so AOS records the mode on every decision and refuses to accept a sign-off nobody gave | Whether you notice the audit line saying so |
 | **Audit** — every tool call, gate decision, and verdict appended to the run's `audit.jsonl`, automatically | |
 | **Tamper-evident ledgers** — every audit line is hash-chained (plus a head file for trailing deletes); `aos audit verify` detects any line edited or deleted after the fact (exit 1, CI-gateable) | |
 | **Executable findings** (opt-in) — high-severity `open`/`fixed` findings must carry a `reproduce` command that `aos run review` actually runs; the gate holds the run at `unproven` until the exit status matches the claim | |
 | **State machine** — `in-progress → shipped` (skipping review) is rejected; `--force` is audited | |
-| **Token accounting** — per run and per session, cache reads split from fresh input | |
+| **Token accounting** — per run and per session, cache reads split from fresh input (Claude Code transcripts today; other agents record honest zeros until their formats are documented) | |
 
 ## Install
 
@@ -106,19 +131,23 @@ Uninstall: `rm -rf ~/.local/share/aos ~/.local/bin/aos` — your data in `~/.aos
 ```bash
 cd your-repo
 aos init                # registers the project, scaffolds ~/.aos/projects/<id>/,
-                        # installs skills into .claude/skills/ and hooks into .claude/settings.json
+                        # wires Claude Code (skills into .claude/skills/, hooks into .claude/settings.json)
+aos init --agent all    # …or every agent: Claude Code + Codex + Cursor (hooks, skills),
+                        #     plus generated AGENTS.md/GEMINI.md for file-reading agents
 
 # fill in the two files that matter:
 #   ~/.aos/projects/<id>/context/pack.md   — what every agent must know
 #   ~/.aos/projects/<id>/policy.yaml       — gates + verification contracts
 
-# then, inside a Claude Code session in that repo:
-/aos-ticket LIN-482     # runs the pipeline; ends awaiting your review
+# then, in a session with any wired agent in that repo, run the aos-ticket skill on a
+# ticket: the six-stage pipeline runs and ends awaiting your review
 
 aos status              # all projects: runs, states, leverage ratio, tokens, est. cost
-aos export              # write the context pack as AGENTS.md for Codex/Cursor/etc.
+aos context sync        # regenerate AGENTS.md/GEMINI.md after editing the memory
 aos console             # http://127.0.0.1:4560
 ```
+
+`aos doctor --capabilities` shows what each wired agent enforces in this repo.
 
 `aos doctor` is worth running after any move or update: hook commands end in `|| true` so
 a missing `aos` can never break a session, which also means it would otherwise turn every
@@ -126,12 +155,16 @@ gate off silently. Doctor resolves them and says so.
 
 ## What the hooks do (no skill invocation needed)
 
+The same five events are wired into each agent's config — `.claude/settings.json`,
+`.codex/hooks.json`, `.cursor/hooks.json`; per-agent differences and the
+external-approval flow are in [DOCS.md](DOCS.md#hooks-per-agent):
+
 | Hook | Effect |
 |---|---|
 | `SessionStart` | Injects the project's context pack, recent decisions, learnings, and open runs into every new session |
-| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: `.claude/settings.json`, `.git/hooks/`, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve`; when a run's `plan.md` declares a `## Files` list, writes outside it ask too. `dry_run: true` records every decision without enforcing any of them |
+| `PreToolUse` | Gates Bash commands **and file writes** against `policy.yaml`: forbidden → blocked, gated/protected → requires your approval. Protected by default: every agent's hook wiring (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), `.git/hooks/`, the pending-approval ledger, and AOS's own policy/audit files (an agent can't rewire its own guardrails) — enforced on the shell path too, so `tee`, `> file`, and `sed -i` can't sidestep the file gates. Shell scripts being written are scanned so a gated command can't be laundered into a file and executed later. When `plan_gate: ask`, implementation writes (file tools *and* write-intent Bash) stay gated until you run `aos run approve`; when a run's `plan.md` declares a `## Files` list, writes outside it ask too. `dry_run: true` records every decision without enforcing any of them |
 | `PostToolUse` | Appends every action to the run's `audit.jsonl` — each run is bound to the session that started it, so concurrent sessions don't pollute its trail |
-| `SessionEnd` | Records token usage (fresh input, output, and cache reads separately) per session and per run, and flags sessions that did substantive work without writing learnings |
+| `SessionEnd` | Records token usage (fresh input, output, and cache reads separately — Claude Code transcripts today) per session and per run, and flags sessions that did substantive work without writing learnings |
 | `Stop` | Collects what the run still owes, while the model that did the work still has it in context: closes out a run sitting at `awaiting-review` (present it, propose `done`/`shipped`, let the gate prompt you to sign off) and extracts learnings when a finished run recorded none. Each ask blocks at most once per session |
 
 **Threat model, honestly:** these gates are accident-protection for well-meaning agents —
@@ -189,6 +222,13 @@ determined to phone it in still can. Escape hatches are deliberate and loud —
 
 Three commands that turn the ledger from a record into evidence:
 
+- **`aos context sync / check / diff`** — regenerate the per-agent context files
+  (`AGENTS.md` for Codex+Cursor, `GEMINI.md` for Gemini CLI) from the one canonical
+  memory; `check` exits 1 on drift, so CI can gate it. Hand-written files are never
+  touched, and files generated by the old `aos export` upgrade in place.
+- **`aos approve <id>` / `--list`** — the human half of the external-approval flow: grant
+  (or list) the operations a Codex/Cursor gate denied pending approval. Single-use,
+  expiring, bound to the exact operation; the agent then retries once.
 - **`aos policy test --file candidate.yaml`** — replay the commands that *actually ran*
   against a policy before you install it: what it would newly deny, newly gate, or
   newly allow. Commands are recorded truncated at 300 chars and the report says so
@@ -216,14 +256,22 @@ Three commands that turn the ledger from a record into evidence:
     ├── policy.yaml                # tiers (forbidden/gated/protected_paths), plan_gate, verification
     ├── learnings.md               # compounding gotchas & fixes
     ├── playbooks/                 # extracted repeatable procedures
+    ├── decisions/                 # external approvals: pending/ + approved/ (one JSON per
+    │                              # grant — single-use, expiring, fingerprint-bound)
     ├── ingest.json                # transcript-ingest watermarks (aos ingest)
     └── runs/<date>-<ticket>/
         ├── ticket.md  plan.md  verification.md  review.json  outcome.md
         ├── executions.json         # machine-written reproduce results (when executable_findings is on)
-        ├── audit.jsonl            # every action, gate decision, verdict — hash-chained
-        │                          # meta also records branch, PR/ticket links, files touched
+        ├── audit.jsonl            # every action, gate decision, verdict — hash-chained;
+        │                          # each line records which agent (provider) produced it
         └── meta.json              # state, verification, review, attempts, tokens, bound session id
 ```
+
+In each registered **repo**, `aos init` writes the per-agent wiring
+(`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), the skills
+(`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`), and — for file-reading
+agents — the generated `AGENTS.md` / `GEMINI.md` at the repo root, derived from the
+memory above (`aos context sync` refreshes them).
 
 **Memory, concretely:** the pack, decisions, and learnings are curated markdown —
 human-readable, diffable, auditable; `git init ~/.aos` gives you history. `SessionStart`
@@ -256,7 +304,7 @@ to the model — the hooks are what hold when the model deviates.
 
 ## CLI
 
-`aos init [--hooks-only] | status | cost | context | run start/approve/review/finish/state/link/list/session | verify | policy test | audit verify | ingest | find [--all] | export | fleet | console | projects | remove | doctor | version | update`
+`aos init [--hooks-only] [--agent claude|codex|cursor|gemini|auto|all] | status | cost | context [sync|check|diff] | approve [<id>|--list] | run start/approve/review/finish/state/link/list/session | verify | policy test | audit verify | ingest | find [--all] | export | fleet | console | projects | remove | doctor [--capabilities] | version | update`
 
 ## The fleet hub
 
@@ -294,12 +342,14 @@ you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Published on npm and actively maintained by one person. Node ≥ 22; a smoke suite runs
 against both the source and the compiled bundle across macOS/Linux and Node 22/24 in CI,
-plus a dist-freshness gate and shellcheck. The end-to-end suite reports 347 checks,
-weighted toward the gate's adversarial bypass surface and the evidence layer (policy
-replay, tamper detection, ingest idempotency, executable findings) — that's where the
-value is, so that's where the tests are. Under it sits a unit layer (`node --test`, no
-dependencies): 229 tests, including a 125-case gate corpus and a seeded fuzzer over
-wrapper × payload × quoting combinations.
+plus a dist-freshness gate and shellcheck. The end-to-end suite reports 403 checks,
+weighted toward the gate's adversarial bypass surface, the evidence layer (policy
+replay, tamper detection, ingest idempotency, executable findings), and the multi-agent
+surface (cross-adapter verdict parity, apply_patch gating, the external-approval
+lifecycle, cross-agent sign-off) — that's where the value is, so that's where the tests
+are. Under it sits a unit layer (`node --test`, no dependencies): 265 tests, including a
+146-case gate corpus, adapter translations for every supported agent, and a seeded
+fuzzer over wrapper × payload × quoting combinations.
 
 ## License
 
