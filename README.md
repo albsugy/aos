@@ -1,9 +1,15 @@
-# AOS — Agent Operations Stack
+<p align="center">
+  <img src="assets/logo.png" alt="AOS" width="160" height="160">
+</p>
 
-[![npm](https://img.shields.io/npm/v/@albsugy/aos?color=cb3837&logo=npm)](https://www.npmjs.com/package/@albsugy/aos)
-[![CI](https://github.com/albsugy/aos/actions/workflows/ci.yml/badge.svg)](https://github.com/albsugy/aos/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
+<h1 align="center">AOS — Agent Operations Stack</h1>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@albsugy/aos"><img src="https://img.shields.io/npm/v/@albsugy/aos?color=cb3837&logo=npm" alt="npm"></a>
+  <a href="https://github.com/albsugy/aos/actions/workflows/ci.yml"><img src="https://github.com/albsugy/aos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen" alt="Node ≥ 22"></a>
+</p>
 
 Governance and continuity for every coding agent you use. One policy, one
 project memory, one audit trail — installed as hooks so they work without

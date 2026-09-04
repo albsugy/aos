@@ -10,3 +10,6 @@ node_modules/
 # licensing) inside this one.
 .agents/
 skills-lock.json
+
+# local logo drafts, not the published mark
+.logo-preview/
