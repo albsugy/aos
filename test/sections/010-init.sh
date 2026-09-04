@@ -16,6 +16,12 @@ pass "init: registry, spec, skills, hooks"
 
 # hooks must reference the stable launcher (invoked path), never a realpath pin
 grep -q '|| aos hook pre-tool' "$REPO/.claude/settings.json" || fail "hook PATH fallback missing"
+# The embedded command must carry a real launcher (quoted absolute or $HOME
+# path) — not degrade to a bare `aos`, which silently disables every gate
+# wherever aos is not on PATH (CI, minimal environments).
+# shellcheck disable=SC2016  # $HOME is the literal text expected in the embedded command
+grep -q '"\(\$HOME\|/\)' "$REPO/.claude/settings.json" \
+  && pass "hook command embeds an absolute launcher" || fail "hook command degraded to bare aos"
 grep -q '|| true' "$REPO/.claude/settings.json" || fail "hook never-fail tail missing"
 pass "init: hooks use launcher + fallback"
 
