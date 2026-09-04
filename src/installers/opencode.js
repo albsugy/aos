@@ -2,12 +2,12 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { installSkillsInto, bakeAgentScript } from './shared.js';
 
-// opencode — plugin at `.opencode/plugins/aos.ts` (project-level, auto-loaded
+// opencode — plugin at `.opencode/plugins/opencode-aos.ts` (project-level, auto-loaded
 // at startup), skills in the shared `.agents/skills/` (opencode reads it
 // natively, alongside .claude/skills and .opencode/skills).
 //
-// The plugin script is a template: `__AOS_BIN__` is baked to the resolved
-// launcher at install time (a PATH fallback is embedded in the script).
+// The plugin script is a template: `__AOS_CMD__` is baked to a JSON argv array
+// at install time (a PATH fallback is embedded in the script).
 
 const PLUGIN_NAME = 'opencode-aos.ts';
 

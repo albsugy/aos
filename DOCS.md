@@ -399,7 +399,7 @@ selected agent:
 .agents/skills/aos-*            # the six skills (Codex, pi, opencode, and Devin
                                 #   all scan .agents/skills natively)
 .pi/extensions/pi-aos.ts         # the pi gate extension (baked launcher path)
-.opencode/plugins/aos.ts         # the opencode gate plugin (baked launcher path)
+.opencode/plugins/opencode-aos.ts # the opencode gate plugin (baked launcher path)
 AGENTS.md                       # generated context (codex/cursor/opencode/devin) — marker, derived
 GEMINI.md                       # generated context (gemini) — marker, derived
 ```
@@ -552,7 +552,7 @@ automatically — no skill invocation needed.
 | Codex | `.codex/hooks.json` | `.agents/skills/` | hooks must be trusted once (run `/hooks` in Codex); `ask` is unsupported by Codex's protocol → external approvals |
 | Cursor | `.cursor/hooks.json` | `.cursor/skills/` | `preToolUse` cannot enforce `ask` → external approvals |
 | pi | `.pi/extensions/pi-aos.ts` | `.agents/skills/` | pi extension API: `tool_call` blocks (`{block, reason}`); loads once pi trusts the project. `ask` is not a pi concept → external approvals. Context injected natively via `before_agent_start` |
-| opencode | `.opencode/plugins/aos.ts` | `.agents/skills/` | opencode plugin API: `tool.execute.before` blocks by throwing; auto-loads at startup. No ask → external approvals. Context via the generated `AGENTS.md` |
+| opencode | `.opencode/plugins/opencode-aos.ts` | `.agents/skills/` | opencode plugin API: `tool.execute.before` blocks by throwing; auto-loads at startup. GPT-5-series models use `apply_patch` (not `write`/`edit`) — that tool is gated too. No ask → external approvals. Context via the generated `AGENTS.md` |
 | Devin CLI | — (no hook surface) | `.agents/skills/` | workflow compatibility: `AGENTS.md` + skills; never described as enforced |
 | Gemini CLI | — (context file only) | — | workflow compatibility: `GEMINI.md` + Git/CI gates, never described as enforced |
 
@@ -1004,7 +1004,7 @@ entries from every agent you wired:
 
 ```bash
 rm -rf .claude/skills/aos-* .agents/skills/aos-* .cursor/skills/aos-*
-rm -f .pi/extensions/pi-aos.ts .opencode/plugins/aos.ts
+rm -f .pi/extensions/pi-aos.ts .opencode/plugins/opencode-aos.ts
 rm -f AGENTS.md GEMINI.md          # only the ones carrying the aos generation marker
 # then delete the aos hook entries from .claude/settings.json,
 # .codex/hooks.json, and .cursor/hooks.json

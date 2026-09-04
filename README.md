@@ -27,9 +27,11 @@ aos init --agent all                           # Claude Code + Codex + Cursor + 
 aos init --agent auto                          # whichever agents are installed here
 ```
 
-That's a complete install. From the next session on, in this repo, with any
-wired agent: context is injected at session start, risky commands and writes
-are gated, and every tool call is audited.
+That's a complete install. From the next session on, in this repo: context is
+injected at session start. Agents with a hook surface (Claude Code, Codex,
+Cursor, pi, opencode) also gate risky commands and writes, and audit every
+tool call. Devin and Gemini get the generated context files — not tool-call
+enforcement.
 
 - **[Install](#install)**
 - **[Quickstart](#quickstart)**
@@ -155,7 +157,7 @@ the same objects. Each audit line records which agent produced it (`provider`).
 The same events are wired into each agent's control surface — command hooks
 (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), a pi
 extension (`.pi/extensions/pi-aos.ts`), or an opencode plugin
-(`.opencode/plugins/aos.ts`). Either way the enforcement is the same AOS core:
+(`.opencode/plugins/opencode-aos.ts`). Either way the enforcement is the same AOS core:
 adapters translate, the policy engine decides.
 
 | Hook | Effect |
@@ -267,7 +269,7 @@ are what hold when the model deviates.
 ## CLI
 
 ```
-aos init [--hooks-only] [--agent claude|codex|cursor|gemini|auto|all]
+aos init [--hooks-only] [--agent claude|codex|cursor|pi|opencode|devin|gemini|auto|all]
 aos status | cost | console | projects | doctor [--capabilities]
 aos context [sync|check|diff] | find | fleet | export
 aos run start|approve|review|finish|state|link|list|session

@@ -15,9 +15,10 @@ Three more agents, verified against each one's real extensibility surface
   Skills install to the cross-agent `.agents/skills/` pi already reads. No
   ask concept at pi's interception point → external approvals.
 - **opencode — full enforcement.** A project plugin
-  (`.opencode/plugins/aos.ts`) hooks `tool.execute.before` and blocks by
+  (`.opencode/plugins/opencode-aos.ts`) hooks `tool.execute.before` and blocks by
   throwing (opencode's documented mechanism, the reason fed to the agent);
-  `tool.execute.after` audits. Context via the generated `AGENTS.md`; skills
+  `tool.execute.after` audits. `write`, `edit`, and `apply_patch` (GPT-5-series
+  file edits) are all gated. Context via the generated `AGENTS.md`; skills
   via `.agents/skills/`. No ask → external approvals.
 - **Devin CLI — workflow compatibility, honestly.** Devin has no local hook
   surface; it gets the generated `AGENTS.md` and skills in `.agents/skills/`
@@ -26,10 +27,20 @@ Three more agents, verified against each one's real extensibility surface
   and `all`); `aos doctor --capabilities` prints the seven-agent matrix.
 - Self-protection extended: `.pi/extensions/` and `.opencode/plugins/` join
   the protected paths — an agent rewriting its own gate script is gated like
-  every other disarm attempt (file writes and shell writes).
+  every other disarm attempt (file writes and shell writes). Directory removal
+  of `.pi` / `.opencode` themselves is gated too (`rm -rf .pi` is not a bypass).
 - Adapters for pi and opencode keep the same contract as the rest: thin
   translators over the normalized event protocol; the same policy fixtures
   evaluate identically through all five enforcement adapters (unit-tested).
+
+### Fixed
+
+- `aos doctor` no longer requires Claude JSON hooks on a pi- or opencode-only
+  install. Baked `AOS_CMD` argv arrays are resolved the same way shell hooks are.
+  Devin is labeled `workflow`, never `hooks wired`.
+- opencode's plugin now intercepts `apply_patch` (the file-edit tool GPT-5-series
+  models get instead of `write`/`edit`), so protected-path and content-scan
+  gates apply there too.
 
 ### Added — multi-agent support (0.13 line)
 

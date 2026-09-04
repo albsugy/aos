@@ -7,8 +7,8 @@ import { installSkillsInto, bakeAgentScript } from './shared.js';
 // by construction), skills in the shared `.agents/skills/` (pi reads the
 // Agent Skills standard locations natively).
 //
-// The extension script is a template: `__AOS_BIN__` is baked to the resolved
-// launcher at install time (a PATH fallback is embedded in the script).
+// The extension script is a template: `__AOS_CMD__` is baked to a JSON argv array
+// at install time (a PATH fallback is embedded in the script).
 
 const EXTENSION_NAME = 'pi-aos.ts';
 
