@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { claudeAdapter } from '../../src/adapters/claude.js';
 import { codexAdapter } from '../../src/adapters/codex.js';
 import { cursorAdapter } from '../../src/adapters/cursor.js';
@@ -145,6 +148,29 @@ test('cursor: Shell and Write payloads normalize', () => {
   assert.deepEqual(write.operation.paths, ['/repo/x.md']);
 });
 
+test('cursor: Delete is a file event, including hook-file targets', () => {
+  const del = cursorAdapter.toEvent('pre-tool', {
+    conversation_id: 'c1',
+    cwd: '/repo',
+    tool_name: 'Delete',
+    tool_input: { path: '/repo/.cursor/hooks.json' },
+  });
+  assert.equal(del.tool.kind, 'file');
+  assert.equal(del.tool.name, 'Delete');
+  assert.deepEqual(del.operation.paths, ['/repo/.cursor/hooks.json']);
+});
+
+test('cursor: a mutating file tool with no path still becomes a file event', () => {
+  const e = cursorAdapter.toEvent('pre-tool', {
+    conversation_id: 'c1',
+    cwd: '/repo',
+    tool_name: 'Write',
+    tool_input: {},
+  });
+  assert.equal(e.tool.kind, 'file');
+  assert.deepEqual(e.operation.paths, []);
+});
+
 test('cursor: deny uses the native permission shape; ask fails closed', () => {
   const deny = JSON.parse(cursorAdapter.respond('pre-tool', { effect: 'deny', reason: 'no' }));
   assert.equal(deny.permission, 'deny');
@@ -209,6 +235,19 @@ test('operation fingerprints: stable per operation, distinct across operations',
   });
   assert.equal(operationFingerprint(a), operationFingerprint(b)); // same op, any agent/session
   assert.notEqual(operationFingerprint(a), operationFingerprint(c));
+  const write = cursorAdapter.toEvent('pre-tool', {
+    conversation_id: 'c1',
+    cwd: '/repo',
+    tool_name: 'Write',
+    tool_input: { file_path: '/repo/.cursor/hooks.json', content: 'x' },
+  });
+  const del = cursorAdapter.toEvent('pre-tool', {
+    conversation_id: 'c1',
+    cwd: '/repo',
+    tool_name: 'Delete',
+    tool_input: { path: '/repo/.cursor/hooks.json' },
+  });
+  assert.notEqual(operationFingerprint(write), operationFingerprint(del), 'Write approval must not unlock Delete');
 });
 
 test('apply_patch: malformed or empty patches are inert', () => {
@@ -220,4 +259,23 @@ test('apply_patch: malformed or empty patches are inert', () => {
     cwd: '/r',
     session_id: 's',
   }), null);
+});
+
+test('a file event with no path is denied, not skipped', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aos-empty-path-'));
+  process.env.AOS_HOME = dir;
+  const repo = path.join(dir, 'repo');
+  fs.mkdirSync(repo);
+  const { addProject } = await import('../../src/registry.js');
+  const { handleToolBefore } = await import('../../src/core/pipeline.js');
+  addProject({ id: 'empty-path', name: 'empty-path', repo });
+  const e = cursorAdapter.toEvent('pre-tool', {
+    conversation_id: 'c1',
+    cwd: repo,
+    tool_name: 'Write',
+    tool_input: {},
+  });
+  const d = handleToolBefore(e, cursorAdapter);
+  assert.equal(d.effect, 'deny');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

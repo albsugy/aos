@@ -192,25 +192,33 @@ export function handleToolBefore(event, adapter) {
   } else if (event.tool.kind === 'file') {
     const targets = absoluteTargets(event);
     const contents = event.operation.contents || [];
-    const repoRoot = repoRootFor(project, event.cwd);
-    // Multi-path writes (Codex apply_patch): the first non-allow verdict
-    // wins — one gated path gates the whole patch.
-    for (let i = 0; i < targets.length; i++) {
-      const abs = canonicalPath(targets[i]);
-      let v = evaluateFileWrite(policy, abs, contents[i] || '', {
-        home: canonicalPath(aosHome()),
-        repoRoot,
-      });
-      if (v.decision === 'allow') {
-        v =
-          planGateVerdict(project.id, abs, session) ||
-          (policy.scope_gate === false ? null : scopeGateVerdict(project.id, abs, session, repoRoot));
-        if (!v) continue; // no gate fired for this path
-      }
-      if (v.decision !== 'allow') {
-        verdict = v;
-        target = abs;
-        break;
+    if (!targets.length) {
+      verdict = {
+        decision: 'deny',
+        action: 'gated',
+        reason: 'file operation with no resolvable path — refused rather than skipping the gate',
+      };
+    } else {
+      const repoRoot = repoRootFor(project, event.cwd);
+      // Multi-path writes (Codex apply_patch): the first non-allow verdict
+      // wins — one gated path gates the whole patch.
+      for (let i = 0; i < targets.length; i++) {
+        const abs = canonicalPath(targets[i]);
+        let v = evaluateFileWrite(policy, abs, contents[i] || '', {
+          home: canonicalPath(aosHome()),
+          repoRoot,
+        });
+        if (v.decision === 'allow') {
+          v =
+            planGateVerdict(project.id, abs, session) ||
+            (policy.scope_gate === false ? null : scopeGateVerdict(project.id, abs, session, repoRoot));
+          if (!v) continue; // no gate fired for this path
+        }
+        if (v.decision !== 'allow') {
+          verdict = v;
+          target = abs;
+          break;
+        }
       }
     }
     if (!verdict) return ALLOW;
@@ -311,6 +319,8 @@ export function handleToolBefore(event, adapter) {
       reason: decision.reason,
       fingerprint: operationFingerprint(event),
       tool: event.tool.name,
+      command: event.tool.kind === 'shell' ? target : undefined,
+      paths: event.tool.kind === 'file' ? event.operation.paths : undefined,
     });
     const converted = deny(
       decision.rule,

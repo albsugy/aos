@@ -123,7 +123,7 @@ export function operationFingerprint(event) {
   const kind = event.tool?.kind;
   let identity;
   if (kind === 'shell') identity = { kind, command: event.operation.command };
-  else if (kind === 'file') identity = { kind, paths: event.operation.paths || [] };
+  else if (kind === 'file') identity = { kind, name: event.tool.name, paths: event.operation.paths || [] };
   else identity = { kind: kind || 'other' };
   return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }

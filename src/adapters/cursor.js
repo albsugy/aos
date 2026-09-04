@@ -20,7 +20,7 @@ import {
 // Session identity: every hook carries `conversation_id` in the common schema;
 // `session_id` only exists on sessionStart. Normalize to conversation_id.
 
-const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Delete']);
 
 function cursorPayload(p) {
   // conversation_id is the stable per-conversation id; session_id appears on
@@ -55,9 +55,10 @@ export const cursorAdapter = {
           event = shellEvent('cursor', base, name);
         } else if (FILE_TOOLS.has(name)) {
           const filePath = input.file_path || input.path || '';
-          if (!filePath) return null;
+          // Empty path still becomes a file event so the pipeline can fail
+          // closed — returning null here would skip every file gate.
           event = fileEvent('cursor', base, name, {
-            paths: [String(filePath)],
+            paths: filePath ? [String(filePath)] : [],
             contents: [String(input.content || input.new_string || '')],
           });
         } else if (hook === 'post-tool') {
