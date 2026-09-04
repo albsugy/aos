@@ -47,7 +47,9 @@ export async function runHook(name, { agent = 'claude' } = {}) {
             handleSessionEnd(event, adapter);
             decision = { effect: 'allow' };
           } else decision = handleStop(event);
-          out = adapter.respond(name, decision);
+          // A null decision means "nothing to say" (e.g. not an AOS project):
+          // stay silent rather than crash into hook-errors.log — old behavior.
+          out = decision ? adapter.respond(name, decision) : '';
         }
       }
     }

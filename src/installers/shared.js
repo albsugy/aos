@@ -18,8 +18,15 @@ export function launcherCommand(cmd, { agent = null } = {}) {
   if (launcher.startsWith(home + path.sep)) {
     launcher = '$HOME' + launcher.slice(home.length);
   }
+  // The path is embedded in a shell command inside agent configs; a quote or
+  // dollar in the install path must not become injection. Such paths are exotic
+  // (and were already broken for hooks before), but degrade safely: the PATH
+  // fallback in the same command line still resolves aos.
+  const safe = !/["`$\\\n]/.test(launcher);
+  const quoted = `"${launcher.replace(/"/g, '')}"`;
   const flag = agent ? ` --agent ${agent}` : '';
-  return `"${launcher}" hook ${cmd}${flag} 2>/dev/null || aos hook ${cmd}${flag} 2>/dev/null || true`;
+  const invoke = safe ? quoted : 'aos';
+  return `${invoke} hook ${cmd}${flag} 2>/dev/null || aos hook ${cmd}${flag} 2>/dev/null || true`;
 }
 
 export function copyDir(src, dest) {

@@ -380,10 +380,11 @@ export function handleToolAfter(event, adapter) {
     summary: adapter.summarize(event),
     session,
     provider: event.provider,
-    // Multi-path writes (apply_patch) record every target so touchedFiles
-    // reconstructs the change exactly; single-path events keep the summary.
+    // File writes record every target as an ABSOLUTE path (Codex patches
+    // arrive repo-relative) so touchedFiles reconstructs the change exactly;
+    // single-path events keep the summary, which is already absolute.
     ...(event.tool.kind === 'file' && (event.operation.paths?.length || 0) > 1
-      ? { paths: event.operation.paths.slice(0, 50) }
+      ? { paths: absoluteTargets(event).slice(0, 50) }
       : {}),
   });
 }
