@@ -77,6 +77,16 @@ $AOS hook pre-tool --agent codex < <(codex_in 'git push origin main') | grep -q 
   && pass "external approval: single-use (second retry denied)" || fail "approval was multi-use"
 # a DIFFERENT command is not unlocked by any approval (operation-bound by design)
 
+# ── console surfaces approvals and agents ────────────────────────────────
+PORT2=4577
+$AOS console --port $PORT2 >/dev/null 2>&1 &
+CONSOLE_PID=$!
+sleep 1
+PROJ2=$(curl -s "http://127.0.0.1:$PORT2/api/project?project=demo")
+case "$PROJ2" in *'"dec_'*) pass "console: pending approval listed with grant id" ;; *) kill $CONSOLE_PID; fail "pending approval not surfaced";; esac
+case "$PROJ2" in *'"codex"'*'"full"'*) pass "console: agent enforcement levels listed" ;; *) kill $CONSOLE_PID; fail "agents not listed";; esac
+kill $CONSOLE_PID 2>/dev/null || true
+
 # ── audit carries provider evidence ──────────────────────────────────────
 grep -q '"provider":"codex"' "$AOS_HOME/projects/demo/audit.jsonl" && pass "audit: provider recorded" || fail "provider missing from audit"
 

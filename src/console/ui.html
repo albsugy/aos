@@ -714,6 +714,42 @@ function renderProject(r) {
   }
   html += `</div></section>`;
 
+  // Agents: which coding agents this project is wired for, honestly labeled.
+  const AGENT_TIP = {
+    claude: 'Native hooks: gates, audit, context injection, native ask prompts',
+    codex: 'Hooks: gates, audit, context. No native ask — approvals via aos approve',
+    cursor: 'Hooks: gates, audit, context. No native ask — approvals via aos approve',
+    gemini: 'Context file only — no tool-call enforcement (workflow compatibility)',
+  };
+  html += `<section><h2 title="Every coding agent wired into this project — same policy, same memory, same audit">Agents</h2><div class="card">`;
+  if (!d) html += `<div class="skel">Loading…</div>`;
+  else if (!(d.agents || []).length) {
+    html += `<div class="empty">Claude only (the historical default). Wire more agents with <code>aos init --agent codex|cursor|all</code>.</div>`;
+  } else {
+    html += `<div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px">` + (d.agents || []).map(a =>
+      `<span class="tag ${a.wired === true ? 'pass' : a.wired === 'context-only' ? 'pending' : 'blocked'}" title="${esc(AGENT_TIP[a.id] || a.level_label)}"><i></i>${esc(a.label)} · ${a.wired === true ? 'enforced' : a.wired === 'context-only' ? 'context only' : 'not wired'}</span>`
+    ).join(' ') + `</div>`;
+    const workflow = (d.agents || []).filter(a => a.level === 'workflow');
+    if (workflow.length) {
+      html += `<div class="kv"><span class="k" title="Workflow compatibility is context + CI gates, NOT tool-call enforcement">workflow-only agents</span><span class="v">${workflow.map(a => esc(a.label)).join(', ')} — context and Git/CI gates only, never described as enforced</span></div>`;
+    }
+  }
+  // Pending external approvals — the human decision queue for deny-capable agents.
+  const approvals = d && (d.approvals || []);
+  if (d && approvals.length) {
+    html += `</div></section><section><h2 title="Gated operations from agents without native ask prompts, waiting on you">Pending approvals</h2><div class="card">`;
+    for (const a of approvals) {
+      html += `<div class="qrow" style="cursor:default">
+        <span class="tag ask"><i></i>${esc(a.action)}</span>
+        <span class="proj" title="${esc(a.reason || '')}">${esc(String(a.reason || '').slice(0, 110))}</span>
+        <span class="proj">${esc(a.provider || '')}</span>
+        <span class="age">${rel(a.created)}</span>
+      </div>` + cmdRow(`Grant ${a.id}`, `aos approve ${a.id}`,
+        'Run this in your own terminal (never through the agent). Single-use: the agent may then retry the exact operation once.');
+    }
+  }
+  html += `</div></section>`;
+
   // memory + policy
   html += `<div class="cols"><section><h2 title="What every agent session in this project loads">Project memory</h2><div class="card">`;
   if (!d) html += `<div class="skel">Loading…</div>`;
@@ -771,7 +807,7 @@ function stageStrip(d) {
   const st = [
     ['Intake', !!d.ticket, false],
     ['Plan', !!d.plan, false],
-    ['Implement', (d.audit || []).some(a => a.event === 'tool' && /^(Bash|Write|Edit|MultiEdit|NotebookEdit)$/.test(a.tool || '')) || finished, false],
+    ['Implement', (d.audit || []).some(a => a.event === 'tool' && (a.tool_kind === 'shell' || a.tool_kind === 'file' || /^(Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch|Shell)$/.test(a.tool || ''))) || finished, false],
     ['Verify', m.verification === 'pass', m.verification === 'fail'],
     ['Package', !!d.outcome || finished, false],
   ];
@@ -889,7 +925,7 @@ function runFacts(d) {
       m.bash_writes ? `<span style="color:var(--ink-3)" title="Shell commands that wrote something — their targets are not parsed, because guessing would produce a list that looks authoritative and is wrong">+ ${m.bash_writes} shell write${m.bash_writes === 1 ? '' : 's'}</span>` : ''}</span></div>`;
   }
   if (m.session) {
-    rows += `<div class="kv"><span class="k" title="The Claude Code session this run was bound to">session</span><span class="v mono">${esc(m.session)}</span></div>`;
+    rows += `<div class="kv"><span class="k" title="The agent session this run was bound to">session</span><span class="v mono">${esc(m.session)}</span></div>`;
   }
   if (!rows) return '';
   return `<section><h2 title="Recorded in the run's meta.json">Record</h2><div class="card">${rows}</div></section>`;
@@ -1062,8 +1098,9 @@ function renderTabZone(d) {
         const label = a.event === 'tool'
           ? esc(a.tool)
           : esc(a.event) + (a.decision ? ` → ${esc(a.decision)}` : '') + (a.verdict ? ` → ${esc(a.verdict)}` : '') + (a.state ? ` → ${esc(a.state)}` : '');
+        const provider = a.provider && a.provider !== 'claude' ? `<span class="tag pending" style="margin-left:7px" title="Coding agent that produced this entry"><i></i>${esc(a.provider)}</span>` : '';
         const detail = a.summary || a.command || '';
-        html += `<div class="tl-item ${cls}"><span class="t">${esc((a.ts || '').slice(11, 19))}</span>${label}${detail ? `<span class="s" title="${esc(detail)}">${esc(detail)}</span>` : ''}</div>`;
+        html += `<div class="tl-item ${cls}"><span class="t">${esc((a.ts || '').slice(11, 19))}</span>${label}${provider}${detail ? `<span class="s" title="${esc(detail)}">${esc(detail)}</span>` : ''}</div>`;
       }
       html += `</div>`;
     }

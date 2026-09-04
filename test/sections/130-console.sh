@@ -68,6 +68,10 @@ case "$DETAIL" in *'never fires on the shell path'*) pass "console API: review f
 case "$STATE" in *'"leverage_sample"'*) pass "console API: leverage sample exposed" ;; *) kill $CONSOLE_PID; fail "leverage_sample missing";; esac
 PROJ=$(curl -s "http://127.0.0.1:$PORT/api/project?project=demo")
 case "$PROJ" in *'"policy"'*) pass "console API: project detail";; *) kill $CONSOLE_PID; fail "console project detail";; esac
+# Agents + pending approvals: the multi-agent surfaces (020 registered codex,
+# so the demo project carries both by the time the console is asked).
+case "$PROJ" in *'"agents"'*'"level_label"'*) pass "console API: per-agent enforcement surfaced" ;; *) kill $CONSOLE_PID; fail "agents missing from project detail";; esac
+case "$PROJ" in *'"approvals":[]'*) pass "console API: approvals list served (empty here)" ;; *) kill $CONSOLE_PID; fail "approvals missing from project detail";; esac
 case "$PROJ" in *'"adversarial_review_mode"'*) pass "console API: review mode is the tri-state, not a boolean" ;; *) kill $CONSOLE_PID; fail "adversarial_review_mode missing";; esac
 case "$PROJ" in *'"scope_gate"'*) pass "console API: the 0.11 guards are in the policy digest" ;; *) kill $CONSOLE_PID; fail "scope_gate missing from policy digest";; esac
 case "$PROJ" in *'"protect_worktree"'*) : ;; *) kill $CONSOLE_PID; fail "protect_worktree missing from policy digest";; esac
@@ -102,5 +106,5 @@ TRAV=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/run?pr
 # DNS-rebinding protection: non-local Host header must be refused
 REBIND=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example.com" "http://127.0.0.1:$PORT/api/state")
 [ "$REBIND" = "403" ] && pass "console security: foreign Host → 403" || { kill $CONSOLE_PID; fail "rebinding not blocked ($REBIND)"; }
-kill $CONSOLE_PID 2>/dev/null
+kill $CONSOLE_PID 2>/dev/null || true
 

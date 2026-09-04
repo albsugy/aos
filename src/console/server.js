@@ -11,6 +11,8 @@ import { readSessions } from '../sessions.js';
 import { getProject } from '../registry.js';
 import { loadPolicy } from '../policy.js';
 import { costOf } from '../pricing.js';
+import { AGENT_CATALOG, enforcementLevel } from '../agents.js';
+import { listPendingDecisions } from '../decisions.js';
 
 const UI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui.html');
 
@@ -36,6 +38,32 @@ function localHost(req) {
   return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1';
 }
 
+// Which agents this project is wired for, with wiring state — the console's
+// job is to make 'which agents are actually enforced here' impossible to miss.
+function agentsOf(project) {
+  return (project.agents || []).map((id) => {
+    const entry = AGENT_CATALOG[id];
+    if (!entry) return null;
+    const level = enforcementLevel(id);
+    let wired = entry.installer ? false : 'context-only';
+    if (entry.installer) {
+      const repo = (project.repos || []).find(Boolean);
+      try {
+        wired = entry.installer.verify(repo).ok;
+      } catch {
+        wired = false;
+      }
+    }
+    return {
+      id,
+      label: entry.label,
+      level: level.level,
+      level_label: level.label,
+      wired,
+    };
+  }).filter(Boolean);
+}
+
 // Everything the project screen needs beyond /api/state: memory files,
 // a policy digest, and the recent session series for the token sparkline.
 function projectDetail(projectId) {
@@ -56,6 +84,16 @@ function projectDetail(projectId) {
   const learnings = readIfExists(path.join(dir, 'learnings.md'));
   return {
     summary: projectSummary(p),
+    agents: agentsOf(p),
+    // Pending external approvals (Codex/Cursor ask flow) — the console is
+    // read-only, but showing the exact grant command is the useful half.
+    approvals: listPendingDecisions(projectId).map((d) => ({
+      id: d.id,
+      action: d.action,
+      reason: d.reason,
+      provider: d.provider,
+      created: d.created,
+    })),
     pack: readIfExists(path.join(dir, 'context', 'pack.md')),
     decisions: decisions ? tailLines(decisions, 120) : null,
     learnings: learnings ? tailLines(learnings, 80) : null,

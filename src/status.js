@@ -33,6 +33,8 @@ export function projectSummary(p) {
     id: p.id,
     name: p.name,
     repos: p.repos,
+    // Which coding agents this project is wired for (see agents.js / doctor).
+    agents: p.agents || [],
     runs,
     counts: byState,
     activeRun: getActiveRun(p.id),
