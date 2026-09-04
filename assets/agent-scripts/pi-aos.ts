@@ -6,52 +6,79 @@
 // AOS core and nothing here can drift from the other agents' gates.
 //
 // Verified against pi's extension API:
-//   tool_call        → { block: true, reason } is a real deny
+//   tool_call          → { block: true, reason } is a real deny
 //   before_agent_start → can inject a message (used once per session for the
-//                      AOS context pack)
-//   session_shutdown → best-effort session-end accounting
+//                        AOS context pack)
+//   session_shutdown   → best-effort session-end accounting
 //
 // Fail-open by design (same contract as every AOS hook): a broken or missing
-// aos never blocks the session — it logs to stderr and lets the call through.
+// aos never blocks the session — it lets the call through.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 
-// Baked at install time; the PATH fallback keeps the extension working after
-// reinstalls to a new location.
-const AOS_BIN = "__AOS_BIN__";
+// Baked at install time as a JSON argv array — [launcher] when the launcher
+// is directly executable, [node, launcher] otherwise — so any install path
+// (spaces, quotes) survives without shell quoting. Falls back to `aos` on
+// PATH only when the baked command cannot be spawned at all.
+const AOS_CMD = __AOS_CMD__;
 
-function trySpawn(bin: string, args: string[], payload: object, timeoutMs: number): Promise<any | null> {
+// The aos-side content scan reads at most 100k chars of a write; shipping
+// more over stdin is pure latency, so cap the payload at the same budget.
+const CONTENT_CAP = 100_000;
+
+function capContent(s: unknown): string {
+  const t = typeof s === "string" ? s : "";
+  return t.length > CONTENT_CAP ? t.slice(0, CONTENT_CAP) : t;
+}
+
+type SpawnResult = { spawned: boolean; response: any | null };
+
+function trySpawn(cmd: string[], args: string[], payload: object, timeoutMs: number): Promise<SpawnResult> {
   return new Promise((resolve) => {
     let child: any;
     try {
-      child = spawn(bin, args, { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(cmd[0], [...cmd.slice(1), ...args], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
-      resolve(null);
+      resolve({ spawned: false, response: null });
       return;
     }
     let out = "";
+    let settled = false;
+    const done = (r: SpawnResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
     const timer = setTimeout(() => {
       try { child.kill(); } catch {}
-      resolve(null);
+      done({ spawned: true, response: null });
     }, timeoutMs);
-    child.on("error", () => { clearTimeout(timer); resolve(null); });
+    // spawn errors (ENOENT/EACCES) mean the baked command is unusable
+    child.on("error", () => done({ spawned: false, response: null }));
     child.stdout?.on("data", (d: any) => (out += d));
     child.on("close", () => {
-      clearTimeout(timer);
-      try { resolve(out.trim() ? JSON.parse(out) : null); } catch { resolve(null); }
+      // empty stdout is a legitimate ALLOW — not a failure
+      let response: any = null;
+      if (out.trim()) {
+        try { response = JSON.parse(out); } catch { response = null; }
+      }
+      done({ spawned: true, response });
     });
+    child.stdin?.on("error", () => {}); // EPIPE if aos died early — close() still fires
     child.stdin?.end(JSON.stringify(payload));
   });
 }
 
 async function runAos(args: string[], payload: object, timeoutMs = 10000): Promise<any | null> {
-  // Baked launcher first, PATH fallback second; never throws — fail-open.
-  if (AOS_BIN !== "__AOS_BIN__") {
-    const r = await trySpawn(AOS_BIN, args, payload, timeoutMs);
-    if (r !== null) return r;
-  }
-  return trySpawn("aos", args, payload, timeoutMs);
+  // Baked command first; PATH fallback only when the bake could not spawn.
+  // A successful run — including an empty (allow) response — never retries,
+  // so each gate verdict is produced exactly once.
+  const r = await trySpawn(AOS_CMD, args, payload, timeoutMs);
+  if (r.spawned) return r.response;
+  const fallback = await trySpawn(["aos"], args, payload, timeoutMs);
+  return fallback.response;
 }
 
 function decisionFrom(response: any): { block: boolean; reason: string } {
@@ -59,7 +86,10 @@ function decisionFrom(response: any): { block: boolean; reason: string } {
   if (verdict === "deny" || verdict === "ask") {
     // "ask" never reaches an unmodified aos install for pi (it converts to an
     // external approval first); treat it as a block if it ever does.
-    return { block: true, reason: String(response?.hookSpecificOutput?.permissionDecisionReason || "blocked by AOS policy") };
+    return {
+      block: true,
+      reason: String(response?.hookSpecificOutput?.permissionDecisionReason || "blocked by AOS policy"),
+    };
   }
   return { block: false, reason: "" };
 }
@@ -74,6 +104,15 @@ export default function (pi: ExtensionAPI) {
     return "pi-session";
   };
 
+  // Args for the audit trail are captured at tool_call time (tool_execution_end
+  // carries only toolName/result/isError, not the input). Bounded: a runaway
+  // session must not grow this forever.
+  const pendingCalls = new Map<string, { name: string; input: any }>();
+  const remember = (id: string, name: string, input: any) => {
+    if (pendingCalls.size > 256) pendingCalls.delete(pendingCalls.keys().next().value);
+    pendingCalls.set(id, { name, input });
+  };
+
   // Gates + audit for shell and file tools.
   pi.on("tool_call", async (event: any, ctx: any) => {
     const name = String(event?.toolName || "");
@@ -84,7 +123,7 @@ export default function (pi: ExtensionAPI) {
       toolInput = { command: event.input?.command ?? "" };
     } else if (name === "write") {
       toolName = "Write";
-      toolInput = { file_path: event.input?.path, content: event.input?.content ?? "" };
+      toolInput = { file_path: event.input?.path, content: capContent(event.input?.content) };
     } else if (name === "edit") {
       toolName = "Edit";
       // pi edits carry an array of edits; join the new strings for the
@@ -92,11 +131,14 @@ export default function (pi: ExtensionAPI) {
       const edits = Array.isArray(event.input?.edits) ? event.input.edits : [];
       toolInput = {
         file_path: event.input?.path,
-        content: edits.map((e: any) => e?.new_string ?? e?.newText ?? "").join("\n"),
+        content: capContent(edits.map((e: any) => e?.new_string ?? e?.newText ?? "").join("\n")),
       };
     } else {
-      return; // not a gated surface
+      // not a gated surface — still remember the args for the audit trail
+      remember(String(event?.toolCallId || ""), name, event.input || {});
+      return;
     }
+    remember(String(event?.toolCallId || ""), name, event.input || {});
     const response = await runAos(["hook", "pre-tool", "--agent", "pi"], {
       session_id: sessionId(ctx),
       cwd: cwd(),
@@ -109,18 +151,30 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Audit trail for every tool call (post-hoc, never blocks).
+  // Audit trail for every tool call (post-hoc, never blocks). Args come from
+  // the tool_call capture (tool_execution_end has none); post-tool needs only
+  // the path/command — never ship file content on this path.
   pi.on("tool_execution_end", async (event: any, ctx: any) => {
-    const name = String(event?.toolName || "");
+    const id = String(event?.toolCallId || "");
+    const captured = pendingCalls.get(id);
+    pendingCalls.delete(id);
+    const name = String(event?.toolName || captured?.name || "");
+    const input = captured?.input || {};
+    let toolName = name;
     let toolInput: any = {};
-    if (name === "bash") toolInput = { command: event.input?.command ?? "" };
-    else if (name === "write") toolInput = { file_path: event.input?.path, content: event.input?.content ?? "" };
-    else if (name === "edit") toolInput = { file_path: event.input?.path };
-    else toolInput = { keys: Object.keys(event.input || {}).slice(0, 3) };
+    if (name === "bash") {
+      toolName = "Bash";
+      toolInput = { command: String(input.command ?? "").slice(0, 300) };
+    } else if (name === "write" || name === "edit") {
+      toolName = name === "write" ? "Write" : "Edit";
+      toolInput = { file_path: input.path };
+    } else {
+      toolInput = { keys: Object.keys(input || {}).slice(0, 3) };
+    }
     await runAos(["hook", "post-tool", "--agent", "pi"], {
       session_id: sessionId(ctx),
       cwd: cwd(),
-      tool_name: name === "bash" ? "Bash" : name === "write" ? "Write" : name === "edit" ? "Edit" : name,
+      tool_name: toolName,
       tool_input: toolInput,
     });
   });

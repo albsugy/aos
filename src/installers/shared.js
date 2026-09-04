@@ -50,6 +50,29 @@ export function installSkillsInto(repoRoot, skillsDir) {
   return skillsDest;
 }
 
+// Bake an agent script template (`.pi/extensions`, `.opencode/plugins`):
+// replaces `__AOS_CMD__` with a JSON argv array for invoking this install.
+// [launcher] when the launcher is directly executable (shebang + exec bit —
+// the normal release and dev-checkout case), [node, launcher] otherwise —
+// so spaces or quotes in the install path need no shell quoting, and a
+// script-only checkout still runs. The scripts embed a PATH fallback.
+export function bakeAgentScript(scriptName, dest) {
+  const launcher = path.resolve(process.argv[1]);
+  let cmd;
+  try {
+    fs.accessSync(launcher, fs.constants.X_OK);
+    cmd = [launcher];
+  } catch {
+    cmd = [process.execPath, launcher];
+  }
+  const body = fs
+    .readFileSync(path.join(ASSETS, 'agent-scripts', scriptName), 'utf8')
+    .replaceAll('__AOS_CMD__', JSON.stringify(cmd));
+  ensureDir(path.dirname(dest));
+  fs.writeFileSync(dest, body);
+  return dest;
+}
+
 // Which of the agent's expected hook events are wired in a parsed
 // `{hooks: {Event: [...]}}` config? Works for both group-shaped entries
 // (Claude/Codex: {matcher?, hooks: [{command}]}) and flat entries

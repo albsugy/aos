@@ -23,7 +23,7 @@ const FILE_TOOLS = new Set(['Write', 'Edit']);
 export const opencodeAdapter = {
   id: 'opencode',
   label: 'opencode',
-  capabilities: { context: true, audit: true, deny: true, ask: false, writes: true, tokens: false },
+  capabilities: { context: 'file', audit: true, deny: true, ask: false, writes: true, tokens: false },
 
   hookCommands: {
     'tool.execute.before': 'pre-tool',

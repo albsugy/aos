@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { ASSETS } from '../paths.js';
-import { installSkillsInto } from './shared.js';
+import fs from 'node:fs';
+import { installSkillsInto, bakeAgentScript } from './shared.js';
 
 // pi — extension at `.pi/extensions/pi-aos.ts` (project-local, loads after the
 // project is trusted in pi; deliberately not global so the gate is per-repo
@@ -22,11 +21,7 @@ export const piInstaller = {
   },
 
   wireHooks(repoRoot) {
-    const body = fs
-      .readFileSync(path.join(ASSETS, 'agent-scripts', EXTENSION_NAME), 'utf8')
-      .replaceAll('__AOS_BIN__', JSON.stringify(path.resolve(process.argv[1])));
-    fs.mkdirSync(path.dirname(this.configPath(repoRoot)), { recursive: true });
-    fs.writeFileSync(this.configPath(repoRoot), body);
+    bakeAgentScript(EXTENSION_NAME, this.configPath(repoRoot));
   },
 
   installSkills(repoRoot) {
@@ -41,7 +36,7 @@ export const piInstaller = {
     } catch {
       return { ok: false, detail: `.pi/extensions/${EXTENSION_NAME} missing — re-run aos init --agent pi` };
     }
-    if (body.includes('__AOS_BIN__')) {
+    if (body.includes('__AOS_CMD__')) {
       return { ok: false, detail: 'extension is an unbaked template — re-run aos init --agent pi' };
     }
     return { ok: true, detail: 'extension installed (loads once pi trusts the project)' };
