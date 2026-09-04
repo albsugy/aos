@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added — pi, opencode, and Devin CLI support (0.14 line)
+
+Three more agents, verified against each one's real extensibility surface
+(pi's extension API, opencode's plugin API, Devin's docs):
+
+- **pi — full enforcement.** AOS ships a project extension
+  (`.pi/extensions/pi-aos.ts`, launcher path baked at install) that forwards
+  pi's `tool_call` events to the AOS core and returns `{block, reason}` on a
+  deny — a real block. Context is injected natively once per session via
+  `before_agent_start`; every tool call is audited via `tool_execution_end`.
+  Skills install to the cross-agent `.agents/skills/` pi already reads. No
+  ask concept at pi's interception point → external approvals.
+- **opencode — full enforcement.** A project plugin
+  (`.opencode/plugins/aos.ts`) hooks `tool.execute.before` and blocks by
+  throwing (opencode's documented mechanism, the reason fed to the agent);
+  `tool.execute.after` audits. Context via the generated `AGENTS.md`; skills
+  via `.agents/skills/`. No ask → external approvals.
+- **Devin CLI — workflow compatibility, honestly.** Devin has no local hook
+  surface; it gets the generated `AGENTS.md` and skills in `.agents/skills/`
+  (its documented location) and is never described as enforced.
+- `aos init --agent pi|opencode|devin` (also in comma lists, `auto` detection,
+  and `all`); `aos doctor --capabilities` prints the seven-agent matrix.
+- Self-protection extended: `.pi/extensions/` and `.opencode/plugins/` join
+  the protected paths — an agent rewriting its own gate script is gated like
+  every other disarm attempt (file writes and shell writes).
+- Adapters for pi and opencode keep the same contract as the rest: thin
+  translators over the normalized event protocol; the same policy fixtures
+  evaluate identically through all five enforcement adapters (unit-tested).
+
 ### Added — multi-agent support (0.13 line)
 
 One policy, one project memory, one evidence trail — enforced through each coding

@@ -707,9 +707,11 @@ const PROTECTED_AOS_BASENAMES = new Set([
 // Hook wiring files across agents: editing these disarms the gates exactly
 // like editing .claude/settings.json. Any agent config AOS installs hooks
 // into belongs here.
-const PROTECTED_HOOK_CONFIGS = /[\\/]\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json$/;
+const PROTECTED_HOOK_CONFIGS =
+  /[\\/]\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json$|[\\/]\.(pi[\\/]extensions|opencode[\\/]plugins)\/[A-Za-z0-9._-]+\.(ts|js)$/;
 // The same configs as they appear inside a shell command (either slash form).
-const PROTECTED_HOOK_CONFIG_BASH = /\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json/;
+const PROTECTED_HOOK_CONFIG_BASH =
+  /\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json|\.(pi[\\/]extensions|opencode[\\/]plugins)\//;
 // The external-approval ledger: forging an approval file unlocks gated
 // operations without a human, so it is as sensitive as signoff.json.
 const PROTECTED_DECISIONS_DIR = /[\\/]decisions[\\/](pending|approved)[\\/]/;

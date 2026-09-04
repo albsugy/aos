@@ -23,7 +23,7 @@ network calls. No account.
 ```bash
 npm i -g @albsugy/aos
 cd your-repo && aos init --hooks-only          # Claude Code
-aos init --agent all                           # Claude Code + Codex + Cursor + Gemini context
+aos init --agent all                           # Claude Code + Codex + Cursor + pi + opencode (+ context for Devin/Gemini)
 aos init --agent auto                          # whichever agents are installed here
 ```
 
@@ -134,9 +134,13 @@ from the same code that enforces it:
 | Claude Code | ✓ | ✓ | native prompt | ✓ | full enforcement |
 | Codex | ✓ | ✓ | via `aos approve` | ✓ (`apply_patch`) | full enforcement — trust hooks once (`/hooks` in Codex) |
 | Cursor | ✓ | ✓ | via `aos approve` | ✓ | full enforcement |
+| pi | ✓ | ✓ | via `aos approve` | ✓ | full enforcement — gate extension at `.pi/extensions/` (loads once pi trusts the project) |
+| opencode | ✓ | ✓ | via `aos approve` | ✓ | full enforcement — gate plugin at `.opencode/plugins/` (auto-loads) |
+| Devin CLI | — | — | — | — | workflow compatibility (AGENTS.md + skills in `.agents/skills/`) |
 | Gemini CLI | — | — | — | — | workflow compatibility (context file + Git/CI gates) |
 
-Neither Codex nor Cursor can surface a native *ask* prompt from a hook today.
+Neither Codex, Cursor, pi, nor opencode can surface a native *ask* prompt from their
+interception surfaces today.
 A gated operation is **denied pending a human approval**: the denial carries
 `aos approve <id>`, a human grants it outside the agent, and the same operation
 is allowed through exactly once. Never silently allowed, never permanently
@@ -148,8 +152,11 @@ the same objects. Each audit line records which agent produced it (`provider`).
 
 ## How it works
 
-The same five events are wired into each agent's config
-(`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`):
+The same events are wired into each agent's control surface — command hooks
+(`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), a pi
+extension (`.pi/extensions/pi-aos.ts`), or an opencode plugin
+(`.opencode/plugins/aos.ts`). Either way the enforcement is the same AOS core:
+adapters translate, the policy engine decides.
 
 | Hook | Effect |
 |---|---|
@@ -243,8 +250,10 @@ hard character budget. `aos find` is a substring search. No embeddings.
 
 ## Skills
 
-Installed into each wired agent's skills directory. Instructions to the model
-— the hooks are what hold when the model deviates.
+Installed into each wired agent's skills directory (`.claude/skills/`,
+`.cursor/skills/`, and the cross-agent `.agents/skills/` that Codex, pi,
+opencode, and Devin all read natively). Instructions to the model — the hooks
+are what hold when the model deviates.
 
 | Skill | Role |
 |---|---|

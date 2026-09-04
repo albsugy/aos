@@ -1,6 +1,8 @@
 import { claudeAdapter } from './claude.js';
 import { codexAdapter } from './codex.js';
 import { cursorAdapter } from './cursor.js';
+import { piAdapter } from './pi.js';
+import { opencodeAdapter } from './opencode.js';
 
 // The adapter registry. Adding an agent = writing one adapter here and one
 // entry in the agents catalog (src/agents.js). Nothing else in AOS learns
@@ -10,6 +12,8 @@ export const ADAPTERS = {
   claude: claudeAdapter,
   codex: codexAdapter,
   cursor: cursorAdapter,
+  pi: piAdapter,
+  opencode: opencodeAdapter,
 };
 
 export function getAdapter(id) {

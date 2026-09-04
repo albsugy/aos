@@ -43,7 +43,7 @@ export function renderAgentContext(projectId, projectName) {
 export function contextFilesFor(agents) {
   const files = new Set();
   for (const id of agents || []) {
-    if (id === 'codex' || id === 'cursor') files.add('AGENTS.md');
+    if (id === 'codex' || id === 'cursor' || id === 'opencode' || id === 'devin') files.add('AGENTS.md');
     if (id === 'gemini') files.add('GEMINI.md');
   }
   return [...files];

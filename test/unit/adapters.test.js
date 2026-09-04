@@ -6,6 +6,8 @@ import path from 'node:path';
 import { claudeAdapter } from '../../src/adapters/claude.js';
 import { codexAdapter } from '../../src/adapters/codex.js';
 import { cursorAdapter } from '../../src/adapters/cursor.js';
+import { piAdapter } from '../../src/adapters/pi.js';
+import { opencodeAdapter } from '../../src/adapters/opencode.js';
 import { parseApplyPatch, codexFileOperation, operationFingerprint } from '../../src/core/events.js';
 
 // ── adapters translate payloads from the OFFICIAL hook schemas ────────────
@@ -211,6 +213,74 @@ test('policy fixtures agree across every adapter shell event', async () => {
       verdicts.add(v.decision);
     }
     assert.deepEqual([...verdicts], [fx.expect], `${fx.cmd} must evaluate identically everywhere`);
+  }
+});
+
+// pi and opencode enforcement rides on scripts AOS ships (extension/plugin),
+// so the payload shape is ours — claude-like, translated by the adapter.
+
+test('pi: bash/write/edit payloads normalize; deny blocks', () => {
+  const shell = piAdapter.toEvent('pre-tool', {
+    session_id: 'sess-file.jsonl',
+    cwd: '/repo',
+    tool_name: 'Bash',
+    tool_input: { command: 'git push --force origin main' },
+  });
+  assert.equal(shell.provider, 'pi');
+  assert.equal(shell.tool.kind, 'shell');
+  const file = piAdapter.toEvent('pre-tool', {
+    session_id: 's',
+    cwd: '/repo',
+    tool_name: 'Edit',
+    tool_input: { file_path: '/repo/a.js', content: 'new' },
+  });
+  assert.equal(file.tool.kind, 'file');
+  assert.deepEqual(file.operation.paths, ['/repo/a.js']);
+  // other tools: null pre-tool (not gated), audited post-tool
+  assert.equal(piAdapter.toEvent('pre-tool', { cwd: '/r', tool_name: 'read', tool_input: { path: '/r/x' } }), null);
+  const after = piAdapter.toEvent('post-tool', { cwd: '/r', tool_name: 'read', tool_input: { path: '/r/x' } });
+  assert.equal(after.tool.kind, 'other');
+  const deny = JSON.parse(piAdapter.respond('pre-tool', { effect: 'deny', reason: 'no' }));
+  assert.equal(deny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(piAdapter.respond('pre-tool', { effect: 'allow' }), '');
+  const ctx = JSON.parse(piAdapter.respond('session-start', { context: 'pack' }));
+  assert.equal(ctx.hookSpecificOutput.additionalContext, 'pack');
+});
+
+test('opencode: bash/write/edit payloads normalize; deny is the only block shape', () => {
+  const shell = opencodeAdapter.toEvent('pre-tool', {
+    session_id: 'ses_123',
+    cwd: '/repo',
+    tool_name: 'Bash',
+    tool_input: { command: 'rm -rf /' },
+  });
+  assert.equal(shell.provider, 'opencode');
+  assert.equal(shell.tool.kind, 'shell');
+  const file = opencodeAdapter.toEvent('pre-tool', {
+    session_id: 'ses_123',
+    cwd: '/repo',
+    tool_name: 'Write',
+    tool_input: { file_path: '/repo/a.js', content: 'x' },
+  });
+  assert.equal(file.tool.kind, 'file');
+  assert.equal(opencodeAdapter.respond('pre-tool', { effect: 'allow' }), '');
+  const deny = JSON.parse(opencodeAdapter.respond('pre-tool', { effect: 'deny', reason: 'no' }));
+  assert.equal(deny.hookSpecificOutput.permissionDecision, 'deny'); // plugin throws the reason
+});
+
+test('policy fixtures agree across pi and opencode shell events too', async () => {
+  const { evaluateCommand, DEFAULT_POLICY } = await import('../../src/policy.js');
+  for (const fx of FIXTURES) {
+    for (const a of [piAdapter, opencodeAdapter]) {
+      const e = a.toEvent('pre-tool', {
+        session_id: 's',
+        cwd: '/repo',
+        tool_name: 'Bash',
+        tool_input: { command: fx.cmd },
+      });
+      const v = evaluateCommand(DEFAULT_POLICY, e.operation.command, { cwd: '/repo' });
+      assert.equal(v.decision, fx.expect, `${a.id}: ${fx.cmd}`);
+    }
   }
 });
 

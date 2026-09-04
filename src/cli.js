@@ -182,7 +182,7 @@ const HELP = `aos — Agent Operations Stack
 
 Usage:
   aos init [--name <name>] [--hooks-only] [--agent <a>]   Register this repo for coding agents
-         --agent claude|codex|cursor|gemini (comma list), auto (detect installed), or all (default: claude)
+         --agent claude|codex|cursor|pi|opencode|devin|gemini (comma list), auto (detect installed), or all (default: claude)
          (--hooks-only: context + gates + audit, no pipeline skills)
   aos status                        All projects: runs, states, leverage ratio, tokens
   aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
@@ -209,7 +209,7 @@ Usage:
   aos remove <id> [--purge] [--force]   Unregister a project (console stops listing it); --purge deletes its data — sign-off required
   aos doctor [--capabilities]       Diagnose the install, registry, and current repo's wiring
          --capabilities prints the per-agent support matrix (enforcement levels, honestly)
-  aos hook <name> [--agent <id>]     (internal) agent hook entry points (default: claude)
+  aos hook <name> [--agent <id>]     (internal) agent hook entry points (claude|codex|cursor|pi|opencode; default claude)
   aos version                       Print version
   aos update                        Update in place (release installs: verified reinstall; dev checkouts: git pull)
   aos help                          This help
