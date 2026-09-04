@@ -496,10 +496,19 @@ there is no prompt to approve.
 
 A broken regex or glob is skipped, never taking the whole gate down.
 
-## Hooks
+## Hooks (per agent)
 
-`aos init` wires five hooks into the repo's `.claude/settings.json`. They run
+`aos init` wires five hooks into each selected agent's config. They run
 automatically — no skill invocation needed.
+
+| Agent | Config | Skills | Notes |
+|---|---|---|---|
+| Claude Code | `.claude/settings.json` | `.claude/skills/` | the reference surface: native ask prompts |
+| Codex | `.codex/hooks.json` | `.agents/skills/` | hooks must be trusted once (run `/hooks` in Codex); `ask` is unsupported by Codex's protocol → external approvals |
+| Cursor | `.cursor/hooks.json` | `.cursor/skills/` | `preToolUse` cannot enforce `ask` → external approvals |
+| Gemini CLI | — (context file only) | — | workflow compatibility: `GEMINI.md` + Git/CI gates, never described as enforced |
+
+The same five events are wired everywhere the agent's protocol has them:
 
 | Hook | Effect |
 |---|---|
@@ -511,9 +520,33 @@ automatically — no skill invocation needed.
 
 **Design guarantees.** The hook command calls the stable `aos` launcher with a
 `PATH` fallback and a trailing `|| true`, so a missing or broken AOS can **never**
-break a Claude Code session. `aos init` is idempotent and migrates stale entries
-(e.g. hooks pinned to an old install path). Hooks are Claude Code-specific; the
-CLI and console work without them.
+break an agent session. `aos init` is idempotent and migrates stale entries
+(e.g. hooks pinned to an old install path). Adapters contain no policy logic —
+they translate between each agent's hook protocol and one normalized event
+protocol; the policy engine contains no agent tool names. `aos doctor
+--capabilities` prints what each agent's surface actually enforces.
+
+**External approvals (Codex, Cursor).** Neither protocol can surface a native
+*ask* from a pre-tool hook (both parse the field without enforcing it), so a
+gated operation is denied pending a human approval:
+
+1. The denial carries an exact command: `aos approve dec_…`.
+2. A human runs it outside the agent (terminal; in Claude Code sessions the
+   gate prompt on the command is the approval). It is human-only by policy —
+   agents that can only be denied are refused outright with a pointer to the
+   terminal, and no pending decision is created for the unlock command itself.
+3. The agent retries the same operation; it is allowed through **once**. The
+   approval is single-use, expires (30 min pending, 15 min granted), and is
+   bound to an operation fingerprint — the command text for shell calls, the
+   target paths for writes. A deny-tier verdict can never be unlocked.
+
+Where the unlocked command was a sign-off (closing a run, approving a plan),
+the run's record shows `via: external-approval` — the human act is preserved in
+the evidence trail, not laundered into an auto-approval.
+
+**Token accounting** is Claude-Code-only today (the one transcript format we can
+parse); other providers record sessions with honest zeros rather than guessed
+numbers, and `aos doctor --capabilities` says which is which.
 
 ## Skills
 
@@ -542,10 +575,13 @@ CLI and console work without them.
 ## CLI commands
 
 ```
-aos init [--name <name>] [--hooks-only]   Register this repo as a project (spec + hooks; skills unless --hooks-only)
+aos init [--name <name>] [--hooks-only] [--agent <a>]   Register this repo for coding agents
+                                  --agent claude|codex|cursor|gemini (comma list) | auto (detect) | all
 aos status                        All projects: runs, states, leverage ratio, tokens, dry-run warnings
 aos cost [--since 7d] [--by project|run|model|contract] [--all]   Estimated spend at API list prices
 aos context [--project <id>]      Print the project context that agents load
+aos context sync|check|diff       Regenerate / verify / diff per-agent context files (AGENTS.md, GEMINI.md)
+aos approve [<id> | --list]       Grant a pending external approval (human-only; the Codex/Cursor ask flow)
 aos run start --ticket <id|url> [--title <t>]   Start a run (branch auto-detected; a URL is kept as the ticket link)
 aos run approve                   Approve the active run's plan (when plan_gate: ask)
 aos run review [--run <id>]       Validate the run's adversarial review (what the finish gate checks)

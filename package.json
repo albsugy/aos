@@ -1,6 +1,6 @@
 {
   "name": "@albsugy/aos",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Agent Operations Stack — portable spec, guardrails, audit, verification, and console for operating AI coding agents",
   "type": "module",
   "bin": {
@@ -49,6 +49,8 @@
   "keywords": [
     "ai-agents",
     "claude-code",
+    "codex",
+    "cursor",
     "agent-ops",
     "guardrails",
     "audit"

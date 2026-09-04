@@ -5,22 +5,28 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
 
-**Policy gates, an audit ledger, and project memory for Claude Code** — installed as hooks,
+**Governance and continuity for every coding agent you use** — one policy, one project
+memory, and one audit trail across Claude Code, Codex, and Cursor, installed as hooks
 so they work without anybody invoking anything. Everything is markdown, YAML, and JSONL
 under your home directory. Open source (MIT), no network calls, no account.
 
 **Spec Kit tells the agent what to build; AOS proves it followed the rules.**
 
 ```bash
-npm i -g @albsugy/aos && cd your-repo && aos init --hooks-only
+npm i -g @albsugy/aos && cd your-repo && aos init --hooks-only          # Claude Code (default)
+aos init --agent all                                                    # Claude Code + Codex + Cursor + Gemini context
+aos init --agent auto                                                   # whichever agents are installed here
 ```
 
-That's a complete install. From the next session on, in this repo:
+That's a complete install. From the next session on, in this repo — with any wired agent:
 
 - every session **starts with the project's context** — the pack, recent decisions,
-  learnings, open runs — injected before you type anything;
+  learnings, open runs — injected before you type anything (native hook injection for
+  Claude Code, Codex, and Cursor; a generated `AGENTS.md`/`GEMINI.md` carries the same
+  memory to file-reading agents);
 - **risky commands and writes are gated** — force-push and `rm -rf /` denied, `git push`,
-  `deploy`, and `git reset --hard` asked, `.claude/settings.json` and `.git/hooks/`
+  `deploy`, and `git reset --hard` asked, and the hook wiring of every agent
+  (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`) plus `.git/hooks/`
   protected so the agent can't disarm its own guardrails;
 - **every tool call is audited** to `audit.jsonl`, with token spend tracked per session
   alongside.
@@ -231,20 +237,22 @@ is told to compact them rather than letting old knowledge quietly stop loading.
 
 ## Skills
 
-Six markdown skills installed into `.claude/skills/`. They're instructions to the model —
-the hooks are what hold when the model deviates.
+Six markdown skills, agent-neutral, installed into each wired agent's skills directory
+(`.claude/skills/`, `.agents/skills/` for Codex, `.cursor/skills/`). They're instructions
+to the model — the hooks are what hold when the model deviates.
 
-- `/aos-onboard` — extract the repo's real context: fill the pack from the code, mine git
+- **aos-onboard** — extract the repo's real context: fill the pack from the code, mine git
   history for decisions, author contracts
-- `/aos-ticket <ticket>` — the six-stage pipeline (intake → plan → implement → verify →
+- **aos-ticket** — the six-stage pipeline (intake → plan → implement → verify →
   package → learn), ending `awaiting-review` with a PR draft in `outcome.md`. Stages 2, 4
   and 5 hit real gates — plan approval, the review gate, the state machine; the rest is the
   checklist
-- `/aos-verify` — contracts + a skeptic subagent, writing `review.json`. Standalone anytime
-- `/aos-approve [run]` — agent-assisted review of an `awaiting-review` run; it proposes the
-  close and the gate prompts you to sign off, in the session you're already in
-- `/aos-learn` — distil the session into project memory
-- `/aos-ask <question>` — answer from run history with file:line citations
+- **aos-verify** — contracts + a skeptic subagent, writing `review.json`. Standalone anytime
+- **aos-approve** — agent-assisted review of an `awaiting-review` run; it proposes the
+  close and the human signs off — via the gate prompt where the agent has one, or by
+  granting the `aos approve` command where it doesn't
+- **aos-learn** — distil the session into project memory
+- **aos-ask** — answer from run history with file:line citations
 
 ## CLI
 

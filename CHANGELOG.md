@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### Added — multi-agent support (0.13 line)
+
+One policy, one project memory, one evidence trail — enforced through each coding
+agent's real hook surface, honestly labeled per agent:
+
+- **Provider-neutral core.** Hook payloads are translated by adapters
+  (`src/adapters/{claude,codex,cursor}.js`, shapes verified against each vendor's
+  official hook docs) into one normalized event protocol (`src/core/events.js`); the
+  gates, plan/scope enforcement, audit, and sign-off machinery now live in
+  `src/core/pipeline.js` and contain no provider tool names. Claude behavior is
+  unchanged (the whole pre-existing suite passes untouched). Audit entries gain
+  `provider` and `tool_kind`; Codex `apply_patch` calls are parsed into per-path
+  writes so the same file gates apply.
+- **`aos init --agent claude|codex|cursor|gemini|auto|all`** (comma lists work).
+  Writes each agent's hook config (`.claude/settings.json`, `.codex/hooks.json`,
+  `.cursor/hooks.json`), installs the (now agent-neutral) skills into each agent's
+  skills directory (`.claude/skills`, `.agents/skills`, `.cursor/skills`), and records
+  the agents on the registry — re-init merges rather than replacing. Gemini is
+  context-file-only workflow compatibility and is never described as enforced.
+  Codex hooks must be trusted once in the CLI (`/hooks`); init says so.
+- **External approvals for agents that can deny but cannot ask** (Codex and Cursor
+  both parse `ask` without enforcing it): a gated operation is denied carrying an
+  exact `aos approve <id>` command; a human grants it outside the agent; the same
+  operation is allowed through exactly once (single-use, expiring, bound to an
+  operation fingerprint — command text for shell, target paths for writes).
+  Agents cannot approve their own unlocks: the approve command is human-only by
+  policy, and through deny-capable agents it is refused outright. Where a sign-off
+  command (run state done, run approve, remove) is unlocked this way, the run's
+  record says `via: external-approval`.
+- **`aos approve <id> / --list`** — grant pending approvals; sign-off gated like
+  closing a run (TTY, gate prompt bound to the decision id, or the CI env var).
+- **`aos doctor --capabilities`** — the per-agent support matrix (context / audit /
+  deny / ask / writes / enforcement level), verified against the docs, plus this
+  repo's per-agent wiring. Workflow-only agents are reported as exactly that.
+- **`aos context sync|check|diff`** — regenerate / verify per-agent context files
+  (`AGENTS.md` for Codex+Cursor, `GEMINI.md` for Gemini CLI) from the one canonical
+  memory; markers on generated files, hand-written files never touched, legacy
+  `aos export` markers upgrade in place, `check` exits 1 on drift (CI-gateable).
+  `aos export` is now a thin alias.
+- **Console** — per-project Agents card (enforced / context only / not wired),
+  a Pending approvals section with copyable grant commands, provider chips in the
+  audit timeline, and the external-approval sign-off route in the record view.
+- **Self-protection extended**: `.codex/hooks.json` and `.cursor/hooks.json` join
+  `.claude/settings.json` as protected paths (file writes and shell writes), and
+  the decisions directory (pending/granted approvals) is write-protected like
+  `signoff.json` — forging an approval would unlock gated operations.
+
+### Fixed
+
+- `aos init` without `--name` on an already-registered repo now targets the
+  registered project instead of forking a basename-id duplicate.
+
 ### Added
 
 - **`aos remove <id> [--purge] [--force]`** — unregister a project. Registry-only
