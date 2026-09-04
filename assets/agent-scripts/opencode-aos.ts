@@ -27,6 +27,8 @@ const AOS_CMD = __AOS_CMD__;
 // The aos-side content scan reads at most 100k chars of a write; shipping
 // more over stdin is pure latency, so cap the payload at the same budget.
 const CONTENT_CAP = 100_000;
+// aos hook responses are small JSON; a runaway child must not grow this.
+const STDOUT_CAP = 64_000;
 
 function capContent(s: unknown): string {
   const t = typeof s === "string" ? s : "";
@@ -58,7 +60,14 @@ function trySpawn(cmd: string[], args: string[], payload: object, timeoutMs: num
     }, timeoutMs);
     // spawn errors (ENOENT/EACCES) mean the baked command is unusable
     child.on("error", () => done({ spawned: false, response: null }));
-    child.stdout?.on("data", (d: any) => (out += d));
+    child.stdout?.on("data", (d: any) => {
+      if (settled) return;
+      out += d;
+      if (out.length > STDOUT_CAP) {
+        try { child.kill(); } catch {}
+        done({ spawned: true, response: null });
+      }
+    });
     child.on("close", () => {
       // empty stdout is a legitimate ALLOW — not a failure
       let response: any = null;
@@ -102,6 +111,12 @@ export const AosPlugin: Plugin = async ({ directory }) => {
       } else if (tool === "edit") {
         toolName = "Edit";
         toolInput = { file_path: args.filePath, content: capContent(args.newString) };
+      } else if (tool === "apply_patch" || tool === "patch") {
+        // GPT-5-series models get apply_patch instead of write/edit. Docs
+        // briefly listed this as "patch"; both names are gated. Paths live in
+        // patchText marker lines, not filePath.
+        toolName = "apply_patch";
+        toolInput = { patchText: capContent(args.patchText ?? args.command ?? "") };
       } else {
         return; // not a gated surface
       }
@@ -131,6 +146,9 @@ export const AosPlugin: Plugin = async ({ directory }) => {
       } else if (tool === "write" || tool === "edit") {
         toolName = tool === "write" ? "Write" : "Edit";
         toolInput = { file_path: args.filePath };
+      } else if (tool === "apply_patch" || tool === "patch") {
+        toolName = "apply_patch";
+        toolInput = { patchText: capContent(args.patchText ?? args.command ?? "") };
       } else {
         toolInput = { keys: Object.keys(args || {}).slice(0, 3) };
       }

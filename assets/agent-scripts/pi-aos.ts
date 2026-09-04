@@ -26,6 +26,8 @@ const AOS_CMD = __AOS_CMD__;
 // The aos-side content scan reads at most 100k chars of a write; shipping
 // more over stdin is pure latency, so cap the payload at the same budget.
 const CONTENT_CAP = 100_000;
+// aos hook responses are small JSON; a runaway child must not grow this.
+const STDOUT_CAP = 64_000;
 
 function capContent(s: unknown): string {
   const t = typeof s === "string" ? s : "";
@@ -57,7 +59,14 @@ function trySpawn(cmd: string[], args: string[], payload: object, timeoutMs: num
     }, timeoutMs);
     // spawn errors (ENOENT/EACCES) mean the baked command is unusable
     child.on("error", () => done({ spawned: false, response: null }));
-    child.stdout?.on("data", (d: any) => (out += d));
+    child.stdout?.on("data", (d: any) => {
+      if (settled) return;
+      out += d;
+      if (out.length > STDOUT_CAP) {
+        try { child.kill(); } catch {}
+        done({ spawned: true, response: null });
+      }
+    });
     child.on("close", () => {
       // empty stdout is a legitimate ALLOW — not a failure
       let response: any = null;

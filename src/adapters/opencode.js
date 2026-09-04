@@ -2,10 +2,11 @@ import {
   shellEvent,
   fileEvent,
   lifecycleEvent,
+  parseApplyPatch,
 } from '../core/events.js';
 
 // opencode (sst/opencode) — enforcement via a project plugin
-// (`.opencode/plugins/aos.ts`, installed by AOS). opencode's plugin API fires
+// (`.opencode/plugins/opencode-aos.ts`, installed by AOS). opencode's plugin API fires
 // `tool.execute.before` with the tool's args; throwing from the hook aborts
 // the call with the error fed to the agent — a real deny. No native ask, so
 // gated operations go through the external-approval flow (`aos approve`).
@@ -40,6 +41,16 @@ export const opencodeAdapter = {
         let event;
         if (name === 'Bash') {
           event = shellEvent('opencode', p, name);
+        } else if (name === 'apply_patch') {
+          // GPT-5-series models get apply_patch instead of write/edit.
+          // Paths live in patchText marker lines, not filePath.
+          const ops = parseApplyPatch(String(input.patchText || input.command || ''));
+          if (!ops.length) return null;
+          event = fileEvent('opencode', p, name, {
+            paths: ops.map((o) => o.path),
+            contents: hook === 'pre-tool' ? ops.map((o) => o.added.join('\n')) : [],
+          });
+          event.operation.ops = ops;
         } else if (FILE_TOOLS.has(name)) {
           // the plugin normalizes opencode's {filePath, content|newString}
           // into the claude-like {file_path, content} before calling aos

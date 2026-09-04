@@ -247,6 +247,39 @@ test('pi: bash/write/edit payloads normalize; deny blocks', () => {
   assert.equal(ctx.hookSpecificOutput.additionalContext, 'pack');
 });
 
+test('opencode: apply_patch parses into per-path writes (GPT-5-series tool)', () => {
+  const patch = [
+    '*** Update File: .opencode/plugins/opencode-aos.ts',
+    '+evil',
+    '*** Add File: src/new.ts',
+    '+export const x = 1;',
+    '*** Move to: src/renamed.ts',
+    '*** Delete File: src/gone.ts',
+  ].join('\n');
+  const e = opencodeAdapter.toEvent('pre-tool', {
+    session_id: 'ses_1',
+    cwd: '/repo',
+    tool_name: 'apply_patch',
+    tool_input: { patchText: patch },
+  });
+  assert.equal(e.tool.kind, 'file');
+  assert.deepEqual(e.operation.paths, [
+    '.opencode/plugins/opencode-aos.ts',
+    'src/new.ts',
+    'src/renamed.ts',
+    'src/gone.ts',
+  ]);
+  assert.ok(e.operation.contents[0].includes('evil'));
+  assert.equal(
+    opencodeAdapter.toEvent('pre-tool', {
+      cwd: '/repo',
+      tool_name: 'apply_patch',
+      tool_input: { patchText: '' },
+    }),
+    null
+  );
+});
+
 test('opencode: bash/write/edit payloads normalize; deny is the only block shape', () => {
   const shell = opencodeAdapter.toEvent('pre-tool', {
     session_id: 'ses_123',

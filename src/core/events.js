@@ -85,6 +85,7 @@ export function lifecycleEvent(provider, payload, event) {
 // plan gate, scope gate. Paths are repo-relative and resolved by the caller.
 
 const PATCH_HEADER = /^\*\*\*\s+(Add|Update|Delete)\s+File:\s*(.+?)\s*$/;
+const MOVE_HEADER = /^\*\*\*\s+Move to:\s*(.+?)\s*$/;
 
 export function parseApplyPatch(patchText) {
   const out = []; // { op: 'add'|'update'|'delete', path, added: string[] }
@@ -94,6 +95,14 @@ export function parseApplyPatch(patchText) {
     if (header) {
       if (current) out.push(current);
       current = { op: header[1].toLowerCase(), path: header[2], added: [] };
+      continue;
+    }
+    const move = MOVE_HEADER.exec(line);
+    if (move) {
+      // opencode (and some Codex patches) rename via `*** Move to:`; gate the
+      // destination as well as the source Update File that preceded it.
+      if (current) out.push(current);
+      current = { op: 'update', path: move[1], added: [] };
       continue;
     }
     if (/^\*\*\*\s+(Begin|End)\s+Patch/.test(line)) continue;
