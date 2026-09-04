@@ -649,7 +649,7 @@ export function evaluateBashProtected(command, { home, cwd = null } = {}) {
     return {
       decision: 'ask',
       action: 'protected-path',
-      reason: 'This command writes agent hook configuration (.claude/settings.json, .codex/hooks.json, or .cursor/hooks.json), which can rewire or remove the AOS gates — requires human approval',
+      reason: 'This command writes agent hook configuration (.claude/settings.json, .codex/hooks.json, .cursor/hooks.json, .pi/extensions/, or .opencode/plugins/), which can rewire or remove the AOS gates — requires human approval',
     };
   }
   if (/\.git[\\/]hooks[\\/]/.test(cmd)) {
@@ -708,10 +708,12 @@ const PROTECTED_AOS_BASENAMES = new Set([
 // like editing .claude/settings.json. Any agent config AOS installs hooks
 // into belongs here.
 const PROTECTED_HOOK_CONFIGS =
-  /[\\/]\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json$|[\\/]\.(pi[\\/]extensions|opencode[\\/]plugins)\/[A-Za-z0-9._-]+\.(ts|js)$/;
+  /[\\/]\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json$|[\\/]\.(pi[\\/]extensions|opencode[\\/]plugins)\/[A-Za-z0-9._-]+\.(ts|js)$|[\\/]\.(pi|opencode)$/;
 // The same configs as they appear inside a shell command (either slash form).
+// `.pi` / `.opencode` themselves are included so `rm -rf .pi` cannot delete
+// the gate by removing the parent directory of the protected script.
 const PROTECTED_HOOK_CONFIG_BASH =
-  /\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json|\.(pi[\\/]extensions|opencode[\\/]plugins)([\\/]|$)/;
+  /\.(claude[\\/]settings(\.local)?|codex[\\/]hooks|cursor[\\/]hooks)\.json|\.(pi([\\/]extensions)?|opencode([\\/]plugins)?)([\\/]|$)/;
 // The external-approval ledger: forging an approval file unlocks gated
 // operations without a human, so it is as sensitive as signoff.json.
 const PROTECTED_DECISIONS_DIR = /[\\/]decisions[\\/](pending|approved)[\\/]/;
@@ -740,7 +742,7 @@ export function evaluateFileWrite(policy, filePath, content = '', { home, repoRo
     return {
       decision: 'ask',
       action: 'protected-path',
-      reason: 'Editing agent hook configuration (.claude/settings.json, .codex/hooks.json, or .cursor/hooks.json) can rewire or remove the AOS gates — requires human approval',
+      reason: 'Editing agent hook configuration (.claude/settings.json, .codex/hooks.json, .cursor/hooks.json, .pi/extensions/, or .opencode/plugins/) can rewire or remove the AOS gates — requires human approval',
     };
   }
   if (abs.includes(`${path.sep}.git${path.sep}hooks${path.sep}`)) {
