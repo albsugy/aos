@@ -87,6 +87,13 @@ test('a corrupt or absent ticket is simply no approval', () => {
   assert.equal(consumeSignoffTicket(PROJECT, 'run-close', 'alpha'), null);
 });
 
+test('mustInclude binds a ticket to the operand the prompt named', () => {
+  mint('aos approve dec_aaa', 'aos-approve');
+  assert.equal(consumeSignoffTicket(PROJECT, 'aos-approve', null, 'dec_bbb'), null, 'other id cannot spend it');
+  mint('aos approve dec_aaa', 'aos-approve');
+  assert.ok(consumeSignoffTicket(PROJECT, 'aos-approve', null, 'dec_aaa'));
+});
+
 test('the recorded command is bounded', () => {
   mint('aos run state done --run alpha # ' + 'x'.repeat(1000));
   const ticket = JSON.parse(fs.readFileSync(ticketFile(), 'utf8'));

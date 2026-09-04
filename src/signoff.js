@@ -59,7 +59,7 @@ export function recordSignoffTicket(projectId, { action, command, session, mode,
 // that approval. An approval is for a specific thing or it is not an approval.
 // A ticket whose command names no run (the active-run form, and plan approval)
 // is unbound and matches whatever the caller is closing.
-export function consumeSignoffTicket(projectId, action, target = null) {
+export function consumeSignoffTicket(projectId, action, target = null, mustInclude = null) {
   const file = ticketPath(projectId);
   const ticket = readJson(file, null);
   try {
@@ -70,6 +70,9 @@ export function consumeSignoffTicket(projectId, action, target = null) {
   if (!ticket || ticket.action !== action) return null;
   const age = Date.now() - Date.parse(ticket.ts || '');
   if (!Number.isFinite(age) || age < 0 || age > TICKET_TTL_MS) return null;
+  // Bind a prompt to the exact operand it named (e.g. `aos approve <id>`).
+  // Without this, any in-window aos-approve ticket unlocks any decision.
+  if (mustInclude && !String(ticket.command || '').includes(String(mustInclude))) return null;
   if (target) {
     const named = /--run[=\s]+(\S+)/.exec(ticket.command || '');
     if (named && named[1] !== target) return null;

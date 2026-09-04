@@ -76,6 +76,36 @@ test('pending decisions expire', () => {
   assert.match(res.error, /expired/i);
 });
 
+test('pending records keep the command and paths a human must inspect', () => {
+  const d = createPendingDecision(PROJECT, {
+    provider: 'codex',
+    action: 'git-push',
+    reason: 'Publishing requires human approval',
+    fingerprint: 'fp-cmd',
+    tool: 'Bash',
+    command: 'git push origin prod',
+    paths: ['src/a.js'],
+  });
+  const stored = getPendingDecision(PROJECT, d.id);
+  assert.equal(stored.command, 'git push origin prod');
+  assert.deepEqual(stored.paths, ['src/a.js']);
+  assert.ok(listPendingDecisions(PROJECT).some((x) => x.id === d.id));
+});
+
+test('listPendingDecisions hides expired entries', () => {
+  const d = createPendingDecision(PROJECT, {
+    provider: 'cursor',
+    action: 'gated',
+    reason: 'old',
+    fingerprint: 'fp-old',
+  });
+  const file = path.join(home, 'projects', PROJECT, 'decisions', 'pending', `${d.id}.json`);
+  const aged = JSON.parse(fs.readFileSync(file, 'utf8'));
+  aged.created = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+  fs.writeFileSync(file, JSON.stringify(aged));
+  assert.equal(listPendingDecisions(PROJECT).some((x) => x.id === d.id), false);
+});
+
 test('listPendingDecisions survives an empty project', () => {
   addProject({ id: 'dec-empty', name: 'e', repo: '/tmp/dec-empty' });
   assert.deepEqual(listPendingDecisions('dec-empty'), []);

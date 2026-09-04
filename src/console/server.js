@@ -93,6 +93,8 @@ function projectDetail(projectId) {
       reason: d.reason,
       provider: d.provider,
       created: d.created,
+      command: d.command || null,
+      paths: d.paths || null,
     })),
     pack: readIfExists(path.join(dir, 'context', 'pack.md')),
     decisions: decisions ? tailLines(decisions, 120) : null,

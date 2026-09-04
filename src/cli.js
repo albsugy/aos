@@ -22,7 +22,7 @@ import { serveConsole } from './console/server.js';
 import { runDoctor, printCapabilities } from './doctor.js';
 import { exportAgentsMd } from './export.js';
 import { consumeSignoffTicket } from './signoff.js';
-import { approveDecision, listPendingDecisions, getPendingDecision } from './decisions.js';
+import { approveDecision, listPendingDecisions, getPendingDecision, PENDING_TTL_MS } from './decisions.js';
 import { printCost, parseSince } from './cost.js';
 import { runPolicyTest } from './policy-test.js';
 import { verifyProjectLedgers } from './run.js';
@@ -289,17 +289,31 @@ async function main() {
           console.log(`Pending approvals for "${p.id}" — grant with: aos approve <id>`);
           for (const d of pending) {
             const age = relAge(d.created);
-            console.log(`  ${d.id}  [${d.action}]  ${String(d.reason || '').slice(0, 90)}  (${age})`);
+            const op = d.command || (d.paths && d.paths.length ? d.paths.join(', ') : '');
+            console.log(
+              `  ${d.id}  [${d.action}]  ${op ? op + '  ' : ''}${String(d.reason || '').slice(0, 90)}  (${age})`
+            );
           }
         }
         break;
       }
       const id = String(positional[0]);
       const pending = getPendingDecision(p.id, id);
-      if (pending) {
-        console.log(`Approving ${id}: [${pending.action}] ${pending.reason}`);
-        console.log(`  provider: ${pending.provider || 'unknown'}  session: ${pending.session || '-'}  created: ${pending.created}`);
+      if (!pending) {
+        console.error(`No pending decision "${id}" — it may already be approved, consumed, or expired.`);
+        process.exitCode = 1;
+        break;
       }
+      const age = Date.now() - Date.parse(pending.created || '');
+      if (!Number.isFinite(age) || age < 0 || age > PENDING_TTL_MS) {
+        console.error(`Decision ${id} expired pending approval (created ${pending.created}).`);
+        process.exitCode = 1;
+        break;
+      }
+      console.log(`Approving ${id}: [${pending.action}] ${pending.reason}`);
+      if (pending.command) console.log(`  command: ${pending.command}`);
+      if (pending.paths && pending.paths.length) console.log(`  paths: ${pending.paths.join(', ')}`);
+      console.log(`  provider: ${pending.provider || 'unknown'}  session: ${pending.session || '-'}  created: ${pending.created}`);
       const by = signoffIdentity(`aos approve ${id}`, {
         required: true,
         projectId: p.id,

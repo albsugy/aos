@@ -22,7 +22,7 @@ import { appendAudit } from './run.js';
 // How long a pending decision waits for a human, and how long an approval
 // stays spendable once granted. Short on purpose: these are "let this one
 // command through" tokens, not standing permissions.
-const PENDING_TTL_MS = 30 * 60 * 1000;
+export const PENDING_TTL_MS = 30 * 60 * 1000;
 const APPROVED_TTL_MS = 15 * 60 * 1000;
 // Bound the directories: approvals are created per denied call, and expired
 // ones must not accumulate forever.
@@ -52,23 +52,27 @@ function pruneExpired(projectId) {
   const now = Date.now();
   for (const sub of ['pending', 'approved']) {
     const dir = path.join(decisionsDir(projectId), sub);
-    const ids = listDir(dir);
-    for (const id of ids.slice(0, Math.max(0, ids.length - MAX_TRACKED))) {
-      // over the count cap — oldest by name order is arbitrary, but the cap
-      // only exists as a backstop; expiry normally empties these dirs.
+    const entries = listDir(dir)
+      .map((id) => {
+        const d = readJson(path.join(dir, `${id}.json`), null);
+        const t = Date.parse(d?.approved_at || d?.created || '') || 0;
+        return { id, d, t };
+      })
+      .sort((a, b) => a.t - b.t);
+    const overflow = Math.max(0, entries.length - MAX_TRACKED);
+    for (const e of entries.slice(0, overflow)) {
       try {
-        fs.unlinkSync(path.join(dir, `${id}.json`));
+        fs.unlinkSync(path.join(dir, `${e.id}.json`));
       } catch {
         /* already gone */
       }
     }
-    for (const id of ids) {
-      const d = readJson(path.join(dir, `${id}.json`), null);
-      if (!d) continue;
-      const anchor = Date.parse(d.approved_at || d.created || '');
-      if (Number.isFinite(anchor) && now - anchor > (d.approved_at ? APPROVED_TTL_MS : PENDING_TTL_MS)) {
+    for (const e of entries.slice(overflow)) {
+      if (!e.d) continue;
+      const ttl = e.d.approved_at ? APPROVED_TTL_MS : PENDING_TTL_MS;
+      if (Number.isFinite(e.t) && e.t > 0 && now - e.t > ttl) {
         try {
-          fs.unlinkSync(path.join(dir, `${id}.json`));
+          fs.unlinkSync(path.join(dir, `${e.id}.json`));
         } catch {
           /* already gone */
         }
@@ -77,7 +81,12 @@ function pruneExpired(projectId) {
   }
 }
 
-export function createPendingDecision(projectId, { provider, session, action, rule, reason, fingerprint, tool }) {
+function capList(v, n, each) {
+  if (!Array.isArray(v)) return null;
+  return v.slice(0, n).map((x) => String(x || '').slice(0, each));
+}
+
+export function createPendingDecision(projectId, { provider, session, action, rule, reason, fingerprint, tool, command, paths }) {
   pruneExpired(projectId);
   const id = `dec_${crypto.randomBytes(8).toString('hex')}`;
   const decision = {
@@ -91,6 +100,8 @@ export function createPendingDecision(projectId, { provider, session, action, ru
     reason: String(reason || '').slice(0, 500),
     fingerprint,
     tool: tool || null,
+    command: command ? String(command).slice(0, 300) : null,
+    paths: capList(paths, 20, 300),
     created: nowIso(),
   };
   ensureDir(path.join(decisionsDir(projectId), 'pending'));
@@ -106,9 +117,15 @@ export function createPendingDecision(projectId, { provider, session, action, ru
 }
 
 export function listPendingDecisions(projectId) {
+  pruneExpired(projectId);
+  const now = Date.now();
   return listDir(path.join(decisionsDir(projectId), 'pending'))
     .map((id) => readJson(pendingPath(projectId, id), null))
-    .filter(Boolean)
+    .filter((d) => {
+      if (!d) return false;
+      const age = now - Date.parse(d.created || '');
+      return Number.isFinite(age) && age >= 0 && age <= PENDING_TTL_MS;
+    })
     .sort((a, b) => String(a.created).localeCompare(String(b.created)));
 }
 
