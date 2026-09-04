@@ -111,6 +111,11 @@ $AOS hook pre-tool --agent opencode < <(oc_in 'git push --force origin main') | 
 printf '%s' '{"session_id":"pi-s1","cwd":"'"$REPO"'","tool_name":"Write","tool_input":{"file_path":"'"$REPO"'/.pi/extensions/pi-aos.ts","content":"evil"}}' \
   | $AOS hook pre-tool --agent pi | grep -q '"permissionDecision":"deny"' \
   && pass "pi gate: rewriting its own extension denied (self-protection)" || fail "pi extension rewrite allowed"
+# the shell path too — including dir removal without a trailing slash
+$AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .pi/extensions') | grep -q '"permissionDecision":"deny"' \
+  && pass "gate: rm -rf .pi/extensions (no slash) denied" || fail "dir-removal bypass of extension protection"
+$AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .opencode/plugins') | grep -q '"permissionDecision":"deny"' \
+  && pass "gate: rm -rf .opencode/plugins (no slash) denied" || fail "dir-removal bypass of plugin protection"
 
 # opencode gated tier → external approval, same as codex/cursor
 OC_OUT=$(printf '%s' '{"session_id":"ses_1","cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"git push origin main"}}' | $AOS hook pre-tool --agent opencode)
