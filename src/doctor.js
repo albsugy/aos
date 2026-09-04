@@ -35,6 +35,25 @@ export function resolveHookCommand(command, { home = os.homedir(), pathEnv = pro
   return { ok: false, via: expanded || launcher };
 }
 
+// Claude/Codex nest `{hooks:[{command}]}`; Cursor is a flat `{command}`.
+function collectAosHookCommands(repoRoot) {
+  const out = [];
+  for (const entry of Object.values(AGENT_CATALOG)) {
+    if (!entry?.installer?.configPath) continue;
+    const config = readJson(entry.installer.configPath(repoRoot), null);
+    if (!config?.hooks) continue;
+    for (const entries of Object.values(config.hooks)) {
+      for (const e of entries || []) {
+        const hooks = e.hooks || (e.command ? [e] : []);
+        for (const h of hooks) {
+          if (typeof h?.command === 'string' && h.command.includes('aos')) out.push(h.command);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function check(label, fn) {
   try {
     const result = fn();
@@ -212,13 +231,8 @@ export function runDoctor({ appRoot, version, bundled = false }) {
       check('hook command resolves', () => {
         const repo = (project.repos || []).find(
           (r) => process.cwd() === r || process.cwd().startsWith(r + path.sep)
-        );
-        const settings = readJson(path.join(repo || process.cwd(), '.claude', 'settings.json'), null);
-        const commands = Object.values(settings?.hooks || {})
-          .flat()
-          .flatMap((e) => e.hooks || [])
-          .map((h) => h.command)
-          .filter((c) => typeof c === 'string' && c.includes('aos'));
+        ) || process.cwd();
+        const commands = collectAosHookCommands(repo);
         if (!commands.length) throw new Error('no aos hook commands to resolve — re-run aos init');
         const broken = commands.filter((c) => !resolveHookCommand(c).ok);
         if (broken.length) {

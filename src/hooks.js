@@ -28,10 +28,35 @@ async function readStdin() {
 const HOOKS = new Set(['pre-tool', 'post-tool', 'session-start', 'session-end', 'stop']);
 
 export async function runHook(name, { agent = 'claude' } = {}) {
-  const adapter = getAdapter(agent) || getAdapter('claude');
+  const id = agent || 'claude';
+  const adapter = getAdapter(id);
   let out = '';
   try {
-    if (HOOKS.has(name)) {
+    if (!adapter) {
+      try {
+        const log = path.join(aosHome(), 'hook-errors.log');
+        if (!fs.existsSync(log) || fs.statSync(log).size < 1_000_000) {
+          appendLine(log, JSON.stringify({ ts: nowIso(), hook: name, agent: id, error: `unknown agent "${id}"` }));
+        }
+      } catch {
+        /* logging must never throw */
+      }
+      if (name === 'pre-tool') {
+        // Union deny: Cursor reads `permission`, Claude/Codex read
+        // hookSpecificOutput.permissionDecision. Unknown agents must not
+        // inherit Claude's native-ask shape (Codex treats ask as fail-open).
+        out = JSON.stringify({
+          permission: 'deny',
+          user_message: `[aos] unknown agent "${id}" — hook refused`,
+          agent_message: `unknown agent "${id}"`,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: `[aos] unknown agent "${id}" — hook refused`,
+          },
+        });
+      }
+    } else if (HOOKS.has(name)) {
       const raw = await readStdin();
       if (raw.trim()) {
         const payload = JSON.parse(raw);
@@ -61,7 +86,7 @@ export async function runHook(name, { agent = 'claude' } = {}) {
     try {
       const log = path.join(aosHome(), 'hook-errors.log');
       if (!fs.existsSync(log) || fs.statSync(log).size < 1_000_000) {
-        appendLine(log, JSON.stringify({ ts: nowIso(), hook: name, agent, error: String((e && e.stack) || e) }));
+        appendLine(log, JSON.stringify({ ts: nowIso(), hook: name, agent: id, error: String((e && e.stack) || e) }));
       }
     } catch {
       // logging must never throw either

@@ -51,6 +51,17 @@ agent's real hook surface, honestly labeled per agent:
 
 ### Fixed
 
+- `aos approve` now binds a gate-prompt ticket to the decision id (`mustInclude`);
+  unknown/expired ids are refused before a ticket is spent. Pending records store
+  the command and paths a human is unlocking, and `--list` / the console show them.
+- Cursor `Delete` (and a Write with no path) now reach the file gate instead of
+  skipping it; a file event with no resolvable path is denied.
+- `aos doctor` resolves hook commands for every wired agent, not only Claude.
+  An unknown `--agent` on a hook fails closed (deny) instead of falling back to
+  Claude's native-ask shape, which Codex/Cursor treat as fail-open.
+- Pending/approved decision prune drops oldest by timestamp, and `aos approve --list`
+  hides expired entries.
+
 - `aos init` without `--name` on an already-registered repo now targets the
   registered project instead of forking a basename-id duplicate.
 

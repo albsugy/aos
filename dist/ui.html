@@ -741,7 +741,7 @@ function renderProject(r) {
     for (const a of approvals) {
       html += `<div class="qrow" style="cursor:default">
         <span class="tag ask"><i></i>${esc(a.action)}</span>
-        <span class="proj" title="${esc(a.reason || '')}">${esc(String(a.reason || '').slice(0, 110))}</span>
+        <span class="proj" title="${esc(a.command || (a.paths && a.paths.join(', ')) || a.reason || '')}">${esc(String(a.command || (a.paths && a.paths.join(', ')) || a.reason || '').slice(0, 110))}</span>
         <span class="proj">${esc(a.provider || '')}</span>
         <span class="age">${rel(a.created)}</span>
       </div>` + cmdRow(`Grant ${a.id}`, `aos approve ${a.id}`,
