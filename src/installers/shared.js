@@ -13,20 +13,26 @@ import { ensureDir, ASSETS } from '../paths.js';
 // $HOME keeps it user-portable; a PATH fallback and `|| true` make sure a
 // missing aos can never break an agent session.
 export function launcherCommand(cmd, { agent = null } = {}) {
-  let launcher = path.resolve(process.argv[1]);
   const home = os.homedir();
-  if (launcher.startsWith(home + path.sep)) {
-    launcher = '$HOME' + launcher.slice(home.length);
+  const absolute = path.resolve(process.argv[1]);
+  // Injection safety applies to the PHYSICAL install path — the $HOME/ prefix
+  // substituted below is our own literal, not user input, so its '$' is not a
+  // metacharacter risk. (Testing the substituted string instead degraded every
+  // under-$HOME install — the common case — to a bare `aos` with no absolute
+  // launcher, silently off wherever aos is not on PATH.)
+  const unsafe = /["`$\\\n]/.test(absolute);
+  let launcher;
+  if (unsafe) {
+    // Exotic path with real metacharacters: don't embed it. The PATH fallback
+    // in the same command line carries the hook.
+    launcher = 'aos';
+  } else if (absolute.startsWith(home + path.sep)) {
+    launcher = '$HOME' + absolute.slice(home.length);
+  } else {
+    launcher = absolute;
   }
-  // The path is embedded in a shell command inside agent configs; a quote or
-  // dollar in the install path must not become injection. Such paths are exotic
-  // (and were already broken for hooks before), but degrade safely: the PATH
-  // fallback in the same command line still resolves aos.
-  const safe = !/["`$\\\n]/.test(launcher);
-  const quoted = `"${launcher.replace(/"/g, '')}"`;
   const flag = agent ? ` --agent ${agent}` : '';
-  const invoke = safe ? quoted : 'aos';
-  return `${invoke} hook ${cmd}${flag} 2>/dev/null || aos hook ${cmd}${flag} 2>/dev/null || true`;
+  return `"${launcher}" hook ${cmd}${flag} 2>/dev/null || aos hook ${cmd}${flag} 2>/dev/null || true`;
 }
 
 export function copyDir(src, dest) {
@@ -71,6 +77,20 @@ export function bakeAgentScript(scriptName, dest) {
   ensureDir(path.dirname(dest));
   fs.writeFileSync(dest, body);
   return dest;
+}
+
+// Pull the baked argv out of a pi/opencode script. JSON.parse, never eval —
+// a tampered script must not execute as part of doctor.
+export function extractBakedArgv(body) {
+  const m = /const AOS_CMD = (\[[\s\S]*?\]);/.exec(String(body || ''));
+  if (!m) return null;
+  try {
+    const argv = JSON.parse(m[1]);
+    if (!Array.isArray(argv) || !argv.length || argv.some((x) => typeof x !== 'string')) return null;
+    return argv;
+  } catch {
+    return null;
+  }
 }
 
 // Which of the agent's expected hook events are wired in a parsed

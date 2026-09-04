@@ -6,6 +6,7 @@ import { loadRegistry, findProjectByCwd } from './registry.js';
 import { loadPolicy } from './policy.js';
 import { AGENT_CATALOG, INSTALLABLE_AGENTS, enforcementLevel } from './agents.js';
 import { getAdapter } from './adapters/index.js';
+import { extractBakedArgv } from './installers/shared.js';
 
 // A wired hook whose command does not resolve is the worst state AOS can be
 // in: every session looks normal and every gate is off, because the launcher
@@ -36,11 +37,14 @@ export function resolveHookCommand(command, { home = os.homedir(), pathEnv = pro
 }
 
 // Claude/Codex nest `{hooks:[{command}]}`; Cursor is a flat `{command}`.
+// JSON configs only — pi/opencode scripts are TypeScript, handled by
+// collectBakedArgvs.
 function collectAosHookCommands(repoRoot) {
   const out = [];
   for (const entry of Object.values(AGENT_CATALOG)) {
-    if (!entry?.installer?.configPath) continue;
-    const config = readJson(entry.installer.configPath(repoRoot), null);
+    const configPath = entry?.installer?.configPath?.(repoRoot);
+    if (!configPath || !configPath.endsWith('.json')) continue;
+    const config = readJson(configPath, null);
     if (!config?.hooks) continue;
     for (const entries of Object.values(config.hooks)) {
       for (const e of entries || []) {
@@ -52,6 +56,49 @@ function collectAosHookCommands(repoRoot) {
     }
   }
   return out;
+}
+
+function collectBakedArgvs(repoRoot, agents) {
+  const out = [];
+  for (const id of agents || []) {
+    const configPath = AGENT_CATALOG[id]?.installer?.configPath?.(repoRoot);
+    if (!configPath || configPath.endsWith('.json')) continue;
+    let body;
+    try {
+      body = fs.readFileSync(configPath, 'utf8');
+    } catch {
+      continue;
+    }
+    const argv = extractBakedArgv(body);
+    if (argv) out.push(argv);
+  }
+  return out;
+}
+
+function resolveArgv(argv, { pathEnv = process.env.PATH || '' } = {}) {
+  const bin = argv?.[0];
+  if (!bin) return { ok: false, via: '' };
+  if (bin === 'aos') {
+    for (const dir of pathEnv.split(path.delimiter).filter(Boolean)) {
+      const candidate = path.join(dir, 'aos');
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return { ok: true, via: candidate };
+      } catch {
+        // keep looking
+      }
+    }
+    return { ok: false, via: 'aos' };
+  }
+  if (!fs.existsSync(bin)) return { ok: false, via: bin };
+  if (argv.length > 1 && !fs.existsSync(argv[1])) return { ok: false, via: argv[1] };
+  return { ok: true, via: argv[argv.length - 1] };
+}
+
+function wiringCheckLabel(entry) {
+  return (entry.installer?.hookEvents || []).length
+    ? `${entry.label} hooks wired`
+    : `${entry.label} workflow`;
 }
 
 function check(label, fn) {
@@ -170,7 +217,7 @@ export function runDoctor({ appRoot, version, bundled = false }) {
       if (!entry?.installer || !repo) continue;
       // installers return {ok, detail} — surface failures as check failures.
       checks.push(
-        check(`${entry.label} hooks wired`, () => {
+        check(wiringCheckLabel(entry), () => {
           const v = entry.installer.verify(repo);
           if (!v.ok) throw new Error(v.detail);
           return v.detail;
@@ -190,58 +237,67 @@ export function runDoctor({ appRoot, version, bundled = false }) {
         );
       })
     );
-    checks.push(
-      check('hooks wired in this repo', () => {
-        const repo = (project.repos || []).find(
-          (r) => process.cwd() === r || process.cwd().startsWith(r + path.sep)
-        );
-        const settings = readJson(path.join(repo || process.cwd(), '.claude', 'settings.json'), null);
-        if (!settings?.hooks) throw new Error('.claude/settings.json has no hooks — re-run aos init');
-        // Stop is load-bearing, not optional: it is the whole mechanism for
-        // draining the review queue and capturing learnings in-session. A repo
-        // missing it looks perfectly healthy while both silently never fire.
-        const events = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd', 'Stop'];
-        const missing = events.filter(
-          (ev) =>
-            !(settings.hooks[ev] || []).some((e) =>
+    if ((project.agents || []).includes('claude')) {
+      checks.push(
+        check('hooks wired in this repo', () => {
+          const settings = readJson(path.join(repo || process.cwd(), '.claude', 'settings.json'), null);
+          if (!settings?.hooks) throw new Error('.claude/settings.json has no hooks — re-run aos init');
+          // Stop is load-bearing, not optional: it is the whole mechanism for
+          // draining the review queue and capturing learnings in-session. A repo
+          // missing it looks perfectly healthy while both silently never fire.
+          const events = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd', 'Stop'];
+          const missing = events.filter(
+            (ev) =>
+              !(settings.hooks[ev] || []).some((e) =>
+                (e.hooks || []).some((h) => typeof h.command === 'string' && h.command.includes('aos'))
+              )
+          );
+          if (missing.length) throw new Error(`missing: ${missing.join(', ')} — re-run aos init`);
+          const pinned = events.some((ev) =>
+            (settings.hooks[ev] || []).some((e) =>
+              (e.hooks || []).some(
+                (h) => typeof h.command === 'string' && h.command.includes('aos') && !h.command.includes('|| true')
+              )
+            )
+          );
+          if (pinned) throw new Error('old-format hooks (pinned path) — re-run aos init to migrate');
+          const fileGated = (settings.hooks.PreToolUse || []).some(
+            (e) =>
+              /Write/.test(e.matcher || '') &&
               (e.hooks || []).some((h) => typeof h.command === 'string' && h.command.includes('aos'))
-            )
-        );
-        if (missing.length) throw new Error(`missing: ${missing.join(', ')} — re-run aos init`);
-        const pinned = events.some((ev) =>
-          (settings.hooks[ev] || []).some((e) =>
-            (e.hooks || []).some(
-              (h) => typeof h.command === 'string' && h.command.includes('aos') && !h.command.includes('|| true')
-            )
-          )
-        );
-        if (pinned) throw new Error('old-format hooks (pinned path) — re-run aos init to migrate');
-        const fileGated = (settings.hooks.PreToolUse || []).some(
-          (e) =>
-            /Write/.test(e.matcher || '') &&
-            (e.hooks || []).some((h) => typeof h.command === 'string' && h.command.includes('aos'))
-        );
-        if (!fileGated) {
-          throw new Error('PreToolUse only gates Bash — re-run aos init to extend gating to file writes');
-        }
-        return `all ${events.length} events, current format`;
-      })
-    );
+          );
+          if (!fileGated) {
+            throw new Error('PreToolUse only gates Bash — re-run aos init to extend gating to file writes');
+          }
+          return `all ${events.length} events, current format`;
+        })
+      );
+    }
     checks.push(
       check('hook command resolves', () => {
-        const repo = (project.repos || []).find(
-          (r) => process.cwd() === r || process.cwd().startsWith(r + path.sep)
-        ) || process.cwd();
-        const commands = collectAosHookCommands(repo);
-        if (!commands.length) throw new Error('no aos hook commands to resolve — re-run aos init');
-        const broken = commands.filter((c) => !resolveHookCommand(c).ok);
-        if (broken.length) {
+        const root = repo || process.cwd();
+        const commands = collectAosHookCommands(root);
+        const baked = collectBakedArgvs(root, project.agents);
+        const total = commands.length + baked.length;
+        if (!total) {
+          const expectsHooks = (project.agents || []).some(
+            (id) => (AGENT_CATALOG[id]?.installer?.hookEvents || []).length
+          );
+          if (expectsHooks) throw new Error('no aos hook commands to resolve — re-run aos init');
+          return 'n/a (no hook launchers)';
+        }
+        const brokenCmds = commands.filter((c) => !resolveHookCommand(c).ok);
+        const brokenArgv = baked.filter((a) => !resolveArgv(a).ok);
+        const broken = brokenCmds.length + brokenArgv.length;
+        if (broken) {
           throw new Error(
-            `${broken.length}/${commands.length} hook command(s) point at a missing aos — ` +
-              'gates and audit are SILENTLY OFF (hooks end in `|| true`). Re-run aos init here.'
+            `${broken}/${total} hook command(s) point at a missing aos — ` +
+              'gates and audit are SILENTLY OFF. Re-run aos init here.'
           );
         }
-        return `${resolveHookCommand(commands[0]).via}`;
+        return commands.length
+          ? `${resolveHookCommand(commands[0]).via}`
+          : `${resolveArgv(baked[0]).via}`;
       })
     );
   }

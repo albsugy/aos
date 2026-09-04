@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { installSkillsInto } from './shared.js';
 
@@ -23,7 +24,17 @@ export const devinInstaller = {
     return installSkillsInto(repoRoot, path.join('.agents', 'skills'));
   },
 
-  verify() {
+  verify(repoRoot) {
+    if (!repoRoot) {
+      return { ok: false, detail: 'no registered repo to check' };
+    }
+    const skill = path.join(repoRoot, '.agents', 'skills', 'aos-ticket', 'SKILL.md');
+    if (!fs.existsSync(skill)) {
+      return {
+        ok: false,
+        detail: '.agents/skills missing — re-run aos init --agent devin',
+      };
+    }
     return {
       ok: true,
       detail: 'workflow compatibility: context + skills only, no tool-call enforcement (Devin CLI has no hook surface)',

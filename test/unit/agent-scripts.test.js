@@ -23,6 +23,7 @@ after(() => {
 
 const { piInstaller } = await import('../../src/installers/pi.js');
 const { opencodeInstaller } = await import('../../src/installers/opencode.js');
+const { extractBakedArgv } = await import('../../src/installers/shared.js');
 const esbuild = await import('esbuild');
 
 test('baked agent scripts parse (adversarial install path: spaces + quotes)', async () => {
@@ -43,10 +44,8 @@ test('baked agent scripts parse (adversarial install path: spaces + quotes)', as
   for (const file of [piInstaller.configPath(repo), opencodeInstaller.configPath(repo)]) {
     const body = fs.readFileSync(file, 'utf8');
     assert.ok(!body.includes('__AOS_CMD__'), `${file}: template placeholder survived the bake`);
-    // the baked constant is a valid JSON argv array invoking our hostile path
-    const m = /const AOS_CMD = (\[.*?\]);/.exec(body);
-    assert.ok(m, `${file}: AOS_CMD not baked as an argv array`);
-    const argv = JSON.parse(m[1]);
+    const argv = extractBakedArgv(body);
+    assert.ok(argv, `${file}: AOS_CMD not baked as an argv array`);
     assert.equal(argv[argv.length - 1], hostile);
     // and the whole script is syntactically valid TypeScript/JS
     await esbuild.transform(body, { loader: 'ts' });
@@ -64,7 +63,7 @@ test('a non-executable launcher bakes to [node, launcher]', async () => {
     process.argv[1] = originalArgv1;
   }
   const body = fs.readFileSync(piInstaller.configPath(repo), 'utf8');
-  const argv = JSON.parse(/const AOS_CMD = (\[.*?\]);/.exec(body)[1]);
+  const argv = extractBakedArgv(body);
   assert.equal(argv[0], process.execPath);
   assert.equal(argv[1], plain);
   await esbuild.transform(body, { loader: 'ts' });
@@ -75,4 +74,10 @@ test('verify() flags an unbaked template and passes a real one', async () => {
   assert.equal(v1.ok, true);
   fs.writeFileSync(piInstaller.configPath(repo), 'const AOS_CMD = __AOS_CMD__;\n');
   assert.equal(piInstaller.verify(repo).ok, false);
+});
+
+test('extractBakedArgv: refuses non-arrays and surviving placeholders', () => {
+  assert.equal(extractBakedArgv('const AOS_CMD = __AOS_CMD__;'), null);
+  assert.equal(extractBakedArgv('const AOS_CMD = "aos";'), null);
+  assert.deepEqual(extractBakedArgv('const AOS_CMD = ["/usr/bin/aos"];'), ['/usr/bin/aos']);
 });
