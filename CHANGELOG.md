@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Hook launchers degraded to a bare `aos` for every install under `$HOME`**
+  (the common case). The injection guard in `launcherCommand` tested the
+  substituted `$HOME/…` launcher for `$` — treating our own prefix as a
+  metacharacter — so agent hook configs lost their absolute launcher and
+  silently depended on `aos` being on PATH; wherever it wasn't (CI, minimal
+  environments), gates and audit were off with no visible failure. The guard
+  now tests the physical install path; `aos doctor` resolves every wired
+  agent's launcher and says so, and `aos init` re-run repairs existing
+  configs in place.
+- Test-suite portability: GNU grep does not treat `\`` as a literal backtick
+  in BRE (BSD grep does); the bundle staleness gate now tolerates
+  fresh-checkout mtime noise (2s) while still catching real staleness; the
+  multi-agent smoke section carries the repo's shellcheck disables.
+
 ### Added — pi, opencode, and Devin CLI support (0.14 line)
 
 Three more agents, verified against each one's real extensibility surface
