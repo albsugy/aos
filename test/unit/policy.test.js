@@ -121,8 +121,20 @@ test('evaluateFileWrite: AOS cannot be used to disarm AOS', () => {
     evaluateFileWrite(DEFAULT_POLICY, path.join(REPO, rel), content, { home: HOME, repoRoot: REPO })
       ?.decision || 'allow';
   assert.equal(write('.claude/settings.json', '{}'), 'ask', 'the hook wiring is self-protected');
+  assert.equal(write('.pi/extensions/pi-aos.ts', 'evil'), 'ask', 'the pi gate script is self-protected');
+  assert.equal(write('.opencode/plugins/opencode-aos.ts', 'evil'), 'ask', 'the opencode plugin is self-protected');
   assert.equal(write('.git/hooks/pre-commit', '#!/bin/sh\n'), 'ask');
   assert.equal(write('src/app.js', 'export const a = 1;\n'), 'allow', 'ordinary source is not gated');
+});
+
+test('evaluateBashProtected: removing the pi/opencode parent dir is not a bypass', () => {
+  const ask = (cmd) => evaluateBashProtected(cmd, { home: HOME, cwd: REPO })?.decision || 'allow';
+  assert.equal(ask('rm -rf .pi'), 'ask', 'rm of .pi deletes the extension');
+  assert.equal(ask('rm -rf .opencode'), 'ask', 'rm of .opencode deletes the plugin');
+  assert.equal(ask('rm -rf .pi/extensions'), 'ask');
+  assert.equal(ask('rm -rf .opencode/plugins'), 'ask');
+  assert.equal(ask('rm -rf .pillow'), 'allow', '.pi is not a prefix match');
+  assert.equal(ask('rm -rf .opencoder'), 'allow', '.opencode is not a prefix match');
 });
 
 test('evaluateFileWrite: a script body is read as what it would run', () => {

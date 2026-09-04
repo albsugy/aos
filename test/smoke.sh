@@ -17,9 +17,33 @@ AOS="${AOS_BIN:-node $ROOT/bin/aos.js}"
 # Bundle mode only: refuse to run against a stale dist. A green suite against
 # an old bundle proves nothing about the code that was just changed, and the
 # failure mode is invisible — pass marks on behavior that is no longer shipped.
+#
+# Staleness is mtime-based with a 2-second tolerance: a fresh git checkout
+# writes dist/ and src/ milliseconds apart in arbitrary path order, and
+# `find -newer` on that noise flagged every fresh checkout as stale. A dev who
+# edits src after building is stale by seconds, not microseconds; the CI
+# dist-freshness job additionally verifies CONTENT by rebuilding and diffing.
 if [ -n "${AOS_BIN:-}" ]; then
-  STALE=$(find "$ROOT/src" "$ROOT/scripts/build.mjs" -type f -newer "$ROOT/dist/aos.mjs" -print -quit 2>/dev/null || true)
-  if [ ! -f "$ROOT/dist/aos.mjs" ] || [ -n "$STALE" ]; then
+  STALE=$(node -e '
+    const fs = require("fs"), path = require("path");
+    const root = process.argv[1], dist = path.join(root, "dist", "aos.mjs");
+    let newest = 0;
+    const walk = (p) => {
+      for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+        const f = path.join(p, e.name);
+        if (e.isDirectory()) walk(f);
+        else newest = Math.max(newest, fs.statSync(f).mtimeMs);
+      }
+    };
+    walk(path.join(root, "src"));
+    for (const extra of [path.join(root, "scripts", "build.mjs")]) {
+      try { newest = Math.max(newest, fs.statSync(extra).mtimeMs); } catch {}
+    }
+    try {
+      process.stdout.write(fs.statSync(dist).mtimeMs + 2000 < newest ? "src/ newer than dist/" : "");
+    } catch { process.stdout.write("dist/aos.mjs missing"); }
+  ' "$ROOT")
+  if [ -n "$STALE" ]; then
     echo "❌ dist is stale ($STALE), run npm run build"
     exit 1
   fi

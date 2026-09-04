@@ -67,8 +67,8 @@ AOS is not an orchestration framework and not a platform. It's three thin parts:
 - Node.js **≥ 22** (`node -v`)
 - `curl` and `tar` (present on any stock system) — for the curl installer
 - At least one supported agent for the hooks/skills integration — Claude Code,
-  Codex, or Cursor (Gemini CLI gets context files only). The CLI and console
-  work without any of them.
+  Codex, Cursor, pi, or opencode (Devin CLI and Gemini CLI get context files
+  and skills only). The CLI and console work without any of them.
 - `git` — only if you build from source.
 
 **Install**
@@ -122,8 +122,9 @@ Diagnose any install with `aos doctor`.
 cd your-repo
 aos init                # register the project + scaffold ~/.aos/projects/<id>/,
                         # wire Claude Code (skills + hooks)
-aos init --agent all    # …or wire every agent: Claude Code, Codex, Cursor
-                        # (hooks + skills each), Gemini (context files)
+aos init --agent all    # …or wire every agent: Claude Code, Codex, Cursor,
+                        # pi, opencode (hooks + skills each), Devin + Gemini
+                        # (context files + skills, workflow compatibility)
 aos init --agent auto   # whichever of them is installed on this machine
 ```
 
@@ -395,8 +396,11 @@ selected agent:
 .cursor/
 ├── skills/aos-*                # the six skills (Cursor)
 └── hooks.json                  # the same five events, Cursor's schema
-.agents/skills/aos-*            # the six skills (Codex scans .agents/skills)
-AGENTS.md                       # generated context (codex/cursor) — marker, derived
+.agents/skills/aos-*            # the six skills (Codex, pi, opencode, and Devin
+                                #   all scan .agents/skills natively)
+.pi/extensions/pi-aos.ts         # the pi gate extension (baked launcher path)
+.opencode/plugins/opencode-aos.ts # the opencode gate plugin (baked launcher path)
+AGENTS.md                       # generated context (codex/cursor/opencode/devin) — marker, derived
 GEMINI.md                       # generated context (gemini) — marker, derived
 ```
 
@@ -547,6 +551,9 @@ automatically — no skill invocation needed.
 | Claude Code | `.claude/settings.json` | `.claude/skills/` | the reference surface: native ask prompts |
 | Codex | `.codex/hooks.json` | `.agents/skills/` | hooks must be trusted once (run `/hooks` in Codex); `ask` is unsupported by Codex's protocol → external approvals |
 | Cursor | `.cursor/hooks.json` | `.cursor/skills/` | `preToolUse` cannot enforce `ask` → external approvals |
+| pi | `.pi/extensions/pi-aos.ts` | `.agents/skills/` | pi extension API: `tool_call` blocks (`{block, reason}`); loads once pi trusts the project. `ask` is not a pi concept → external approvals. Context injected natively via `before_agent_start` |
+| opencode | `.opencode/plugins/opencode-aos.ts` | `.agents/skills/` | opencode plugin API: `tool.execute.before` blocks by throwing; auto-loads at startup. GPT-5-series models use `apply_patch` (not `write`/`edit`) — that tool is gated too. No ask → external approvals. Context via the generated `AGENTS.md` |
+| Devin CLI | — (no hook surface) | `.agents/skills/` | workflow compatibility: `AGENTS.md` + skills; never described as enforced |
 | Gemini CLI | — (context file only) | — | workflow compatibility: `GEMINI.md` + Git/CI gates, never described as enforced |
 
 The same five events are wired everywhere the agent's protocol has them:
@@ -567,9 +574,10 @@ they translate between each agent's hook protocol and one normalized event
 protocol; the policy engine contains no agent tool names. `aos doctor
 --capabilities` prints what each agent's surface actually enforces.
 
-**External approvals (Codex, Cursor).** Neither protocol can surface a native
-*ask* from a pre-tool hook (both parse the field without enforcing it), so a
-gated operation is denied pending a human approval:
+**External approvals (Codex, Cursor, pi, opencode).** None of these surfaces
+can show a native *ask* for a tool call (Codex and Cursor parse the field
+without enforcing it; pi and opencode have no ask concept at their
+interception points), so a gated operation is denied pending a human approval:
 
 1. The denial carries an exact command: `aos approve dec_…`.
 2. A human runs it outside the agent (terminal; in Claude Code sessions the
@@ -996,6 +1004,7 @@ entries from every agent you wired:
 
 ```bash
 rm -rf .claude/skills/aos-* .agents/skills/aos-* .cursor/skills/aos-*
+rm -f .pi/extensions/pi-aos.ts .opencode/plugins/opencode-aos.ts
 rm -f AGENTS.md GEMINI.md          # only the ones carrying the aos generation marker
 # then delete the aos hook entries from .claude/settings.json,
 # .codex/hooks.json, and .cursor/hooks.json

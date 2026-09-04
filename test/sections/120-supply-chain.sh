@@ -38,7 +38,14 @@ AOS_HOME="$IMPORT_HOME" node --input-type=module \
   || pass "entry point: bundle exports main, import is side-effect-free"
 
 # --- doctor ---
-$AOS doctor >/dev/null 2>&1 && pass "doctor: clean install → exit 0" || fail "doctor exit code"
+# On failure, show the doctor output — an opaque exit-1 from CI is undiagnosable.
+if $AOS doctor >/tmp/doctor-out.$$ 2>&1; then
+  pass "doctor: clean install → exit 0"
+else
+  sed 's/^/    doctor│ /' /tmp/doctor-out.$$
+  fail "doctor exit code"
+fi
+rm -f /tmp/doctor-out.$$
 $AOS doctor 2>/dev/null | grep -q "All clear" && pass "doctor: reports all clear" || fail "doctor output"
 $AOS doctor 2>/dev/null | grep -q "hook command resolves" && pass "doctor: verifies the hook command actually resolves" || fail "hook resolution not checked"
 

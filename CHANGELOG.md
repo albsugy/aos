@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Hook launchers degraded to a bare `aos` for every install under `$HOME`**
+  (the common case). The injection guard in `launcherCommand` tested the
+  substituted `$HOME/…` launcher for `$` — treating our own prefix as a
+  metacharacter — so agent hook configs lost their absolute launcher and
+  silently depended on `aos` being on PATH; wherever it wasn't (CI, minimal
+  environments), gates and audit were off with no visible failure. The guard
+  now tests the physical install path; `aos doctor` resolves every wired
+  agent's launcher and says so, and `aos init` re-run repairs existing
+  configs in place.
+- Test-suite portability: GNU grep does not treat `\`` as a literal backtick
+  in BRE (BSD grep does); the bundle staleness gate now tolerates
+  fresh-checkout mtime noise (2s) while still catching real staleness; the
+  multi-agent smoke section carries the repo's shellcheck disables.
+
+### Added — pi, opencode, and Devin CLI support (0.14 line)
+
+Three more agents, verified against each one's real extensibility surface
+(pi's extension API, opencode's plugin API, Devin's docs):
+
+- **pi — full enforcement.** AOS ships a project extension
+  (`.pi/extensions/pi-aos.ts`, launcher path baked at install) that forwards
+  pi's `tool_call` events to the AOS core and returns `{block, reason}` on a
+  deny — a real block. Context is injected natively once per session via
+  `before_agent_start`; every tool call is audited via `tool_execution_end`.
+  Skills install to the cross-agent `.agents/skills/` pi already reads. No
+  ask concept at pi's interception point → external approvals.
+- **opencode — full enforcement.** A project plugin
+  (`.opencode/plugins/opencode-aos.ts`) hooks `tool.execute.before` and blocks by
+  throwing (opencode's documented mechanism, the reason fed to the agent);
+  `tool.execute.after` audits. `write`, `edit`, and `apply_patch` (GPT-5-series
+  file edits) are all gated. Context via the generated `AGENTS.md`; skills
+  via `.agents/skills/`. No ask → external approvals.
+- **Devin CLI — workflow compatibility, honestly.** Devin has no local hook
+  surface; it gets the generated `AGENTS.md` and skills in `.agents/skills/`
+  (its documented location) and is never described as enforced.
+- `aos init --agent pi|opencode|devin` (also in comma lists, `auto` detection,
+  and `all`); `aos doctor --capabilities` prints the seven-agent matrix.
+- Self-protection extended: `.pi/extensions/` and `.opencode/plugins/` join
+  the protected paths — an agent rewriting its own gate script is gated like
+  every other disarm attempt (file writes and shell writes). Directory removal
+  of `.pi` / `.opencode` themselves is gated too (`rm -rf .pi` is not a bypass).
+- Adapters for pi and opencode keep the same contract as the rest: thin
+  translators over the normalized event protocol; the same policy fixtures
+  evaluate identically through all five enforcement adapters (unit-tested).
+
+### Fixed
+
+- `aos doctor` no longer requires Claude JSON hooks on a pi- or opencode-only
+  install. Baked `AOS_CMD` argv arrays are resolved the same way shell hooks are.
+  Devin is labeled `workflow`, never `hooks wired`.
+- opencode's plugin now intercepts `apply_patch` (the file-edit tool GPT-5-series
+  models get instead of `write`/`edit`), so protected-path and content-scan
+  gates apply there too.
+
 ### Added — multi-agent support (0.13 line)
 
 One policy, one project memory, one evidence trail — enforced through each coding

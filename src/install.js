@@ -111,11 +111,13 @@ export function init(repoRoot, { name, hooksOnly = false, agent = null } = {}) {
     }
     entry.installer.wireHooks(resolved);
     const skillsDir = hooksOnly ? null : entry.installer.installSkills(resolved);
+    const configPath = entry.installer.configPath(resolved);
     wired.push({
       id: agentId,
       label: entry.label,
-      hooks: true,
-      configPath: entry.installer.configPath(resolved),
+      // hooks:false for installers that only deliver skills/context (Devin)
+      hooks: Boolean(configPath),
+      configPath,
       skills: skillsDir,
       notes: entry.notes,
     });

@@ -4,6 +4,9 @@ import path from 'node:path';
 import { claudeInstaller } from './installers/claude.js';
 import { codexInstaller } from './installers/codex.js';
 import { cursorInstaller } from './installers/cursor.js';
+import { piInstaller } from './installers/pi.js';
+import { opencodeInstaller } from './installers/opencode.js';
+import { devinInstaller } from './installers/devin.js';
 
 // ── The agent catalog ────────────────────────────────────────────────────
 //
@@ -57,9 +60,42 @@ export const AGENT_CATALOG = {
       'Workflow compatibility only: context via GEMINI.md. Tool-call enforcement is not possible through Gemini CLI today — Git/CI gates remain the boundary.',
     ],
   },
+  pi: {
+    id: 'pi',
+    label: 'pi',
+    installer: piInstaller,
+    // Context is injected natively via the extension (before_agent_start).
+    contextFile: null,
+    homeMarkers: ['.pi'],
+    notes: [
+      'The gate extension loads once pi trusts the project (project-local .pi/extensions/).',
+      'pi cannot ask from a tool hook — gated operations are denied pending a human `aos approve`.',
+    ],
+  },
+  opencode: {
+    id: 'opencode',
+    label: 'opencode',
+    installer: opencodeInstaller,
+    contextFile: 'AGENTS.md', // opencode reads AGENTS.md natively
+    homeMarkers: ['.config/opencode', '.opencode'],
+    notes: [
+      'The gate plugin auto-loads at opencode startup from .opencode/plugins/.',
+      'opencode plugins block by throwing — gated operations are denied pending a human `aos approve`.',
+    ],
+  },
+  devin: {
+    id: 'devin',
+    label: 'Devin CLI',
+    installer: devinInstaller, // skills only — no hook surface
+    contextFile: 'AGENTS.md', // Devin reads AGENTS.md natively
+    homeMarkers: ['.devin'],
+    notes: [
+      'Workflow compatibility only: context via AGENTS.md and skills via .agents/skills. Tool-call enforcement is not possible through the Devin CLI today — Git/CI gates remain the boundary.',
+    ],
+  },
 };
 
-export const INSTALLABLE_AGENTS = ['claude', 'codex', 'cursor', 'gemini'];
+export const INSTALLABLE_AGENTS = ['claude', 'codex', 'cursor', 'pi', 'opencode', 'devin', 'gemini'];
 
 export function isInstallableAgent(id) {
   return INSTALLABLE_AGENTS.includes(id);
@@ -98,10 +134,13 @@ export function enforcementLevel(id) {
     case 'claude':
       return { level: 'full', label: 'full enforcement (native hooks + ask)' };
     case 'codex':
-      return { level: 'full', label: 'full enforcement (hooks; approvals via aos approve)' };
     case 'cursor':
       return { level: 'full', label: 'full enforcement (hooks; approvals via aos approve)' };
+    case 'pi':
+      return { level: 'full', label: 'full enforcement (extension; approvals via aos approve)' };
+    case 'opencode':
+      return { level: 'full', label: 'full enforcement (plugin; approvals via aos approve)' };
     default:
-      return { level: 'workflow', label: 'workflow compatibility (context only; no tool-call enforcement)' };
+      return { level: 'workflow', label: 'workflow compatibility (context + skills; no tool-call enforcement)' };
   }
 }
