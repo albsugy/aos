@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 — 2026-09-04
+
+> Ships everything since 0.11.1 (the 0.12/0.13 lines below were never
+> published): the removals and ledger hardening of 0.12, the multi-agent
+> core with Claude Code + Codex + Cursor + external approvals of 0.13, and
+> pi + opencode + Devin support.
 
 ### Fixed
 
