@@ -77,6 +77,22 @@ $AOS hook pre-tool --agent codex < <(codex_in 'git push origin main') | grep -q 
   && pass "external approval: single-use (second retry denied)" || fail "approval was multi-use"
 # a DIFFERENT command is not unlocked by any approval (operation-bound by design)
 
+# ── cross-agent sign-off: a Codex-closed run records the external approval ──
+# The human half of the ask flow must carry INTO the sign-off record: approve
+# the gated close, retry it, and meta.json names via external-approval.
+$AOS run start --ticket XAG-1 >/dev/null
+XRUN=$(basename "$($AOS run list | head -1 | awk '{print $1}')")
+printf '%s' '{"reviewer":"skeptic","scope":["x"],"findings":[]}' > "$(active_run_dir)/review.json"
+$AOS run finish >/dev/null
+CLOSE_OUT=$(printf '%s' '{"session_id":"thr_5","cwd":"'"$REPO"'","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"aos run state done --run '"$XRUN"'"}}' | $AOS hook pre-tool --agent codex)
+CDEC=$(echo "$CLOSE_OUT" | grep -o 'dec_[0-9a-f]*' | head -1)
+[ -n "$CDEC" ] && pass "cross-agent close: gated, external approval raised" || fail "close not converted to external approval"
+AOS_ALLOW_HEADLESS_APPROVE=1 $AOS approve "$CDEC" >/dev/null
+printf '%s' '{"session_id":"thr_5","cwd":"'"$REPO"'","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"aos run state done --run '"$XRUN"'"}}' | $AOS hook pre-tool --agent codex >/dev/null
+$AOS run state done --run "$XRUN" >/dev/null 2>&1 || fail "cross-agent close: retried state done refused"
+grep -q '"via": "external-approval"' "$AOS_HOME/projects/demo/runs/$XRUN/meta.json" \
+  && pass "cross-agent close: sign-off recorded via external-approval" || fail "close recorded no/wrong via route"
+
 # ── console surfaces approvals and agents ────────────────────────────────
 PORT2=4577
 $AOS console --port $PORT2 >/dev/null 2>&1 &

@@ -25,8 +25,10 @@ function ticketPath(projectId) {
   return path.join(projectDir(projectId), TICKET_FILE);
 }
 
-// Called by the PreToolUse gate, at the moment it decides to ask.
-export function recordSignoffTicket(projectId, { action, command, session, mode }) {
+// Called by the PreToolUse gate, at the moment it decides to ask, and by the
+// external-approval unlock when a human-granted approval releases the exact
+// command (`via: 'external-approval'`).
+export function recordSignoffTicket(projectId, { action, command, session, mode, via = null }) {
   try {
     writeJson(ticketPath(projectId), {
       action,
@@ -36,6 +38,10 @@ export function recordSignoffTicket(projectId, { action, command, session, mode 
       // a ticket in modes where a prompt actually reaches a human, and this
       // records which one so the audit can be checked after the fact.
       mode: mode || null,
+      // How this ticket was minted: null = the gate's own permission prompt;
+      // 'external-approval' = the human granted an aos approve for exactly
+      // this command. The CLI records which when consuming.
+      via,
       ts: nowIso(),
     });
   } catch {

@@ -18,7 +18,9 @@ import { launcherCommand, installSkillsInto } from './shared.js';
 
 const HOOK_DEFS = [
   { event: 'PreToolUse', matcher: '^(Bash|apply_patch)$', cmd: 'pre-tool', timeout: 30 },
-  { event: 'PostToolUse', matcher: '^(Bash|apply_patch)$', cmd: 'post-tool', timeout: 10 },
+  // PostToolUse without a matcher: audit every tool call (MCP, plan updates),
+  // not just shell/patch — the adapter classifies and the pipeline records.
+  { event: 'PostToolUse', matcher: null, cmd: 'post-tool', timeout: 10 },
   { event: 'SessionStart', matcher: null, cmd: 'session-start', timeout: 10 },
   { event: 'SessionEnd', matcher: null, cmd: 'session-end', timeout: 3 },
   { event: 'Stop', matcher: null, cmd: 'stop', timeout: 30 },

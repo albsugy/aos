@@ -38,8 +38,9 @@ import { operationFingerprint, absoluteTargets } from './events.js';
 // spelling as evidence, never as logic.
 
 // Gate actions whose permission prompt doubles as a human sign-off (Claude;
-// providers without native `ask` reach these only through `aos approve`).
-const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close', 'project-remove']);
+// providers without native `ask` reach these only through `aos approve`, and
+// `aos approve` itself is a sign-off wherever a prompt CAN carry it).
+const SIGNOFF_ACTIONS = new Set(['plan-approve', 'review-close', 'project-remove', 'aos-approve']);
 
 // States a run only reaches by actually finishing — see hooks' token settle.
 const FINISHED_STATES = new Set(['awaiting-review', 'done', 'shipped']);
@@ -260,6 +261,19 @@ export function handleToolBefore(event, adapter) {
   if (decision.effect === 'require_approval') {
     const approval = consumeApproval(project.id, operationFingerprint(event));
     if (approval) {
+      // A sign-off command unlocked by a human-granted approval IS
+      // human-approved: mint the carry ticket so the CLI records who and via
+      // which route instead of refusing for lack of a TTY it cannot have
+      // (Codex/Cursor agents run without one, by design).
+      if (SIGNOFF_ACTIONS.has(decision.rule)) {
+        recordSignoffTicket(project.id, {
+          action: decision.rule,
+          command: target,
+          session,
+          mode: null,
+          via: 'external-approval',
+        });
+      }
       appendAudit(project.id, {
         event: 'gate',
         decision: 'ask',

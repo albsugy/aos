@@ -54,9 +54,14 @@ function signoffIdentity(action, { required = true, projectId = null, ticket = n
   const dryRun = projectId ? loadPolicy(projectId).dry_run === true : false;
   let via = null;
   if (process.stdin.isTTY) via = 'tty';
-  else if (ticket && projectId && consumeSignoffTicket(projectId, ticket, target, mustInclude)) via = 'gate-prompt';
-  else if (dryRun) via = 'dry-run';
-  else if (headless) via = 'headless-env';
+  else {
+    // The ticket's own `via` distinguishes a gate prompt from a human-granted
+    // external approval; both are human acts, but the record should say which.
+    const t = ticket && projectId ? consumeSignoffTicket(projectId, ticket, target, mustInclude) : null;
+    if (t) via = t.via || 'gate-prompt';
+    else if (dryRun) via = 'dry-run';
+    else if (headless) via = 'headless-env';
+  }
 
   if (!via) {
     if (required) {
@@ -189,7 +194,7 @@ Usage:
   aos run state <state> [--run <id>]  Set run state (in-progress|blocked|awaiting-review|done|shipped); --run targets a finished run (done/shipped are gated — the prompt is your sign-off)
   aos run link [--pr <url>] [--ticket-url <url>] [--branch <n>]  Attach the PR / ticket / branch to a run
   aos run list                      List runs for this project
-  aos run session [--run <id>]      Print the Claude Code session id bound to a run (for claude --resume)
+  aos run session [--run <id>]      Print the agent session id bound to a run (for claude --resume)
   aos verify                        Run verification contracts from policy.yaml
   aos policy test [--file <p.yaml>] [--since 30d]   Policy CI — replay recorded agent traffic against a policy
   aos audit verify [--project <id>] Check every audit ledger's hash chain (tamper evidence)
