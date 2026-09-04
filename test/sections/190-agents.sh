@@ -120,6 +120,15 @@ $AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .pi/extensions') | grep -q
   && pass "gate: rm -rf .pi/extensions (no slash) denied" || fail "dir-removal bypass of extension protection"
 $AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .opencode/plugins') | grep -q '"permissionDecision":"deny"' \
   && pass "gate: rm -rf .opencode/plugins (no slash) denied" || fail "dir-removal bypass of plugin protection"
+$AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .pi') | grep -q '"permissionDecision":"deny"' \
+  && pass "gate: rm -rf .pi (parent dir) denied" || fail "parent-dir removal of .pi allowed"
+$AOS hook pre-tool --agent codex < <(codex_in 'rm -rf .opencode') | grep -q '"permissionDecision":"deny"' \
+  && pass "gate: rm -rf .opencode (parent dir) denied" || fail "parent-dir removal of .opencode allowed"
+
+# GPT-5-series opencode models write via apply_patch, not write/edit
+printf '%s' '{"session_id":"ses_1","cwd":"'"$REPO"'","tool_name":"apply_patch","tool_input":{"patchText":"*** Update File: .opencode/plugins/opencode-aos.ts\n+evil\n"}}' \
+  | $AOS hook pre-tool --agent opencode | grep -q '"permissionDecision":"deny"' \
+  && pass "opencode: apply_patch of the plugin denied (self-protection)" || fail "opencode apply_patch bypassed the gate"
 
 # opencode gated tier → external approval, same as codex/cursor
 OC_OUT=$(printf '%s' '{"session_id":"ses_1","cwd":"'"$REPO"'","tool_name":"Bash","tool_input":{"command":"git push origin main"}}' | $AOS hook pre-tool --agent opencode)
@@ -167,6 +176,10 @@ $AOS doctor --capabilities 2>/dev/null | grep -q 'Codex.*hooks must also be trus
 # ── per-agent wiring checks in doctor ─────────────────────────────────────
 $AOS doctor | grep -q 'Codex hooks wired' && pass "doctor: codex wiring verified" || fail "doctor codex check missing"
 $AOS doctor | grep -q 'Cursor hooks wired' && pass "doctor: cursor wiring verified" || fail "doctor cursor check missing"
+$AOS doctor | grep -q 'pi hooks wired' && pass "doctor: pi wiring verified" || fail "doctor pi check missing"
+$AOS doctor | grep -q 'opencode hooks wired' && pass "doctor: opencode wiring verified" || fail "doctor opencode check missing"
+$AOS doctor | grep -q 'Devin CLI workflow' && pass "doctor: Devin labeled workflow, not hooks" || fail "doctor Devin check missing or oversold"
+$AOS doctor | grep -q 'Devin CLI hooks wired' && fail "doctor described Devin as hooks wired" || pass "doctor: Devin not described as hooks"
 
 # unwiring: a corrupted config is caught
 echo '{}' > "$REPO/.cursor/hooks.json"
